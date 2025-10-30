@@ -1,0 +1,100 @@
+// GitHub Agent Automation ?????? by T008
+// ????? specs/001-github-agent-automation/data-model.md ???
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---- ENUM?? ----
+enum PullRequestStatus {
+  open
+  closed
+  merged
+}
+
+enum AgentRunState {
+  queued
+  started
+  succeeded
+  failed
+}
+
+enum ReviewFeedbackSource {
+  Codex
+}
+
+enum ReviewFeedbackStatus {
+  requested
+  received
+  commented
+}
+
+// ---- ????? ----
+model Issue {
+  id             Int                 @id @default(autoincrement())
+  repo           String
+  number         Int
+  title          String
+  body           String
+  labels         Json // String[] (????)?MySQL??Json???
+  // comments: DB?????????API/????????
+  created_at     DateTime            @default(now())
+  updated_at     DateTime            @updatedAt
+  // Blocker????
+  blockerEdges   BlockerGraphEdges[] @relation("BlockedTasks") // ????TASK???
+  blockedByEdges BlockerGraphEdges[] @relation("BlockingTasks") // ?TASK??????
+}
+
+model PullRequest {
+  id          Int               @id @default(autoincrement())
+  repo        String
+  number      Int
+  branch      String
+  status      PullRequestStatus
+  merged_flag Boolean
+  created_at  DateTime          @default(now())
+  updated_at  DateTime          @updatedAt
+  agentRuns   AgentRun[]
+  reviews     ReviewFeedback[]
+}
+
+model AgentRun {
+  id              Int           @id @default(autoincrement())
+  idempotency_key String        @unique
+  state           AgentRunState
+  input           Json
+  output          Json
+  pr_id           Int? // PullRequest id, nullable
+  retry_count     Int
+  created_at      DateTime      @default(now())
+  updated_at      DateTime      @updatedAt
+
+  pullRequest PullRequest? @relation(fields: [pr_id], references: [id])
+}
+
+model ReviewFeedback {
+  id         Int                  @id @default(autoincrement())
+  pr_id      Int
+  source     ReviewFeedbackSource
+  content    String
+  status     ReviewFeedbackStatus
+  created_at DateTime             @default(now())
+  updated_at DateTime             @updatedAt
+
+  pullRequest PullRequest @relation(fields: [pr_id], references: [id])
+}
+
+model BlockerGraphEdges {
+  task_id            Int
+  depends_on_task_id Int
+
+  task          Issue @relation("BlockedTasks", fields: [task_id], references: [id])
+  dependsOnTask Issue @relation("BlockingTasks", fields: [depends_on_task_id], references: [id])
+
+  @@id([task_id, depends_on_task_id])
+}
