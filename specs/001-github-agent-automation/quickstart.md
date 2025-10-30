@@ -4,11 +4,15 @@
 - GitHub: コラボレーター以上必須。
 - Codex・Discord: APIトークン・Webhook要設定
 
+
 ## セットアップ
 1. 本リポジトリをfork or clone
 2. .env/GitHub Secrets等でAPIキーを設定（詳細後述）
-3. Webhook: GitHub（issue_comment, pull_request_review, check_suite, push, status）、Discord
-4. `main` or featureブランチをcheckoutし、必要なエージェント/CIを有効化
+3. コア依存パッケージのインストール：
+   - `pnpm add express @octokit/webhooks @octokit/rest axios`
+     - 利用パッケージ: express（REST API/Webhook）、@octokit/webhooks（GitHub Webhook）、@octokit/rest（GitHub REST API）、axios（外部API通知）
+4. Webhook: GitHub（issue_comment, pull_request_review, check_suite, push, status）、Discord
+5. `main` or featureブランチをcheckoutし、必要なエージェント/CIを有効化
 
 ## 基本運用例
 - Issueへ「/run-agent」とコメント→AIエージェント実装自動開始
