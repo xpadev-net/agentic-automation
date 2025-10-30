@@ -14,9 +14,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.0",
+    "@prisma/client": "^6.18.0",
     "@typescript/native-preview": "7.0.0-dev.20250927.1",
     "@vitest/coverage-v8": "^4",
     "lefthook": "^1.13.6",
+    "prisma": "^6.18.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4"
