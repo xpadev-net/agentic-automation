@@ -300,9 +300,11 @@ ngrok http 3000
 ### View Database Records
 
 ```bash
-# Open Prisma Studio (GUI for database)
-npx prisma studio
-# Opens at http://localhost:5555
+# Connect to MySQL database directly
+mysql -u agent_user -p github_agent_automation
+
+# Or use a GUI tool like MySQL Workbench, TablePlus, or DBeaver
+# Connection: localhost:3306, user: agent_user, database: github_agent_automation
 ```
 
 ### Check Server Health
@@ -542,7 +544,7 @@ For production, use secret managers:
 
 ### Webhook Signature Verification
 
-The system automatically verifies GitHub webhook signatures using `@octokit/webhooks`. Requests with invalid signatures are rejected (401).
+The system verifies GitHub webhook signatures using HMAC-SHA256 (Go `crypto/hmac`). Requests with invalid signatures are rejected (401).
 
 ### Authorization
 

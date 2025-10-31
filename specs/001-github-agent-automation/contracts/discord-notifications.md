@@ -539,12 +539,12 @@ Expected: Embed message appears in Discord channel
 **Risk**: Malicious Issue titles/bodies could inject mentions or links
 
 **Mitigation**: Escape Discord markdown:
-```typescript
-function sanitize(text: string): string {
+```go
+func sanitize(text string) string {
+  text = strings.ReplaceAll(text, "@everyone", "@ everyone")
+  text = strings.ReplaceAll(text, "@here", "@ here")
+  text = strings.ReplaceAll(text, "<@", "< @")
   return text
-    .replace(/@everyone/g, '@ everyone')
-    .replace(/@here/g, '@ here')
-    .replace(/<@/g, '< @');
 }
 ```
 

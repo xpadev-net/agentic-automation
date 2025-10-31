@@ -306,8 +306,8 @@
 - T003, T004, T005, T006, T007 can all run in parallel
 
 **Foundational Phase (Phase 2):**
-- T008-T010 must run sequentially (Prisma schema → Client init → Migration)
-- T011-T015 (all repositories) can run in parallel after Prisma setup
+- T008-T010 must run sequentially (GORM models/DB init → goose migration)
+- T011-T015 (all repositories) can run in parallel after DB setup
 - T017-T019 (all API clients) can run in parallel
 - T021-T023 (logging, retry, config) can run in parallel
 
@@ -341,7 +341,7 @@
 ## Parallel Example: User Story 2
 
 ```bash
-# Launch API clients in parallel (after Prisma setup):
+# Launch API clients in parallel (after DB setup):
 Task: "T035 - Create AI agent client interface in src/lib/ai-agent-client.ts"
 Task: "T036 - Implement Git operations wrapper in src/lib/git-operations.ts"
 
@@ -357,7 +357,7 @@ Task: "T043 - Implement error handling for Git operation failures in src/service
 ### MVP First (User Stories 1 + 2 Only)
 
 1. Complete Phase 1: Setup (7 tasks)
-2. Complete Phase 2: Foundational (17 tasks) - CRITICAL foundation with Prisma
+2. Complete Phase 2: Foundational (17 tasks) - CRITICAL foundation with GORM + goose
 3. Complete Phase 3: User Story 1 (10 tasks)
 4. Complete Phase 4: User Story 2 (11 tasks)
 5. **STOP and VALIDATE**: Test end-to-end flow from comment to PR
@@ -367,20 +367,20 @@ Task: "T043 - Implement error handling for Git operation failures in src/service
 
 ### Incremental Delivery
 
-1. **Foundation** (Phase 1+2): 24 tasks → Prisma ORM, webhooks, core infrastructure ready
+1. **Foundation** (Phase 1+2): 24 tasks → GORM + goose, webhooks, core infrastructure ready
 2. **MVP** (+US1+US2): 21 tasks → Comment triggers AI agent, creates PR automatically
 3. **Quality Loop** (+US3): 14 tasks → Automatic improvements via Codex review + CI retry (max 50)
 4. **Full Automation** (+US4): 10 tasks → Auto-merge on approval - zero human intervention
 5. **Dependency Management** (+US5): 11 tasks → Sequential task execution with blocking
 6. **Production Ready** (+Polish): 14 tasks → Monitoring, docs, security hardening
 
-Total: 94 tasks (reduced from 99 by using Prisma ORM)
+Total: 94 tasks (comparable scope using GORM + goose)
 
 ### Parallel Team Strategy
 
 With multiple developers after Foundational phase:
 
-1. **Team completes Phase 1+2 together** (24 tasks, foundational with Prisma)
+1. **Team completes Phase 1+2 together** (24 tasks, foundational with GORM + goose)
 2. **Split work:**
    - Developer A: User Story 1 (webhook triggers)
    - Developer B: User Story 2 (AI + PR creation) - can work with stub from US1
@@ -397,7 +397,7 @@ With multiple developers after Foundational phase:
 
 - **[P] tasks**: Different files, no dependencies - safe to parallelize
 - **[Story] labels**: Map tasks to user stories from spec.md for traceability
-- **Prisma ORM**: Type-safe database access with auto-generated client (T008-T010)
+- **GORM**: Type-safe database access with ORM (T008-T010)
 - **Idempotency**: Every webhook handler uses X-GitHub-Delivery for deduplication (T024)
 - **Retry logic**: All external API calls use exponential backoff utility (T022)
 - **Max 50 retries**: Enforced in RetryOrchestrator (T052, T055)
@@ -425,7 +425,7 @@ With multiple developers after Foundational phase:
 - Unlimited concurrency: No locking (運用側考慮 per FR-012)
 - Circular dependencies: T107 cycle detector prevents deadlock
 - Rate limits: T118 rate limiting for GitHub API
-- Database queries: T123, T129 Prisma optimization with indexes
+- Database queries: T123, T129 optimize with SQL indexes (goose)
 - Operator API unreachable: agent-runner exponential backoff retry (T038, T047)
 
 ### GORM Model Highlights
