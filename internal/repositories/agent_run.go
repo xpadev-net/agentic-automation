@@ -200,4 +200,3 @@ func isUniqueConstraintViolation(err error) bool {
 	return strings.Contains(strings.ToLower(errStr), "duplicate entry") ||
 		strings.Contains(strings.ToLower(errStr), "unique constraint")
 }
-
