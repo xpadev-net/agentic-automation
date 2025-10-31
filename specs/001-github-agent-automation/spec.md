@@ -21,7 +21,9 @@
 - Q: 空振り要件不一致時は？ → A: 全て通知
 - Q: 全失敗時の通知検出ラグ？ → A: 即時、1分以内
 - Q: 監視可視化は？ → A: Discord Webhook通知
-- Q: リトライrate limitは？ → A: 不要
+- Q: リトライ/レート制限は？ → A: 必要。指数バックオフ＋ジッターと最大回数で制御する
+- Q: ポーリングは？ → A: 原則不要だが、必要に応じて使用可。採用イベントは仕様内で適時明確化する
+  （詳細は「Webhook Events (authoritative)」を参照）
 - Q: 「AI再試行」用語補足 → A: レビュー指摘事項 or CI落ちでAI自動修正を行うこと
 - Q: 完了判定（DoD）は？ → A: CIが通り、コンフリクト無しでCodexからapproveが出ている状態
 
@@ -113,6 +115,8 @@ PR が承認状態になったら自動でマージする。
 - 外部API障害時はエラー記録・通知し、指数バックオフ+ジッターで設定した上限回数までリトライする。上限到達時は失敗として通知する。
 - Codex レビュー応答が取得できない場合は手動対応とし、システムは追加のポーリングやハング防止処理を行わない。
 
+- 同一ブランチに対する同時実行は 1 に制限（per-branch concurrency = 1）
+
 ## Requirements (mandatory)
 
 ### Functional Requirements
@@ -127,13 +131,10 @@ PR が承認状態になったら自動でマージする。
 - FR-008: すべての外部操作は冪等に設計し重複イベントを安全に処理する (MUST)
 
 - FR-009: トリガはコメント本文に「/run-agent」を含む場合のみ有効とし、コメント投稿者
-  は当該リポジトリの書き込み権限メンバーに限定する (MUST)
-- FR-010: PR 作成完了時にシステムが PR に「@codex review」コメントを投稿して Codex サービス
-  にレビューを依頼し、その結果を保存する。また追加で「@codex review」コメントが投稿された
-  場合も同様にレビューを再依頼する (MUST)
-- FR-011: 承認要件は、Codex ボットにより PR に「Codex Review: Didn't find any major
-  issues.」という本文のコメントが統合（投稿）された時点で承認 1 件と見なし、マージ条件
-  を満たす (MUST)
+  は当該リポジトリの書き込み権限メンバーに限定する。またコメントの編集・削除イベントは無視する。書き込み権限があれば一律許可とし、必ずデフォルトブランチから派生ブランチを作成して作業する (MUST)
+- FR-010: PR 作成完了時にシステムは PR に「@codex review」とコメント投稿する。これ自体が Codex サービスへのレビュー依頼であり、その結果を保存する。以降、書き込み権限を有するユーザーが当該 PR に
+  「@codex review」のみを本文に含む新規コメントを投稿した場合は、それ自体が再レビュー依頼となるためシステムは別途依頼を送信しない（編集・削除は無視、冪等実行） (MUST)
+- FR-011: 承認要件は、Codex ボットにより PR に承認が示されることをもって approve と見なしてよい（コメント/レビュー）。ただしマージには別途 CI 成功が必須。承認検知は Bot アカウントの ID/署名検証、または GitHub Reviews API の state=APPROVED を一次根拠とし、固定文言の一致は補助とする (MUST)
 - FR-012: 同時実行の上限は設けない（無制限）。ただし重複・競合の回避は Issue 起票側の
   運用で考慮し、依存関係は Issue の blocked by / blocking 情報に基づいて実行順序を
   決定する (MUST)
@@ -141,11 +142,50 @@ PR が承認状態になったら自動でマージする。
   ブロック解除イベントで再開する (MUST)
 
 - FR-014: CI 結果は GitHub Webhook で受領し、失敗時は CI ログ要約/レビュー指摘をAIに再入力して最大50回まで自動修正再試行を行う。50回超えは失敗扱いとし、GitHub IssueおよびDiscord Webhookに失敗通知を送る (MUST)
-- FR-015: Codex ボットによる「Codex Review: Didn't find any major issues.」コメントがPRに投稿された時点で、マージ条件を再評価し、自動でマージを試行する（ポーリングは禁止）(MUST)
+- FR-015: Codex ボットによる承認（コメント/レビュー）が PR に投稿・統合された時点で、マージ条件を再評価し、自動でマージを試行する。原則イベント駆動（ポーリング不要）だが、必要に応じて限定的にポーリングを使用してよい。対象イベント（issue_comment, pull_request, pull_request_review, check_suite/check_run/status, push）は適時明確化する (MUST)
+ - FR-015: Codex ボットによる承認（コメント/レビュー）が PR に投稿・統合された時点で、マージ条件を再評価し、自動でマージを試行する。原則イベント駆動（ポーリング不要）だが、必要に応じて限定的にポーリングを使用してよい。対象イベントは「Webhook Events (authoritative)」を参照 (MUST)
 - FR-016: 外部 API 呼び出しの再試行は、指数バックオフ+ジッターを用い設定した最大リトライ回数まで実施し、上限到達時は失敗として扱う (MUST)
-- FR-017: 冪等化キーに X-GitHub-Delivery を用い、同一 Delivery ID のイベントは一度のみ処理する (MUST)
+- FR-017: 冪等化キーに X-GitHub-Delivery を用い、同一 Delivery ID のイベントは一度のみ処理する。加えて、各操作（pr-create, post-comment, request-review, merge）に operation_id を付与し、操作レベルでも冪等に実行して重複を防止する (MUST)
 - FR-018: 認可は「リポジトリのCollaborator以上」のユーザーのみに限定する (MUST)
-- FR-019: Git pre-commit / pre-push フックによる失敗は上限なく再試行し、成功まで手動介入を促しつつ待機する (MUST)
+- FR-019: コミットと push はオペレーター（自動実行主体）側で実行する。Git pre-commit / pre-push フック等による失敗は最大 50 回の自動再試行に含め、無限待機は不可とし、上限・キャンセル条件を設けて失敗時は通知する (MUST)
+
+- FR-020: 同一ブランチに対するエージェント実行は同時に 1 件のみ許可する（per-branch concurrency = 1）(MUST)
+- FR-021: PR/ブランチ単位の操作はロックを取得して実行し、重複操作（PR 作成、コメント投稿、レビュー依頼、マージ）を防止する (MUST)
+- FR-022: 再試行には総経過時間上限および各試行のタイムアウトを設定し、いずれかの上限到達時は失敗として扱う (MUST)
+- FR-023: データストアは MySQL を使用し、データアクセスおよびマイグレーションは Prisma を用いる (MUST)
+- FR-024: 依存関係は GitHub Issue の blocked by / blocking フィールドを一次情報として利用する (MUST)
+
+### Webhook Events (authoritative)
+
+- issue_comment
+  - Purpose: `/run-agent` トリガ検知、`@codex review` による再レビュー依頼
+  - Actions: 投稿者の書き込み権限検証、AgentRun のキュー投入、必要に応じてレビュー依頼コメント投稿
+  - Idempotency: X-GitHub-Delivery + operation_id（comment-id ベース）
+  - FR refs: FR-001, FR-009, FR-010, FR-017
+
+- pull_request
+  - Purpose: PR の open/synchronize/closed を観測し、リンク・マージ結果を反映
+  - Actions: PR リンクの保存、merge 検知、merge 後の後続タスク起動
+  - FR refs: FR-003, FR-006, FR-021
+
+- pull_request_review
+  - Purpose: Codex からの approve を検知（Bot ID 検証 or Reviews API state=APPROVED）
+  - Actions: マージ条件の再評価、CI 成功時の自動マージ試行
+  - FR refs: FR-011, FR-015
+
+- check_suite / check_run / status
+  - Purpose: PR のコミットに対する CI 結果の追跡
+  - Actions: 失敗時は AI へのフィードバックと再試行、成功時はマージ条件再評価
+  - FR refs: FR-014, FR-015
+
+- push
+  - Purpose: 再試行コミット（追加コミット）の検知、PR head SHA 更新に伴う評価
+  - FR refs: FR-005, FR-014, FR-021
+
+- workflow_run（必要に応じて）
+  - Purpose: 再利用ワークフロー等で check_* が発火しない CI の代替フック
+  - Actions: 上記 CI 追跡と同等に扱う（check_* が利用できない場合のみ）
+  - FR refs: FR-014
 
 ### Key Entities (include if feature involves data)
 
@@ -167,6 +207,13 @@ PR が承認状態になったら自動でマージする。
 - Issue: PK(id), repo, number, title, created_at, updated_at
 - BlockerGraphEdges: PK(task_id, depends_on_task_id), FK(task_id -> Issue.id, depends_on_task_id -> Issue.id)
 
+- Indexes:
+- AgentRun: INDEX(idempotency_key)
+- PullRequest: INDEX(repo, number)
+- BlockerGraphEdges: INDEX(task_id, depends_on_task_id)
+
+- OperationLog: PK(id), run_id(FK: AgentRun.id), operation_type ENUM(pr-create, post-comment, request-review, merge), operation_id(UK), status, created_at
+
 ## Success Criteria (mandatory)
 
 ### Measurable Outcomes
@@ -180,6 +227,31 @@ PR が承認状態になったら自動でマージする。
 - SC-007: 「Codex Review: Didn't find any major issues.」コメント検知から2分以内にマージ再試行が行われる
 - SC-008: 50回再試行してもCI成功／Approve出ずに失敗となった場合、GitHub IssueおよびDiscord Webhookに即時通知される
 - SC-009: DoD条件はCI成功・ノーコンフリクト・Codex approveの全てを満たすこと
+
+- SC-010: 同一ブランチで同時実行が 2 件以上発生しない（0 件）
+- SC-011: 承認検知は Bot 検証または Reviews API により誤検知 0 件
+
+## Observability
+
+- 追跡ID: `github_event_id`（X-GitHub-Delivery）+ `agent_run_id` + `operation_id` を全ログ/メトリクス/トレースに付与する
+- 最小メトリクス: 実行時間、再試行回数、失敗理由、外部 API 呼数、キュー滞留時間
+- 出力先: 運用環境のログ/メトリクス基盤（例: OpenTelemetry）に送出する
+
+## Notifications
+
+- Discord Webhook および GitHub コメントに以下のテンプレートで通知する
+  - 起動: 対象 Issue/PR リンク、ブランチ、実行 ID、起動者
+  - 成功: PR リンク、マージ可否、CI 状態、承認状態
+  - 再試行: 失敗要約、残り回数、次回予定時刻
+  - 失敗: 最終失敗理由、実行ログ参照、再開方法
+
+## Security
+
+- Webhook 署名検証（GitHub Secret）を実施する
+- Bot/アプリ権限は最小権限で付与する
+- Secrets は安全に管理（環境変数/Secret マネージャ等）する
+- 承認コメント/レビューの送信元（Bot アカウント）を検証する
+- AI 生成物から秘密情報・資格情報をスクラブ/検知する
 
 ## Assumptions
 
