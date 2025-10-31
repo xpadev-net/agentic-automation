@@ -55,6 +55,11 @@ func InitConfig() error {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
 
+	// Initialize database connection after logger (so we can log connection status)
+	if err := InitDatabase(); err != nil {
+		return fmt.Errorf("failed to initialize database: %w", err)
+	}
+
 	// Now we can use the logger
 	logger := GetLogger()
 	logger.Info("Configuration initialized")
