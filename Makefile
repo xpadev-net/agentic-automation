@@ -19,6 +19,10 @@ endif
 # Format: mysql://user:password@tcp(host:port)/database?charset=utf8mb4&parseTime=True&loc=Local
 DATABASE_URL ?= mysql://agent_user:secure_password@tcp(localhost:3306)/github_agent_automation?charset=utf8mb4&parseTime=True&loc=Local
 
+# Strip quotes from DATABASE_URL if present (handles both quoted and unquoted values)
+# This allows .env files to use DATABASE_URL="mysql://..." or DATABASE_URL=mysql://...
+DATABASE_URL_STRIPPED := $(shell echo '$(DATABASE_URL)' | sed 's/^"//;s/"$$//')
+
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -47,29 +51,29 @@ vet: ## Run go vet
 
 migrate-up: ## Run database migrations up
 	@echo "Running migrations up..."
-	@if [ -z "$(DATABASE_URL)" ]; then \
+	@if [ -z "$(DATABASE_URL_STRIPPED)" ]; then \
 		echo "Error: DATABASE_URL environment variable is not set"; \
 		exit 1; \
 	fi
-	@GOOSE_DSN=$$(echo "$(DATABASE_URL)" | sed -E 's|mysql://||'); \
+	@GOOSE_DSN=$$(echo "$(DATABASE_URL_STRIPPED)" | sed -E 's|mysql://||'); \
 	go run github.com/pressly/goose/v3/cmd/goose@latest -dir $(MIGRATIONS_DIR) mysql "$$GOOSE_DSN" up
 
 migrate-down: ## Run database migrations down
 	@echo "Running migrations down..."
-	@if [ -z "$(DATABASE_URL)" ]; then \
+	@if [ -z "$(DATABASE_URL_STRIPPED)" ]; then \
 		echo "Error: DATABASE_URL environment variable is not set"; \
 		exit 1; \
 	fi
-	@GOOSE_DSN=$$(echo "$(DATABASE_URL)" | sed -E 's|mysql://||'); \
+	@GOOSE_DSN=$$(echo "$(DATABASE_URL_STRIPPED)" | sed -E 's|mysql://||'); \
 	go run github.com/pressly/goose/v3/cmd/goose@latest -dir $(MIGRATIONS_DIR) mysql "$$GOOSE_DSN" down
 
 migrate-status: ## Show migration status
 	@echo "Checking migration status..."
-	@if [ -z "$(DATABASE_URL)" ]; then \
+	@if [ -z "$(DATABASE_URL_STRIPPED)" ]; then \
 		echo "Error: DATABASE_URL environment variable is not set"; \
 		exit 1; \
 	fi
-	@GOOSE_DSN=$$(echo "$(DATABASE_URL)" | sed -E 's|mysql://||'); \
+	@GOOSE_DSN=$$(echo "$(DATABASE_URL_STRIPPED)" | sed -E 's|mysql://||'); \
 	go run github.com/pressly/goose/v3/cmd/goose@latest -dir $(MIGRATIONS_DIR) mysql "$$GOOSE_DSN" status
 
 run: ## Run the operator server (development)
