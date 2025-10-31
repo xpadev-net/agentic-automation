@@ -34,6 +34,10 @@ pre-push:
     build:
       run: |
         mkdir -p bin
-        go build -o bin/operator ./cmd/operator
-        go build -o bin/agent-runner ./cmd/agent-runner
+        if find ./cmd/operator -name "*.go" -type f 2>/dev/null | grep -q .; then
+          go build -o bin/operator ./cmd/operator
+        fi
+        if find ./cmd/agent-runner -name "*.go" -type f 2>/dev/null | grep -q .; then
+          go build -o bin/agent-runner ./cmd/agent-runner
+        fi
 
