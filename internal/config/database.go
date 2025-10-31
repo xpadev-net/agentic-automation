@@ -15,6 +15,24 @@ import (
 
 var db *gorm.DB
 
+// sanitizeDBError removes sensitive information (passwords, DSNs, URLs) from error messages
+func sanitizeDBError(err error) error {
+	if err == nil {
+		return nil
+	}
+	errMsg := err.Error()
+	
+	// Remove DATABASE_URL patterns with passwords
+	// Pattern: mysql://user:password@... or user:password@tcp(...)
+	re := regexp.MustCompile(`([^:@]+):([^:@]+)@`)
+	errMsg = re.ReplaceAllString(errMsg, "$1:***@")
+	
+	// Remove any remaining full URLs
+	errMsg = regexp.MustCompile(`mysql://[^\s]+`).ReplaceAllString(errMsg, "mysql://***")
+	
+	return fmt.Errorf("%s", errMsg)
+}
+
 // InitDatabase initializes the GORM database connection
 // Reads DATABASE_URL from environment and connects to MySQL
 func InitDatabase() error {
@@ -29,7 +47,7 @@ func InitDatabase() error {
 	// Parse MySQL DSN from DATABASE_URL format: mysql://user:password@tcp(host:port)/database?params
 	dsn, err := parseMySQLDSN(dbURL)
 	if err != nil {
-		return fmt.Errorf("failed to parse DATABASE_URL: %w", err)
+		return fmt.Errorf("failed to parse DATABASE_URL: invalid format")
 	}
 
 	// Configure GORM logger based on environment
@@ -47,17 +65,17 @@ func InitDatabase() error {
 	database, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 		Logger: gormLogger,
 		NowFunc: func() time.Time {
-			return time.Now().Local()
+			return time.Now().UTC()
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("failed to connect to database: %w", err)
+		return fmt.Errorf("failed to connect to database: %w", sanitizeDBError(err))
 	}
 
 	// Get underlying sql.DB for connection pool configuration
 	sqlDB, err := database.DB()
 	if err != nil {
-		return fmt.Errorf("failed to get underlying sql.DB: %w", err)
+		return fmt.Errorf("failed to get underlying sql.DB: %w", sanitizeDBError(err))
 	}
 
 	// Configure connection pool
@@ -68,7 +86,7 @@ func InitDatabase() error {
 
 	// Test connection
 	if err := sqlDB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %w", err)
+		return fmt.Errorf("failed to ping database: %w", sanitizeDBError(err))
 	}
 
 	db = database
@@ -78,12 +96,10 @@ func InitDatabase() error {
 
 // GetDB returns the singleton database instance
 // Must call InitDatabase() first
+// Panics if database is not initialized to catch initialization errors early
 func GetDB() *gorm.DB {
 	if db == nil {
-		// Return a nil-safe instance - will panic on use if not initialized
-		// This is intentional to catch initialization errors early
-		log := GetLogger()
-		log.Error("Database not initialized. Call InitDatabase() first.")
+		panic("database not initialized: call InitDatabase() first")
 	}
 	return db
 }
@@ -167,7 +183,7 @@ func parseMySQLDSNRegex(dbURL string) (string, error) {
 	matches := re.FindStringSubmatch(dbURL)
 
 	if len(matches) < 5 {
-		return "", fmt.Errorf("invalid DATABASE_URL format: %s. Expected: mysql://user:password@tcp(host:port)/database?params", dbURL)
+		return "", fmt.Errorf("invalid DATABASE_URL format: expected mysql://user:password@tcp(host:port)/database?params")
 	}
 
 	user := matches[1]
