@@ -20,13 +20,21 @@ jobs:
         with:
           go-version: '1.24.9'
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - name: Cache Go modules (MinIO)
+        uses: tespkg/actions-cache@v1
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.MINIO_REGION }}
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          endpoint: ${{ secrets.MINIO_ENDPOINT }}
+          port: ${{ secrets.MINIO_PORT }}
+          bucket: ${{ secrets.MINIO_BUCKET }}
+          use-fallback: false
+          insecure: true
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
 
       - name: Download dependencies
         run: go mod download
@@ -76,13 +84,21 @@ jobs:
         with:
           go-version: '1.24.9'
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - name: Cache Go modules (MinIO)
+        uses: tespkg/actions-cache@v1
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.MINIO_REGION }}
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          endpoint: ${{ secrets.MINIO_ENDPOINT }}
+          port: ${{ secrets.MINIO_PORT }}
+          bucket: ${{ secrets.MINIO_BUCKET }}
+          use-fallback: false
+          insecure: true
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
 
       - name: Download dependencies
         run: go mod download
@@ -103,13 +119,21 @@ jobs:
         with:
           go-version: '1.24.9'
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - name: Cache Go modules (MinIO)
+        uses: tespkg/actions-cache@v1
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.MINIO_REGION }}
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          endpoint: ${{ secrets.MINIO_ENDPOINT }}
+          port: ${{ secrets.MINIO_PORT }}
+          bucket: ${{ secrets.MINIO_BUCKET }}
+          use-fallback: false
+          insecure: true
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
 
       - name: Download dependencies
         run: go mod download
@@ -130,13 +154,21 @@ jobs:
         with:
           go-version: '1.24.9'
 
-      - name: Cache Go modules
-        uses: actions/cache@v4
+      - name: Cache Go modules (MinIO)
+        uses: tespkg/actions-cache@v1
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.MINIO_REGION }}
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          endpoint: ${{ secrets.MINIO_ENDPOINT }}
+          port: ${{ secrets.MINIO_PORT }}
+          bucket: ${{ secrets.MINIO_BUCKET }}
+          use-fallback: false
+          insecure: true
+          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
 
       - name: Download dependencies
         run: go mod download
