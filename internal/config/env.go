@@ -44,8 +44,10 @@ func GetEnvRequired(key string) (string, error) {
 func InitConfig() error {
 	// Load .env file first (so env vars are available for logger config)
 	if err := LoadEnv(); err != nil {
-		// Don't return error - .env is optional
-		// Use a basic logger for this warning since Logger isn't initialized yet
+		// LoadEnv returns nil for missing files (os.PathError) - that's normal
+		// But if it returns a non-nil error, the file exists but couldn't be parsed
+		// This is a configuration error and we should fail fast
+		return fmt.Errorf("configuration initialization failed: %w", err)
 	}
 
 	// Initialize logger after loading env vars (so LOG_LEVEL is available)
