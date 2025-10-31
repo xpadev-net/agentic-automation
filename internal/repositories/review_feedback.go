@@ -131,4 +131,3 @@ func (r *ReviewFeedbackRepository) UpdateStatus(id int, status string) error {
 
 	return r.db.Model(&models.ReviewFeedback{}).Where("id = ?", id).Update("status", status).Error
 }
-

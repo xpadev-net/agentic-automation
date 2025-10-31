@@ -85,4 +85,3 @@ func (r *PullRequestRepository) Upsert(pr *models.PullRequest) error {
 		}),
 	}).Create(pr).Error
 }
-

@@ -21,15 +21,15 @@ func sanitizeDBError(err error) error {
 		return nil
 	}
 	errMsg := err.Error()
-	
+
 	// Remove DATABASE_URL patterns with passwords
 	// Pattern: mysql://user:password@... or user:password@tcp(...)
 	re := regexp.MustCompile(`([^:@]+):([^:@]+)@`)
 	errMsg = re.ReplaceAllString(errMsg, "$1:***@")
-	
+
 	// Remove any remaining full URLs
 	errMsg = regexp.MustCompile(`mysql://[^\s]+`).ReplaceAllString(errMsg, "mysql://***")
-	
+
 	return fmt.Errorf("%s", errMsg)
 }
 
@@ -79,9 +79,9 @@ func InitDatabase() error {
 	}
 
 	// Configure connection pool
-	sqlDB.SetMaxOpenConns(25)                 // Maximum number of open connections
-	sqlDB.SetMaxIdleConns(10)                 // Maximum number of idle connections
-	sqlDB.SetConnMaxLifetime(5 * time.Minute) // Maximum connection lifetime
+	sqlDB.SetMaxOpenConns(25)                  // Maximum number of open connections
+	sqlDB.SetMaxIdleConns(10)                  // Maximum number of idle connections
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)  // Maximum connection lifetime
 	sqlDB.SetConnMaxIdleTime(10 * time.Minute) // Maximum idle time
 
 	// Test connection
@@ -209,4 +209,3 @@ func parseMySQLDSNRegex(dbURL string) (string, error) {
 
 	return dsnBuilder.String(), nil
 }
-

@@ -20,4 +20,3 @@ type BlockerGraphEdge struct {
 func (BlockerGraphEdge) TableName() string {
 	return "blocker_graph_edges"
 }
-

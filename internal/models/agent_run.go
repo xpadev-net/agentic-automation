@@ -23,8 +23,8 @@ type AgentRun struct {
 	UpdatedAt      time.Time  `gorm:"column:updated_at;autoUpdateTime"`
 
 	// Relationships
-	Issue        Issue          `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
-	PullRequest  *PullRequest   `gorm:"foreignKey:PRID;constraint:OnDelete:SET NULL"`
+	Issue         Issue          `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	PullRequest   *PullRequest   `gorm:"foreignKey:PRID;constraint:OnDelete:SET NULL"`
 	OperationLogs []OperationLog `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
 }
 
@@ -32,4 +32,3 @@ type AgentRun struct {
 func (AgentRun) TableName() string {
 	return "agent_runs"
 }
-

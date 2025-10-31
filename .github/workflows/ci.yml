@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: ['master']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  # 依存関係チェック
+  deps:
+    name: Dependencies Check
+    runs-on: arc-runners-agentic-automation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.9'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Check go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "go.mod or go.sum are not tidy. Run 'go mod tidy' and commit the changes."
+            exit 1
+          fi
+
+  # フォーマットチェック
+  fmt:
+    name: Format Check
+    runs-on: arc-runners-agentic-automation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.9'
+
+      - name: Check formatting
+        run: |
+          if [ "$(gofmt -s -d . | wc -l)" -gt 0 ]; then
+            echo "Code is not formatted. Run 'gofmt -s -w .' to format."
+            gofmt -s -d .
+            exit 1
+          fi
+
+  # リント
+  vet:
+    name: Lint
+    runs-on: arc-runners-agentic-automation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.9'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run go vet
+        run: go vet ./...
+
+  # テスト実行
+  test:
+    name: Test
+    runs-on: arc-runners-agentic-automation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.9'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./... -v
+
+  # ビルド検証
+  build:
+    name: Build
+    runs-on: arc-runners-agentic-automation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.9'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build binaries
+        run: |
+          mkdir -p bin
+          if find ./cmd/operator -name "*.go" -type f 2>/dev/null | grep -q .; then
+            go build -o bin/operator ./cmd/operator
+          fi
+          if find ./cmd/agent-runner -name "*.go" -type f 2>/dev/null | grep -q .; then
+            go build -o bin/agent-runner ./cmd/agent-runner
+          fi
+

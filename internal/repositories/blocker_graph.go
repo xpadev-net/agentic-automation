@@ -28,17 +28,17 @@ func isDuplicateKeyError(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	var mysqlErr *mysql.MySQLError
 	if errors.As(err, &mysqlErr) {
 		// MySQL error code 1062 is "Duplicate entry"
 		return mysqlErr.Number == 1062
 	}
-	
+
 	// Also check error message as fallback
 	errMsg := strings.ToLower(err.Error())
-	return strings.Contains(errMsg, "duplicate entry") || 
-		   strings.Contains(errMsg, "duplicate key")
+	return strings.Contains(errMsg, "duplicate entry") ||
+		strings.Contains(errMsg, "duplicate key")
 }
 
 // CreateEdge creates a single dependency edge
@@ -84,7 +84,7 @@ func (r *BlockerGraphRepository) CreateEdges(edges []models.BlockerGraphEdge) er
 func (r *BlockerGraphRepository) DeleteEdge(taskID, dependsOnTaskID int) error {
 	result := r.db.Where("task_id = ? AND depends_on_task_id = ?", taskID, dependsOnTaskID).
 		Delete(&models.BlockerGraphEdge{})
-	
+
 	if result.Error != nil {
 		return result.Error
 	}
@@ -154,11 +154,10 @@ func (r *BlockerGraphRepository) GetAllEdges() ([]models.BlockerGraphEdge, error
 func (r *BlockerGraphRepository) DeleteEdgesByTaskID(taskID int) error {
 	result := r.db.Where("task_id = ? OR depends_on_task_id = ?", taskID, taskID).
 		Delete(&models.BlockerGraphEdge{})
-	
+
 	if result.Error != nil {
 		return result.Error
 	}
 
 	return nil
 }
-
