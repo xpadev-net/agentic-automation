@@ -65,4 +65,3 @@ func InitConfig() error {
 	logger.Info("Configuration initialized")
 	return nil
 }
-

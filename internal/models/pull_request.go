@@ -28,4 +28,3 @@ type PullRequest struct {
 func (PullRequest) TableName() string {
 	return "pull_requests"
 }
-

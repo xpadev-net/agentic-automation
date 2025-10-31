@@ -28,4 +28,3 @@ type CIStatus struct {
 func (CIStatus) TableName() string {
 	return "ci_status"
 }
-
