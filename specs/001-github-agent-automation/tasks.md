@@ -24,12 +24,12 @@
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create project structure with cmd/, internal/, pkg/, tests/, migrations/, k8s/, agent-runner/ directories
-- [ ] T002 Initialize Go module with `go mod init` and base dependencies (gin, gorm, go-github, zap, testify)
-- [ ] T003 [P] Setup Makefile or task runner (build, test, goose up/down)
-- [ ] T004 [P] Configure logger (zap) and config loader in `internal/config`
+- [x] T001 Create project structure with cmd/, internal/, pkg/, tests/, migrations/, k8s/, agent-runner/ directories
+- [x] T002 Initialize Go module with `go mod init` and base dependencies (gin, gorm, go-github, zap, testify)
+- [x] T003 [P] Setup Makefile or task runner (build, test, goose up/down)
+- [x] T004 [P] Configure logger (zap) and config loader in `internal/config`
 - [x] T006 [P] Create .env.example with required environment variables (includes CODEX_BOT_USERNAME, OPERATOR_API_URL, OPERATOR_API_TOKEN)
-- [ ] T007 [P] Setup .gitignore for `bin/`, `.env`, `migrations/*.sql`, `*.pem`, `k8s/secrets/`
+- [x] T007 [P] Setup .gitignore for `bin/`, `.env`, `migrations/*.sql`, `*.pem`, `k8s/secrets/`
 
 ---
 
