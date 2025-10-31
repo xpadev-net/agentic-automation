@@ -116,7 +116,14 @@ func (r *agentRunRepository) Update(run *models.AgentRun) error {
 	if run.ID == 0 {
 		return errors.New("cannot update AgentRun with zero ID")
 	}
-	return r.db.Save(run).Error
+	result := r.db.Save(run)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // UpdateState updates only the state field of an AgentRun
@@ -124,7 +131,14 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 	if id == 0 {
 		return errors.New("cannot update AgentRun with zero ID")
 	}
-	return r.db.Model(&models.AgentRun{}).Where("id = ?", id).Update("state", state).Error
+	result := r.db.Model(&models.AgentRun{}).Where("id = ?", id).Update("state", state)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 // GetByIssueID retrieves all AgentRuns for a specific Issue
