@@ -41,17 +41,17 @@
 
 ### Database & ORM Setup (GORM + goose)
 
-- [ ] T008 Create GORM models in `internal/models/` (Issue, PullRequest, AgentRun, ReviewFeedback, CIStatus, BlockerGraphEdges, AuditLog, OperationLog)
-- [ ] T009 Implement GORM database connection in `internal/config/database.go`
-- [ ] T010 Create initial goose SQL migration `migrations/000001_init.up.sql` and `down.sql`
+- [x] T008 Create GORM models in `internal/models/` (Issue, PullRequest, AgentRun, ReviewFeedback, CIStatus, BlockerGraphEdges, AuditLog, OperationLog)
+- [x] T009 Implement GORM database connection in `internal/config/database.go`
+- [x] T010 Create initial goose SQL migration `migrations/000001_init.up.sql` and `down.sql`
 
 ### Repository Layer (GORM-based)
 
-- [ ] T011 [P] Implement IssueRepository using GORM in `internal/repositories/issue.go`
-- [ ] T012 [P] Implement PullRequestRepository using GORM in `internal/repositories/pull_request.go`
-- [ ] T013 [P] Implement AgentRunRepository with idempotency check using GORM in `internal/repositories/agent_run.go`
-- [ ] T014 [P] Implement ReviewFeedbackRepository using GORM in `internal/repositories/review_feedback.go`
-- [ ] T015 [P] Implement BlockerGraphRepository using GORM in `internal/repositories/blocker_graph.go`
+- [x] T011 [P] Implement IssueRepository using GORM in `internal/repositories/issue.go`
+- [x] T012 [P] Implement PullRequestRepository using GORM in `internal/repositories/pull_request.go`
+- [x] T013 [P] Implement AgentRunRepository with idempotency check using GORM in `internal/repositories/agent_run.go`
+- [x] T014 [P] Implement ReviewFeedbackRepository using GORM in `internal/repositories/review_feedback.go`
+- [x] T015 [P] Implement BlockerGraphRepository using GORM in `internal/repositories/blocker_graph.go`
 
 ### Infrastructure & Services (Go)
 
