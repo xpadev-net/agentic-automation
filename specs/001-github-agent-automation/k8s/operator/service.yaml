@@ -1,0 +1,182 @@
+---
+# Kubernetes Service for GitHub Agent Automation Operator
+# Exposes the Operator API for agent-runner Pods to report results
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-operator
+  namespace: default
+  labels:
+    app: agent-operator
+    component: webhook-server
+spec:
+  type: ClusterIP
+  selector:
+    app: agent-operator
+  ports:
+    - name: http
+      protocol: TCP
+      port: 3000
+      targetPort: 3000
+  sessionAffinity: None
+---
+# Deployment for Operator (webhook server)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-operator
+  namespace: default
+  labels:
+    app: agent-operator
+spec:
+  replicas: 2  # For high availability
+  selector:
+    matchLabels:
+      app: agent-operator
+  template:
+    metadata:
+      labels:
+        app: agent-operator
+    spec:
+      serviceAccountName: agent-operator
+      containers:
+        - name: operator
+          image: ghcr.io/your-org/agent-operator:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "3000"
+            - name: ENV
+              value: "production"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: operator-secrets
+                  key: database-url
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: operator-secrets
+                  key: github-app-id
+            - name: GITHUB_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: operator-secrets
+                  key: github-private-key
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: operator-secrets
+                  key: github-webhook-secret
+            - name: DISCORD_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: operator-secrets
+                  key: discord-webhook-url
+            - name: OPERATOR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: operator-secrets
+                  key: operator-api-token
+            - name: AGENT_RUNNER_IMAGE
+              value: "ghcr.io/your-org/agent-runner:latest"
+            - name: AI_AGENT_TIMEOUT_MINUTES
+              value: "30"
+            - name: AI_AGENT_MAX_CONCURRENT_PODS
+              value: "10"
+            - name: AI_AGENT_DEFAULT_TYPE
+              value: "claude-code"
+            - name: CODEX_BOT_USERNAME
+              value: "codex-bot"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+# ServiceAccount for Operator
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-operator
+  namespace: default
+---
+# Role for Operator to create/manage Jobs/Pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-operator-role
+  namespace: default
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+# RoleBinding for Operator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-operator-rolebinding
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: agent-operator
+    namespace: default
+roleRef:
+  kind: Role
+  name: agent-operator-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Secret template (DO NOT commit actual secrets!)
+# Create this manually with:
+# kubectl create secret generic operator-secrets \
+#   --from-literal=database-url="mysql://..." \
+#   --from-literal=github-app-id="123456" \
+#   --from-file=github-private-key=./github-app.pem \
+#   --from-literal=github-webhook-secret="your_webhook_secret" \
+#   --from-literal=discord-webhook-url="https://discord.com/api/webhooks/..." \
+#   --from-literal=operator-api-token="sk-secret-token-abc123"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: operator-secrets
+  namespace: default
+type: Opaque
+# data:
+#   # Base64 encoded values (DO NOT commit real values!)
+#   database-url: <base64>
+#   github-app-id: <base64>
+#   github-private-key: <base64>
+#   github-webhook-secret: <base64>
+#   discord-webhook-url: <base64>
+#   operator-api-token: <base64>

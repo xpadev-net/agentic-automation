@@ -275,8 +275,9 @@ tail -f logs/app.log
 
 ### Agent Runner Requirements
 
-- The runner image must include the GitHub CLI `gh` (used for PR creation).
-- Add installation steps for `gh` in your agent-runner Dockerfile.
+- The runner image uses go-github/v62 library for PR creation (no CLI dependencies).
+- GitHub API token provided via GITHUB_TOKEN environment variable.
+- Node.js runtime required for claude-code/cursor-agents execution.
 
 ### Testing Locally
 
@@ -629,7 +630,7 @@ AND created_at > NOW() - INTERVAL 24 HOUR;
 
 ### Q: How do I customize the trigger phrase?
 
-**A**: Edit `src/services/TriggerDetectionService.ts` and change the regex pattern. Note: This requires code changes and redeployment.
+**A**: Edit `internal/services/trigger_detection.go` and change the regex pattern. Note: This requires code changes and redeployment.
 
 ### Q: Can I run multiple agents in parallel?
 
@@ -660,9 +661,10 @@ GITHUB_API_URL=https://github.company.com/api/v3
 
 Before contributing:
 1. Read constitution.md (TDD required)
-2. Run tests: `go test ./...`
+2. Run tests: `go test ./...` and `go vet ./...`
 3. Follow project structure in plan.md
 4. Add integration tests for new features
+5. Format code: `gofmt -w .` and `golint ./...`
 
 ---
 

@@ -1,30 +1,32 @@
 # agentic-automation Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2025-10-31
+Auto-generated from all feature plans. Last updated: 2025-11-01
 
 ## Active Technologies
 
-- Node.js 22 LTS + TypeScript 5.x (strict mode) (001-github-agent-automation)
+- Go 1.22+ with Gin, GORM, goose migrations (001-github-agent-automation)
 
 ## Project Structure
 
 ```text
-backend/
-frontend/
-tests/
+cmd/                    # Main applications
+internal/              # Private application code
+pkg/                   # Public libraries
+tests/                 # Test files
+migrations/            # Database migrations (goose)
 ```
 
 ## Commands
 
-npm test && npm run lint
+go test ./... && go vet ./...
 
 ## Code Style
 
-Node.js 22 LTS + TypeScript 5.x (strict mode): Follow standard conventions
+Go 1.22+: Follow standard Go conventions (gofmt, golint)
 
 ## Recent Changes
 
-- 001-github-agent-automation: Added Node.js 22 LTS + TypeScript 5.x (strict mode)
+- 001-github-agent-automation: Migrated to Go 1.22+ with Gin, GORM, goose
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

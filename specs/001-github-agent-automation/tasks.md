@@ -107,17 +107,17 @@
 
 ### Implementation for User Story 1
 
-- [ ] T049 [P] [US1] Create webhook event types definition in src/types/webhook-events.ts
-- [ ] T050 [P] [US1] Implement trigger detection service in src/services/TriggerDetectionService.ts
-- [ ] T051 [US1] Implement comment parser to detect "/run-agent" in src/utils/comment-parser.ts
-- [ ] T052 [US1] Implement GitHub user permission checker (Collaborator+) in src/services/AuthorizationService.ts
-- [ ] T053 [US1] Create webhook handler for issue_comment events in src/webhooks/handlers/issue-comment-handler.ts
-- [ ] T054 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in src/services/AgentRunStateMachine.ts
-- [ ] T055 [US1] Implement Kubernetes Job creation service in src/services/KubernetesJobService.ts
-- [ ] T056 [US1] Implement Issue context collector (body, comments, labels) in src/services/IssueContextCollector.ts
-- [ ] T057 [US1] Implement agent type detector from Issue labels in src/services/AgentTypeDetector.ts
-- [ ] T058 [US1] Add logging for trigger detection and authorization failures in src/webhooks/handlers/issue-comment-handler.ts
-- [ ] T059 [US1] Implement GitHub status comment poster for execution start in src/services/GitHubNotificationService.ts
+- [ ] T049 [P] [US1] Create webhook event types definition in internal/models/webhook_events.go
+- [ ] T050 [P] [US1] Implement trigger detection service in internal/services/trigger_detection.go
+- [ ] T051 [US1] Implement comment parser to detect "/run-agent" in internal/utils/comment_parser.go
+- [ ] T052 [US1] Implement GitHub user permission checker (Collaborator+) in internal/services/authorization.go
+- [ ] T053 [US1] Create webhook handler for issue_comment events in internal/webhooks/handlers/issue_comment.go
+- [ ] T054 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in internal/services/agent_run_state_machine.go
+- [ ] T055 [US1] Implement Kubernetes Job creation service in internal/services/kubernetes_job.go
+- [ ] T056 [US1] Implement Issue context collector (body, comments, labels) in internal/services/issue_context.go
+- [ ] T057 [US1] Implement agent type detector from Issue labels in internal/services/agent_type_detector.go
+- [ ] T058 [US1] Add logging for trigger detection and authorization failures in internal/webhooks/handlers/issue_comment.go
+- [ ] T059 [US1] Implement GitHub status comment poster for execution start in internal/services/github_notification.go
 
 ### Tests for User Story 1 (Test-First Development)
 
@@ -140,11 +140,11 @@
 
 **Note**: US2 is mostly handled by agent-runner in Pod. Operator側は結果受信とPR管理のみ。
 
-- [ ] T064 [P] [US2] Implement PullRequest upsert logic in PullRequestRepository (from agent-runner report)
-- [ ] T065 [US2] Implement PR URL generation and storage to AgentRun record in agent-report-handler.ts
-- [ ] T066 [US2] Add GitHub status comment for PR creation success in src/services/GitHubNotificationService.ts
-- [ ] T067 [US2] Implement Discord notification for PR creation in src/services/DiscordNotificationService.ts
-- [ ] T068 [US2] Handle agent-runner failure reports and extract error logs in agent-report-handler.ts
+- [ ] T064 [P] [US2] Implement PullRequest upsert logic in internal/repositories/pull_request.go (from agent-runner report)
+- [ ] T065 [US2] Implement PR URL generation and storage to AgentRun record in internal/webhooks/handlers/agent_report.go
+- [ ] T066 [US2] Add GitHub status comment for PR creation success in internal/services/github_notification.go
+- [ ] T067 [US2] Implement Discord notification for PR creation in internal/services/discord_notification.go
+- [ ] T068 [US2] Handle agent-runner failure reports and extract error logs in internal/webhooks/handlers/agent_report.go
 
 ### Tests for User Story 2 (Test-First Development)
 
@@ -165,20 +165,20 @@
 
 ### Implementation for User Story 3
 
-- [ ] T073 [P] [US3] Implement webhook handler for pull_request_review_comment events in src/webhooks/handlers/pr-review-comment-handler.ts
-- [ ] T074 [P] [US3] Implement Codex review request service (post "@codex review" comment) in src/services/CodexReviewService.ts
-- [ ] T075 [US3] Implement "@codex review" comment detection in src/utils/comment-parser.ts
-- [ ] T076 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in src/services/CodexApprovalDetector.ts
-- [ ] T077 [US3] Implement webhook handler for check_suite events (CI results) in src/webhooks/handlers/check-suite-handler.ts
-- [ ] T078 [US3] Create CI failure analyzer parsing check logs in src/services/CIFailureAnalyzer.ts
-- [ ] T079 [US3] Implement retry orchestrator managing retry_count (max 50) in src/services/RetryOrchestrator.ts
-- [ ] T080 [US3] Create feedback aggregator combining review + CI results in src/services/FeedbackAggregator.ts
-- [ ] T081 [US3] Implement K8s Job re-creation with aggregated feedback for AI retry
-- [ ] T082 [US3] Add retry count validation and failure threshold (50) in src/services/RetryOrchestrator.ts
-- [ ] T083 [US3] Implement failure notification to GitHub Issue on max retries in src/services/GitHubNotificationService.ts
-- [ ] T084 [US3] Implement failure notification to Discord webhook on max retries in src/services/DiscordNotificationService.ts
-- [ ] T085 [US3] Add GitHub status comment updates for retry progress in src/services/GitHubNotificationService.ts
-- [ ] T086 [US3] Store ReviewFeedback records for each review cycle in ReviewFeedbackRepository
+- [ ] T073 [P] [US3] Implement webhook handler for pull_request_review_comment events in internal/webhooks/handlers/pr_review_comment.go
+- [ ] T074 [P] [US3] Implement Codex review request service (post "@codex review" comment) in internal/services/codex_review.go
+- [ ] T075 [US3] Implement "@codex review" comment detection in internal/utils/comment_parser.go
+- [ ] T076 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in internal/services/codex_approval.go
+- [ ] T077 [US3] Implement webhook handler for check_suite events (CI results) in internal/webhooks/handlers/check_suite.go
+- [ ] T078 [US3] Create CI failure analyzer parsing check logs in internal/services/ci_failure.go
+- [ ] T079 [US3] Implement retry orchestrator managing retry_count (max 50) in internal/services/retry_orchestrator.go
+- [ ] T080 [US3] Create feedback aggregator combining review + CI results in internal/services/feedback_aggregator.go
+- [ ] T081 [US3] Implement K8s Job re-creation with aggregated feedback for AI retry in internal/services/kubernetes_job.go
+- [ ] T082 [US3] Add retry count validation and failure threshold (50) in internal/services/retry_orchestrator.go
+- [ ] T083 [US3] Implement failure notification to GitHub Issue on max retries in internal/services/github_notification.go
+- [ ] T084 [US3] Implement failure notification to Discord webhook on max retries in internal/services/discord_notification.go
+- [ ] T085 [US3] Add GitHub status comment updates for retry progress in internal/services/github_notification.go
+- [ ] T086 [US3] Store ReviewFeedback records for each review cycle in internal/repositories/review_feedback.go
 
 ### Tests for User Story 3 (Test-First Development)
 
@@ -199,16 +199,16 @@
 
 ### Implementation for User Story 4
 
-- [ ] T091 [P] [US4] Implement merge condition checker (CI + Codex + conflicts) in src/services/MergeConditionChecker.ts
-- [ ] T092 [P] [US4] Create CI status aggregator from check_suite events in src/services/CIStatusAggregator.ts
-- [ ] T093 [US4] Implement merge conflict detector via GitHub API in src/services/MergeConflictDetector.ts
-- [ ] T094 [US4] Create auto-merge service with merge API call in src/services/AutoMergeService.ts
-- [ ] T095 [US4] Implement webhook handler for status events (CI completion) in src/webhooks/handlers/status-handler.ts
-- [ ] T096 [US4] Add merge condition re-evaluation on Codex approval comment in src/webhooks/handlers/pr-review-comment-handler.ts
-- [ ] T097 [US4] Add merge condition re-evaluation on CI success in src/webhooks/handlers/check-suite-handler.ts
-- [ ] T098 [US4] Implement merge failure handling and notification in src/services/AutoMergeService.ts
-- [ ] T099 [US4] Add GitHub status comment for merge success/failure in src/services/GitHubNotificationService.ts
-- [ ] T100 [US4] Add Discord notification for merge events in src/services/DiscordNotificationService.ts
+- [ ] T091 [P] [US4] Implement merge condition checker (CI + Codex + conflicts) in internal/services/merge_condition.go
+- [ ] T092 [P] [US4] Create CI status aggregator from check_suite events in internal/services/ci_status_aggregator.go
+- [ ] T093 [US4] Implement merge conflict detector via GitHub API in internal/services/merge_conflict_detector.go
+- [ ] T094 [US4] Create auto-merge service with merge API call in internal/services/auto_merge.go
+- [ ] T095 [US4] Implement webhook handler for status events (CI completion) in internal/webhooks/handlers/status.go
+- [ ] T096 [US4] Add merge condition re-evaluation on Codex approval comment in internal/webhooks/handlers/pr_review_comment.go
+- [ ] T097 [US4] Add merge condition re-evaluation on CI success in internal/webhooks/handlers/check_suite.go
+- [ ] T098 [US4] Implement merge failure handling and notification in internal/services/auto_merge.go
+- [ ] T099 [US4] Add GitHub status comment for merge success/failure in internal/services/github_notification.go
+- [ ] T100 [US4] Add Discord notification for merge events in internal/services/discord_notification.go
 
 ### Tests for User Story 4 (Test-First Development)
 
@@ -228,16 +228,16 @@
 
 ### Implementation for User Story 5
 
-- [ ] T104 [P] [US5] Implement Issue blocker parser ("blocked by" / "blocking" syntax) in src/services/IssueBlockerParser.ts
-- [ ] T105 [P] [US5] Create directed graph data structure for dependencies in src/lib/dependency-graph.ts
-- [ ] T106 [US5] Implement blocker graph builder from Issue metadata in src/services/BlockerGraphBuilder.ts
-- [ ] T107 [US5] Create circular dependency detector with cycle detection algorithm in src/services/CircularDependencyDetector.ts
-- [ ] T108 [US5] Implement webhook handler for issues events (closed/reopened) in src/webhooks/handlers/issues-handler.ts
-- [ ] T109 [US5] Create blocked task resolver finding unblocked tasks in src/services/BlockedTaskResolver.ts
-- [ ] T110 [US5] Implement dependency validation preventing out-of-order execution in src/services/DependencyValidator.ts
-- [ ] T111 [US5] Implement automatic K8s Job trigger for unblocked tasks in src/services/BlockedTaskResolver.ts
-- [ ] T112 [US5] Add GitHub status comment for dependency violations in src/services/GitHubNotificationService.ts
-- [ ] T113 [US5] Add logging for blocker graph updates and task resumption in src/services/BlockedTaskResolver.ts
+- [ ] T104 [P] [US5] Implement Issue blocker parser ("blocked by" / "blocking" syntax) in internal/services/issue_blocker_parser.go
+- [ ] T105 [P] [US5] Create directed graph data structure for dependencies in internal/utils/dependency_graph.go
+- [ ] T106 [US5] Implement blocker graph builder from Issue metadata in internal/services/blocker_graph.go
+- [ ] T107 [US5] Create circular dependency detector with cycle detection algorithm in internal/services/circular_dependency_detector.go
+- [ ] T108 [US5] Implement webhook handler for issues events (closed/reopened) in internal/webhooks/handlers/issues.go
+- [ ] T109 [US5] Create blocked task resolver finding unblocked tasks in internal/services/blocked_task.go
+- [ ] T110 [US5] Implement dependency validation preventing out-of-order execution in internal/services/dependency_validator.go
+- [ ] T111 [US5] Implement automatic K8s Job trigger for unblocked tasks in internal/services/blocked_task.go
+- [ ] T112 [US5] Add GitHub status comment for dependency violations in internal/services/github_notification.go
+- [ ] T113 [US5] Add logging for blocker graph updates and task resumption in internal/services/blocked_task.go
 
 ### Tests for User Story 5 (Test-First Development)
 
@@ -253,16 +253,16 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T117 [P] Add comprehensive error messages and user-facing error codes in src/utils/error-codes.ts
-- [ ] T118 [P] Implement rate limiting for GitHub API calls in src/lib/github-client.ts
-- [ ] T119 [P] Add metrics collection for execution times and success rates in src/services/MetricsService.ts
-- [ ] T120 [P] Create health check endpoint for webhook server in src/webhooks/server.ts
-- [ ] T121 [P] Add environment variable validation on startup in src/config/env.ts
-- [ ] T122 [P] Implement graceful shutdown handler in src/webhooks/server.ts
+- [ ] T117 [P] Add comprehensive error messages and user-facing error codes in internal/utils/error_codes.go
+- [ ] T118 [P] Implement rate limiting for GitHub API calls in internal/clients/github.go
+- [ ] T119 [P] Add metrics collection for execution times and success rates in internal/services/metrics.go
+- [ ] T120 [P] Create health check endpoint for webhook server in internal/webhooks/server.go
+- [ ] T121 [P] Add environment variable validation on startup in internal/config/env.go
+- [ ] T122 [P] Implement graceful shutdown handler in internal/webhooks/server.go
 - [ ] T123 [P] Add/optimize SQL indexes via goose migrations in `migrations/*.sql`
 - [ ] T124 [P] Create README.md with setup and deployment instructions
 - [ ] T125 [P] Document API client configurations in docs/api-clients.md
-- [ ] T126 [P] Add inline code documentation with JSDoc comments
+- [ ] T126 [P] Add inline code documentation with Go doc comments
 - [ ] T127 Run quickstart.md validation checklist
 - [ ] T128 Perform security audit for secret handling and authorization
 - [ ] T129 [P] Add performance optimization for blocker graph queries with SQL indexes (goose)

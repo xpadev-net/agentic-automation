@@ -214,6 +214,43 @@ Immutable per-operation log to enforce operation-level idempotency and trace act
 - Each external side-effecting action MUST record an OperationLog
 - Duplicate operation_id must not create a second side-effect (idempotent)
 
+### BranchLock
+
+**NEW ENTITY** - Enforces per-branch concurrency = 1 (FR-020)
+
+- branch_name: STRING (PK, max 255 chars) - Git branch name
+- agent_run_id: INT (FK to AgentRun.id) - Current executing AgentRun
+- locked_at: DATETIME - Lock acquisition timestamp
+
+**Relationships**:
+- belongs to AgentRun (via agent_run_id)
+
+**Indexes**:
+- PRIMARY KEY(branch_name)
+- FK to AgentRun(id) with ON DELETE CASCADE
+
+**Business Rules**:
+- Only one AgentRun can hold a lock on a specific branch at any time
+- Lock is automatically released when AgentRun completes (succeeded/failed state)
+- Lock is also released when AgentRun is deleted (CASCADE)
+- Before creating Kubernetes Job, system MUST acquire lock:
+  ```sql
+  INSERT INTO branch_locks (branch_name, agent_run_id, locked_at)
+  VALUES ('feature/issue-42', 123, NOW())
+  ON DUPLICATE KEY UPDATE branch_name = branch_name; -- Fail if exists
+  ```
+- If INSERT fails due to duplicate key → branch is locked by another run
+- Action on lock failure: Return error to user, do not queue AgentRun
+- Lock release on completion:
+  ```sql
+  DELETE FROM branch_locks WHERE agent_run_id = 123;
+  ```
+
+**Deadlock Prevention**:
+- Locks are always acquired in branch name alphabetical order
+- Locks have no timeout (released only on completion or failure)
+- If Pod crashes, lock persists until AgentRun state transitions to failed (via timeout detection)
+
 ## 状態遷移・バリデーション要件
 
 ### AgentRun State Machine

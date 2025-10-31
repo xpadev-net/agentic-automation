@@ -277,120 +277,133 @@ Discord notifications are sent via Discord Webhook for critical events (failures
 
 **Example**:
 ```go
-import axios from 'axios';
+package clients
 
-export class DiscordNotificationService {
-  private webhookUrl: string;
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
 
-  constructor() {
-    this.webhookUrl = process.env.DISCORD_WEBHOOK_URL!;
-  }
+	"github.com/your-org/agentic-automation/internal/models"
+)
 
-  async sendFailureNotification(agentRun: AgentRun, issue: Issue) {
-    const payload = {
-      embeds: [
-        {
-          title: '🚨 Agent Execution Failed',
-          description: `**Issue #${issue.number}**: ${issue.title}`,
-          color: 15158332, // Red
-          fields: [
-            {
-              name: 'Repository',
-              value: issue.repo,
-              inline: true,
-            },
-            {
-              name: 'Agent Type',
-              value: agentRun.agent_type,
-              inline: true,
-            },
-            {
-              name: 'Retry Count',
-              value: `${agentRun.retry_count}/50`,
-              inline: true,
-            },
-            {
-              name: 'Failure Reason',
-              value: agentRun.error_message || 'Unknown error',
-              inline: false,
-            },
-            {
-              name: 'Issue URL',
-              value: `[View Issue](https://github.com/${issue.repo}/issues/${issue.number})`,
-              inline: false,
-            },
-          ],
-          timestamp: new Date().toISOString(),
-          footer: {
-            text: 'GitHub Agent Automation',
-          },
-        },
-      ],
-    };
+type DiscordClient struct {
+	webhookURL string
+	httpClient *http.Client
+}
 
-    await this.send(payload);
-  }
+func NewDiscordClient(webhookURL string) *DiscordClient {
+	return &DiscordClient{
+		webhookURL: webhookURL,
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
+}
 
-  async sendMaxRetriesNotification(agentRun: AgentRun, issue: Issue) {
-    const payload = {
-      embeds: [
-        {
-          title: '❌ Max Retries Exceeded',
-          description: `**Issue #${issue.number}**: ${issue.title}`,
-          color: 10038562, // Dark Red
-          fields: [
-            {
-              name: 'Repository',
-              value: issue.repo,
-              inline: true,
-            },
-            {
-              name: 'Agent Type',
-              value: agentRun.agent_type,
-              inline: true,
-            },
-            {
-              name: 'Total Attempts',
-              value: '50',
-              inline: true,
-            },
-            {
-              name: 'Last Error',
-              value: agentRun.error_message || 'Unknown error',
-              inline: false,
-            },
-            {
-              name: 'Action Required',
-              value: 'Manual intervention needed. Check Issue comments for details.',
-              inline: false,
-            },
-            {
-              name: 'Issue URL',
-              value: `[View Issue](https://github.com/${issue.repo}/issues/${issue.number})`,
-              inline: false,
-            },
-          ],
-          timestamp: new Date().toISOString(),
-          footer: {
-            text: 'GitHub Agent Automation | Manual Review Required',
-          },
-        },
-      ],
-    };
+type DiscordEmbed struct {
+	Title       string              `json:"title"`
+	Description string              `json:"description"`
+	Color       int                 `json:"color"`
+	Fields      []DiscordEmbedField `json:"fields"`
+	Timestamp   string              `json:"timestamp"`
+	Footer      DiscordEmbedFooter  `json:"footer"`
+}
 
-    await this.send(payload);
-  }
+type DiscordEmbedField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Inline bool   `json:"inline"`
+}
 
-  private async send(payload: any) {
-    try {
-      await axios.post(this.webhookUrl, payload, {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    } catch (error) {
-      console.error('Failed to send Discord notification:', error);
-      // Do not throw - notification failure should not block main flow
-    }
-  }
+type DiscordEmbedFooter struct {
+	Text string `json:"text"`
+}
+
+type DiscordPayload struct {
+	Embeds []DiscordEmbed `json:"embeds"`
+}
+
+func (d *DiscordClient) SendFailureNotification(agentRun *models.AgentRun, issue *models.Issue) error {
+	payload := DiscordPayload{
+		Embeds: []DiscordEmbed{
+			{
+				Title:       "🚨 Agent Execution Failed",
+				Description: fmt.Sprintf("**Issue #%d**: %s", issue.Number, issue.Title),
+				Color:       15158332, // Red
+				Fields: []DiscordEmbedField{
+					{Name: "Repository", Value: issue.Repo, Inline: true},
+					{Name: "Agent Type", Value: agentRun.AgentType, Inline: true},
+					{Name: "Retry Count", Value: fmt.Sprintf("%d/50", agentRun.RetryCount), Inline: true},
+					{Name: "Failure Reason", Value: getErrorMessage(agentRun.ErrorMessage), Inline: false},
+					{Name: "Issue URL", Value: fmt.Sprintf("[View Issue](https://github.com/%s/issues/%d)", issue.Repo, issue.Number), Inline: false},
+				},
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Footer:    DiscordEmbedFooter{Text: "GitHub Agent Automation"},
+			},
+		},
+	}
+
+	return d.send(payload)
+}
+
+func (d *DiscordClient) SendMaxRetriesNotification(agentRun *models.AgentRun, issue *models.Issue) error {
+	payload := DiscordPayload{
+		Embeds: []DiscordEmbed{
+			{
+				Title:       "❌ Max Retries Exceeded",
+				Description: fmt.Sprintf("**Issue #%d**: %s", issue.Number, issue.Title),
+				Color:       10038562, // Dark Red
+				Fields: []DiscordEmbedField{
+					{Name: "Repository", Value: issue.Repo, Inline: true},
+					{Name: "Agent Type", Value: agentRun.AgentType, Inline: true},
+					{Name: "Total Attempts", Value: "50", Inline: true},
+					{Name: "Last Error", Value: getErrorMessage(agentRun.ErrorMessage), Inline: false},
+					{Name: "Action Required", Value: "Manual intervention needed. Check Issue comments for details.", Inline: false},
+					{Name: "Issue URL", Value: fmt.Sprintf("[View Issue](https://github.com/%s/issues/%d)", issue.Repo, issue.Number), Inline: false},
+				},
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Footer:    DiscordEmbedFooter{Text: "GitHub Agent Automation | Manual Review Required"},
+			},
+		},
+	}
+
+	return d.send(payload)
+}
+
+func (d *DiscordClient) send(payload DiscordPayload) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", d.webhookURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		// Log error but do not throw - notification failure should not block main flow
+		fmt.Printf("Failed to send Discord notification: %v\n", err)
+		return nil // Return nil to not block execution
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		fmt.Printf("Discord webhook returned error status: %d\n", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func getErrorMessage(msg *string) string {
+	if msg == nil || *msg == "" {
+		return "Unknown error"
+	}
+	return *msg
 }
 ```
 
@@ -407,23 +420,42 @@ export class DiscordNotificationService {
 **Rate Limiting**: Discord webhooks have rate limit of 30 requests per minute. Implement throttling:
 
 ```go
-private lastSent: number = 0;
-private MIN_INTERVAL_MS = 2000; // 2 seconds
+import (
+	"sync"
+	"time"
+)
 
-private async send(payload: any) {
-  // Throttle to max 30/min
-  const now = Date.now();
-  const elapsed = now - this.lastSent;
-  if (elapsed < this.MIN_INTERVAL_MS) {
-    await new Promise(resolve => setTimeout(resolve, this.MIN_INTERVAL_MS - elapsed));
-  }
+type RateLimitedDiscordClient struct {
+	*DiscordClient
+	lastSent      time.Time
+	minInterval   time.Duration
+	mu            sync.Mutex
+}
 
-  try {
-    await axios.post(this.webhookUrl, payload);
-    this.lastSent = Date.now();
-  } catch (error) {
-    console.error('Discord notification failed:', error);
-  }
+func NewRateLimitedDiscordClient(webhookURL string) *RateLimitedDiscordClient {
+	return &RateLimitedDiscordClient{
+		DiscordClient: NewDiscordClient(webhookURL),
+		minInterval:   2 * time.Second, // Max 30/min
+	}
+}
+
+func (d *RateLimitedDiscordClient) send(payload DiscordPayload) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Throttle to max 30/min
+	now := time.Now()
+	elapsed := now.Sub(d.lastSent)
+	if elapsed < d.minInterval {
+		time.Sleep(d.minInterval - elapsed)
+	}
+
+	err := d.DiscordClient.send(payload)
+	if err == nil {
+		d.lastSent = time.Now()
+	}
+
+	return err
 }
 ```
 
@@ -540,11 +572,13 @@ Expected: Embed message appears in Discord channel
 
 **Mitigation**: Escape Discord markdown:
 ```go
+import "strings"
+
 func sanitize(text string) string {
-  text = strings.ReplaceAll(text, "@everyone", "@ everyone")
-  text = strings.ReplaceAll(text, "@here", "@ here")
-  text = strings.ReplaceAll(text, "<@", "< @")
-  return text
+	text = strings.ReplaceAll(text, "@everyone", "@ everyone")
+	text = strings.ReplaceAll(text, "@here", "@ here")
+	text = strings.ReplaceAll(text, "<@", "< @")
+	return text
 }
 ```
 

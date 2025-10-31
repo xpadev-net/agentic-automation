@@ -65,8 +65,8 @@ agent-runner \
    └─ git commit -m "feat: implement issue #{id}"
 8. Push to remote
    └─ git push origin feature/issue-{id}
-9. Create Pull Request (via gh CLI)
-   └─ gh pr create --title "Fix #{id}" --body "..."
+9. Create Pull Request (via GitHub API using go-github/v62)
+   └─ github.CreatePullRequest(repo, base, head, title, body)
 10. Report result to Operator API (with retry)
     └─ POST /api/agent-runs/{id}/report
 11. Exit 0 (success) or Exit 1 (failure)

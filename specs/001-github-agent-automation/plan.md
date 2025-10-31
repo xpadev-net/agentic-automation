@@ -208,6 +208,7 @@ internal/
 │   ├── blocker_graph.go         # FR-007: Dependency graph
 │   ├── blocked_task.go          # FR-013: Unblock detection
 │   ├── dependency_validator.go  # FR-013: Order validation
+│   ├── branch_lock.go           # FR-020: Per-branch concurrency control
 │   ├── github_notification.go   # GitHub comments
 │   ├── discord_notification.go  # FR-014: Discord webhooks
 │   └── metrics.go               # Performance metrics
@@ -218,7 +219,8 @@ internal/
 │   ├── review_feedback.go
 │   ├── blocker_graph.go
 │   ├── ci_status.go
-│   └── audit_log.go
+│   ├── audit_log.go
+│   └── branch_lock.go           # FR-020: Branch lock management
 ├── models/                       # GORM models
 │   ├── issue.go
 │   ├── pull_request.go
@@ -226,7 +228,8 @@ internal/
 │   ├── review_feedback.go
 │   ├── blocker_graph.go
 │   ├── ci_status.go
-│   └── audit_log.go
+│   ├── audit_log.go
+│   └── branch_lock.go           # FR-020: Branch lock model
 ├── clients/                      # External integrations
 │   ├── github.go                # go-github client wrapper
 │   ├── discord.go               # Discord webhook client
