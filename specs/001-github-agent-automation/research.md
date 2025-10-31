@@ -160,7 +160,39 @@
 
 **Rate Limiting**: Governed by GitHub API limits (5000 req/hour)
 
-### 3.3 Discord Notifications
+### 3.4 AI Agent Execution (Kubernetes Pod + Push型通知)
+
+**Decision**: Kubernetes Job/Pod execution with agent-runner (Go binary) and Push-type notification
+
+**Architecture**:
+- Operator creates Kubernetes Job with Pod from template (environment variables)
+- Pod runs `agent-runner` Go binary as entrypoint
+- agent-runner executes claude-code or cursor-agents with Issue context
+- agent-runner runs lint/typecheck validation (npm run lint, npm run type-check)
+- agent-runner commits and pushes changes, creates PR via gh CLI
+- **Push notification**: agent-runner calls Operator REST API to report result
+- Operator receives POST /api/agent-runs/{id}/report with status (succeeded/failed)
+- Operator updates AgentRun state based on report
+
+**Agent Selection**:
+- Issue label: `agent:claude-code` or `agent:cursor-agents`
+- Default: claude-code (if no label specified)
+- Detected by AgentTypeDetector service, passed to Pod as AGENT_TYPE env var
+
+**Timeout & Concurrency**:
+- Configurable via environment variables
+- Default: 30min timeout (K8s Job activeDeadlineSeconds), max 10 concurrent Pods
+- Job failures (timeout, OOM) detected via missing report → retry
+
+**API Authentication**:
+- Bearer token (OPERATOR_API_TOKEN) for agent-runner → Operator authentication
+- Exponential backoff retry (max 5 attempts) if API unreachable
+
+**Result Retrieval**:
+- Primary: Push notification from agent-runner
+- Fallback: Pod logs (kubectl logs) for debugging if API call fails
+
+### 3.5 Discord Notifications
 
 **Decision**: Discord Webhook URL (no bot required)
 

@@ -7,7 +7,7 @@
 
 ## Summary
 
-Automated system that responds to GitHub Issue comments with trigger phrase "/run-agent", executes AI agent to implement changes, creates PR, requests Codex review, automatically retries based on CI/review feedback (max 50 times), and auto-merges on approval. Includes dependency management for blocked tasks.
+Automated system that responds to GitHub Issue comments with trigger phrase "/run-agent", launches Kubernetes Pod with agent-runner (Go binary) to execute AI agent (claude-code/cursor-agents), creates PR, requests Codex review via GitHub comment, automatically retries based on CI/review feedback (max 50 times), and auto-merges on approval. Pod pushes completion status to Operator REST API. Includes dependency management for blocked tasks.
 
 ## Technical Context
 
@@ -17,7 +17,16 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 - Prisma ORM (type-safe database access)
 - @octokit/webhooks (GitHub webhook event handling)
 - @octokit/rest (GitHub API client)
+- @kubernetes/client-node (Kubernetes API client for Job/Pod management)
 - Vitest (test runner)
+
+**Agent Runner** (separate Go project):
+- Go 1.22+ with cobra CLI framework
+- Runs in Kubernetes Pod
+- Executes claude-code or cursor-agents
+- Performs lint/typecheck (npm run lint, npm run type-check)
+- Commits and pushes changes
+- Reports results to Operator REST API
 
 **Storage**: MySQL 8.0+ with Prisma schema for Issue, PullRequest, AgentRun, ReviewFeedback, BlockerGraphEdges, CIStatus, AuditLog
 

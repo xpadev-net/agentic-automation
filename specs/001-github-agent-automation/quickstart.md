@@ -1,7 +1,7 @@
 # quickstart.md: GitHub Agent Automation
 
 **Last Updated**: 2025-10-31
-**Prerequisites**: Node.js 22+, MySQL 8.0+, GitHub account with admin access to target repository
+**Prerequisites**: Node.js 22+, MySQL 8.0+, **Kubernetes cluster access (kubectl configured)**, GitHub account with admin access to target repository
 
 ## Overview
 
@@ -88,9 +88,16 @@ GITHUB_WEBHOOK_SECRET=your_webhook_secret_from_github_app
 CODEX_BOT_USERNAME=codex-bot  # GitHub username of Codex bot for comment detection
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/123456/your_webhook_token
 
-# AI Agent
-AI_AGENT_API_KEY=your_ai_agent_key
-AI_AGENT_API_URL=https://api.anthropic.com/v1/messages
+# Agent Runner (Kubernetes Pod)
+OPERATOR_API_URL=http://agent-operator.default.svc.cluster.local:3000  # Operator REST API URL for Pod → Operator communication
+OPERATOR_API_TOKEN=your-secret-api-token  # Bearer token for agent-runner authentication
+AGENT_RUNNER_IMAGE=ghcr.io/your-org/agent-runner:latest  # Docker image for agent-runner Pod
+AI_AGENT_TIMEOUT_MINUTES=30  # Pod execution timeout
+AI_AGENT_MAX_CONCURRENT_PODS=10  # Max concurrent Pod executions
+AI_AGENT_DEFAULT_TYPE=claude-code  # claude-code | cursor-agents
+
+# Kubernetes (optional, defaults to in-cluster config)
+KUBE_CONFIG_PATH=/path/to/.kube/config
 
 # Server Configuration
 PORT=3000

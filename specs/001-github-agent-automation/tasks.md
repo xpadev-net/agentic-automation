@@ -3,7 +3,7 @@
 **Input**: Design documents from `/specs/001-github-agent-automation/`
 **Prerequisites**: plan.md (required), spec.md (required for user stories), research.md, data-model.md, quickstart.md
 
-**Tests**: Tests are NOT explicitly requested in the feature specification, so test tasks are omitted.
+**Tests**: Test-First development is mandatory per Constitution Principle III. Test tasks are included for each User Story.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
@@ -24,13 +24,13 @@
 
 **Purpose**: Project initialization and basic structure
 
-- [x] T001 Create project structure with src/, tests/, config/, prisma/ directories
-- [x] T002 Initialize Node.js/TypeScript project with package.json and tsconfig.json
-- [x] T003 [P] Install core dependencies (express, @octokit/webhooks, @octokit/rest, axios, prisma, @prisma/client)
-- [x] T004 [P] Configure TypeScript compiler options in tsconfig.json
-- [x] T005 [P] Setup ESLint and Prettier configuration files
-- [x] T006 [P] Create .env.example with required environment variables (GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET, CODEX_API_KEY, DISCORD_WEBHOOK_URL)
-- [x] T007 [P] Setup .gitignore for node_modules, .env, dist/
+- [ ] T001 Create project structure with src/, tests/, config/, prisma/, k8s/, agent-runner/ directories (PARTIAL: root exists, need subdirs)
+- [ ] T002 Initialize Node.js/TypeScript project with package.json and tsconfig.json (NEEDS FIX: tsconfig has Next.js config, should be Node.js)
+- [ ] T003 [P] Install core dependencies (Hono, @octokit/webhooks, @octokit/rest, axios, prisma, @prisma/client, @kubernetes/client-node) (NEEDS FIX: Hono not installed, express incorrectly added)
+- [ ] T004 [P] Configure TypeScript compiler options in tsconfig.json (NEEDS FIX: align with plan.md strict mode for Node.js)
+- [ ] T005 [P] Setup ESLint and Prettier configuration files (PARTIAL: Biome installed instead, need ESLint/Prettier or update plan to use Biome)
+- [x] T006 [P] Create .env.example with required environment variables (COMPLETE: updated with CODEX_BOT_USERNAME, OPERATOR_API_URL, OPERATOR_API_TOKEN)
+- [ ] T007 [P] Setup .gitignore for node_modules, .env, dist/, *.pem, k8s/secrets/ (INCOMPLETE: missing .env, dist/, *.pem, k8s/secrets/)
 
 ---
 
@@ -56,15 +56,45 @@
 
 ### Infrastructure & Services
 
-- [ ] T016 Setup GitHub webhook server with signature verification in src/webhooks/server.ts
+- [ ] T016 Setup GitHub webhook server (Hono) with signature verification in src/webhooks/server.ts
 - [ ] T017 [P] Implement GitHub API client wrapper in src/lib/github-client.ts
-- [ ] T018 [P] Implement Codex API client in src/lib/codex-client.ts
-- [ ] T019 [P] Implement Discord webhook client in src/lib/discord-client.ts
-- [ ] T020 Create global error handler middleware in src/middleware/error-handler.ts
-- [ ] T021 [P] Setup structured logging with Winston in src/lib/logger.ts
+- [ ] T018 [P] Implement Discord webhook client in src/lib/discord-client.ts
+- [ ] T019 [P] Implement Kubernetes client wrapper in src/lib/kubernetes-client.ts
+- [ ] T020 Create global error handler middleware in src/webhooks/middleware/error-handler.ts
+- [ ] T021 [P] Setup structured logging with Pino in src/lib/logger.ts
 - [ ] T022 [P] Implement retry utility with exponential backoff and jitter in src/utils/retry.ts
 - [ ] T023 [P] Create environment configuration loader in src/config/env.ts
-- [ ] T024 Implement idempotency middleware using X-GitHub-Delivery header in src/middleware/idempotency.ts
+- [ ] T024 Implement idempotency middleware using X-GitHub-Delivery header in src/webhooks/middleware/idempotency.ts
+
+### Operator API for Agent Report (NEW - Push型通知)
+
+- [ ] T025 [P] Create agent-report-handler.ts in src/webhooks/handlers/ with Bearer token validation
+- [ ] T026 Add POST /api/agent-runs/:id/report route to Hono server in src/webhooks/server.ts
+- [ ] T027 [P] Implement AgentRunRepository.update() method for state transitions
+- [ ] T028 [P] Write unit tests for agent-report-handler (Bearer token validation, state updates)
+- [ ] T029 [P] Write integration test for Pod → Operator report flow with mock requests
+
+### Agent Runner Setup (NEW - Go binary in Pod)
+
+- [ ] T030 Create agent-runner Go project structure (agent-runner/main.go, pkg/, Dockerfile)
+- [ ] T031 Initialize go.mod with dependencies (cobra CLI framework, HTTP client)
+- [ ] T032 [P] Implement main.go CLI entry point with cobra command structure
+- [ ] T033 [P] Implement pkg/agent/executor.go (claude-code/cursor-agents execution)
+- [ ] T034 [P] Implement pkg/lint/runner.go (npm run lint, npm run type-check)
+- [ ] T035 [P] Implement pkg/git/committer.go (git commit/push operations, return branch+SHA)
+- [ ] T036 [P] Implement pkg/git/diff.go (git diff detection for file changes)
+- [ ] T037 [P] Implement pkg/context/issue.go (Issue context parsing from args)
+- [ ] T038 [P] Implement pkg/reporter/client.go (Operator API client with exponential backoff retry)
+- [ ] T039 Integrate reporter into main.go execution flow (call on success/failure)
+- [ ] T040 Create Dockerfile for agent-runner (multi-stage: Go build → Node.js runtime with agents)
+- [ ] T041 Create k8s/rbac.yaml (ServiceAccount, Role, RoleBinding for Pod permissions)
+- [ ] T042 Create k8s/pod-template.yaml using agent-runner image
+- [ ] T043 Build and push Docker image to container registry (ghcr.io or Docker Hub)
+- [ ] T044 [P] Write unit tests for agent executor (mock agent commands)
+- [ ] T045 [P] Write unit tests for lint runner (mock npm commands)
+- [ ] T046 [P] Write unit tests for git committer (mock git commands)
+- [ ] T047 [P] Write unit tests for reporter client (mock HTTP requests, retry logic)
+- [ ] T048 Write integration test for full agent-runner execution flow (end-to-end)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -78,18 +108,26 @@
 
 ### Implementation for User Story 1
 
-- [ ] T025 [P] [US1] Create webhook event types definition in src/types/webhook-events.ts
-- [ ] T026 [P] [US1] Implement trigger detection service in src/services/TriggerDetectionService.ts
-- [ ] T027 [US1] Implement comment parser to detect "/run-agent" in src/utils/comment-parser.ts
-- [ ] T028 [US1] Implement GitHub user permission checker (Collaborator+) in src/services/AuthorizationService.ts
-- [ ] T029 [US1] Create webhook handler for issue_comment events in src/webhooks/handlers/issue-comment-handler.ts
-- [ ] T030 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in src/services/AgentRunStateMachine.ts
-- [ ] T031 [US1] Create queue service to enqueue agent runs in src/services/QueueService.ts
-- [ ] T032 [US1] Implement Issue context collector (body, comments, labels) in src/services/IssueContextCollector.ts
-- [ ] T033 [US1] Add logging for trigger detection and authorization failures in src/webhooks/handlers/issue-comment-handler.ts
-- [ ] T034 [US1] Implement GitHub status comment poster for execution start in src/services/GitHubNotificationService.ts
+- [ ] T049 [P] [US1] Create webhook event types definition in src/types/webhook-events.ts
+- [ ] T050 [P] [US1] Implement trigger detection service in src/services/TriggerDetectionService.ts
+- [ ] T051 [US1] Implement comment parser to detect "/run-agent" in src/utils/comment-parser.ts
+- [ ] T052 [US1] Implement GitHub user permission checker (Collaborator+) in src/services/AuthorizationService.ts
+- [ ] T053 [US1] Create webhook handler for issue_comment events in src/webhooks/handlers/issue-comment-handler.ts
+- [ ] T054 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in src/services/AgentRunStateMachine.ts
+- [ ] T055 [US1] Implement Kubernetes Job creation service in src/services/KubernetesJobService.ts
+- [ ] T056 [US1] Implement Issue context collector (body, comments, labels) in src/services/IssueContextCollector.ts
+- [ ] T057 [US1] Implement agent type detector from Issue labels in src/services/AgentTypeDetector.ts
+- [ ] T058 [US1] Add logging for trigger detection and authorization failures in src/webhooks/handlers/issue-comment-handler.ts
+- [ ] T059 [US1] Implement GitHub status comment poster for execution start in src/services/GitHubNotificationService.ts
 
-**Checkpoint**: At this point, User Story 1 should be fully functional and testable independently - webhook triggers agent execution
+### Tests for User Story 1 (Test-First Development)
+
+- [ ] T060 [P] [US1] Write contract tests for issue_comment webhook payload validation
+- [ ] T061 [P] [US1] Write unit tests for TriggerDetectionService ("/run-agent" detection)
+- [ ] T062 [P] [US1] Write unit tests for AuthorizationService (Collaborator+ check)
+- [ ] T063 [US1] Write integration test for webhook → K8s Job creation flow
+
+**Checkpoint**: At this point, User Story 1 should be fully functional and testable independently - webhook triggers K8s Pod execution
 
 ---
 
@@ -101,19 +139,22 @@
 
 ### Implementation for User Story 2
 
-- [ ] T035 [P] [US2] Create AI agent client interface in src/lib/ai-agent-client.ts
-- [ ] T036 [P] [US2] Implement Git operations wrapper (branch, commit, push) in src/lib/git-operations.ts
-- [ ] T037 [US2] Implement branch name generator (issue-based) in src/utils/branch-name-generator.ts
-- [ ] T038 [US2] Create AgentExecutionService orchestrating AI + Git flow in src/services/AgentExecutionService.ts
-- [ ] T039 [US2] Implement code generation handler calling AI agent in src/services/CodeGenerationService.ts
-- [ ] T040 [US2] Implement commit message generator from AI output in src/utils/commit-message-generator.ts
-- [ ] T041 [US2] Implement PR creation service with GitHub API in src/services/PullRequestCreationService.ts
-- [ ] T042 [US2] Add PR link storage to AgentRun record in src/services/AgentExecutionService.ts
-- [ ] T043 [US2] Implement error handling for Git operation failures in src/services/AgentExecutionService.ts
-- [ ] T044 [US2] Add GitHub status comment for PR creation success/failure in src/services/GitHubNotificationService.ts
-- [ ] T045 [US2] Implement Discord notification for agent execution results in src/services/DiscordNotificationService.ts
+**Note**: US2 is mostly handled by agent-runner in Pod. Operator側は結果受信とPR管理のみ。
 
-**Checkpoint**: At this point, User Stories 1 AND 2 should both work independently - full automation from comment to PR
+- [ ] T064 [P] [US2] Implement PullRequest upsert logic in PullRequestRepository (from agent-runner report)
+- [ ] T065 [US2] Implement PR URL generation and storage to AgentRun record in agent-report-handler.ts
+- [ ] T066 [US2] Add GitHub status comment for PR creation success in src/services/GitHubNotificationService.ts
+- [ ] T067 [US2] Implement Discord notification for PR creation in src/services/DiscordNotificationService.ts
+- [ ] T068 [US2] Handle agent-runner failure reports and extract error logs in agent-report-handler.ts
+
+### Tests for User Story 2 (Test-First Development)
+
+- [ ] T069 [P] [US2] Write unit tests for PullRequest upsert logic
+- [ ] T070 [P] [US2] Write unit tests for GitHub notification service (PR created message)
+- [ ] T071 [US2] Write integration test for agent-runner success report → PR record creation
+- [ ] T072 [US2] Write integration test for agent-runner failure report → retry trigger
+
+**Checkpoint**: At this point, User Stories 1 AND 2 should both work independently - full automation from comment to PR (via Pod)
 
 ---
 
@@ -125,20 +166,27 @@
 
 ### Implementation for User Story 3
 
-- [ ] T046 [P] [US3] Implement webhook handler for pull_request_review events in src/webhooks/handlers/pr-review-handler.ts
-- [ ] T047 [P] [US3] Implement Codex review request service in src/services/CodexReviewService.ts
-- [ ] T048 [US3] Implement "@codex review" comment detection in src/utils/comment-parser.ts
-- [ ] T049 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in src/services/CodexApprovalDetector.ts
-- [ ] T050 [US3] Implement webhook handler for check_suite events (CI results) in src/webhooks/handlers/check-suite-handler.ts
-- [ ] T051 [US3] Create CI failure analyzer parsing check logs in src/services/CIFailureAnalyzer.ts
-- [ ] T052 [US3] Implement retry orchestrator managing retry_count (max 50) in src/services/RetryOrchestrator.ts
-- [ ] T053 [US3] Create feedback aggregator combining review + CI results in src/services/FeedbackAggregator.ts
-- [ ] T054 [US3] Implement AI re-execution with feedback context in src/services/CodeGenerationService.ts
-- [ ] T055 [US3] Add retry count validation and failure threshold (50) in src/services/RetryOrchestrator.ts
-- [ ] T056 [US3] Implement failure notification to GitHub Issue on max retries in src/services/GitHubNotificationService.ts
-- [ ] T057 [US3] Implement failure notification to Discord webhook on max retries in src/services/DiscordNotificationService.ts
-- [ ] T058 [US3] Add GitHub status comment updates for retry progress in src/services/GitHubNotificationService.ts
-- [ ] T059 [US3] Store ReviewFeedback records for each review cycle in src/services/CodexReviewService.ts
+- [ ] T073 [P] [US3] Implement webhook handler for pull_request_review_comment events in src/webhooks/handlers/pr-review-comment-handler.ts
+- [ ] T074 [P] [US3] Implement Codex review request service (post "@codex review" comment) in src/services/CodexReviewService.ts
+- [ ] T075 [US3] Implement "@codex review" comment detection in src/utils/comment-parser.ts
+- [ ] T076 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in src/services/CodexApprovalDetector.ts
+- [ ] T077 [US3] Implement webhook handler for check_suite events (CI results) in src/webhooks/handlers/check-suite-handler.ts
+- [ ] T078 [US3] Create CI failure analyzer parsing check logs in src/services/CIFailureAnalyzer.ts
+- [ ] T079 [US3] Implement retry orchestrator managing retry_count (max 50) in src/services/RetryOrchestrator.ts
+- [ ] T080 [US3] Create feedback aggregator combining review + CI results in src/services/FeedbackAggregator.ts
+- [ ] T081 [US3] Implement K8s Job re-creation with aggregated feedback for AI retry
+- [ ] T082 [US3] Add retry count validation and failure threshold (50) in src/services/RetryOrchestrator.ts
+- [ ] T083 [US3] Implement failure notification to GitHub Issue on max retries in src/services/GitHubNotificationService.ts
+- [ ] T084 [US3] Implement failure notification to Discord webhook on max retries in src/services/DiscordNotificationService.ts
+- [ ] T085 [US3] Add GitHub status comment updates for retry progress in src/services/GitHubNotificationService.ts
+- [ ] T086 [US3] Store ReviewFeedback records for each review cycle in ReviewFeedbackRepository
+
+### Tests for User Story 3 (Test-First Development)
+
+- [ ] T087 [P] [US3] Write unit tests for CodexApprovalDetector (approval pattern matching)
+- [ ] T088 [P] [US3] Write unit tests for RetryOrchestrator (max 50 retries logic)
+- [ ] T089 [P] [US3] Write unit tests for FeedbackAggregator (review + CI combination)
+- [ ] T090 [US3] Write integration test for CI failure → retry → success flow
 
 **Checkpoint**: All user stories 1-3 should now be independently functional - quality loop with automatic improvements
 
@@ -152,16 +200,22 @@
 
 ### Implementation for User Story 4
 
-- [ ] T060 [P] [US4] Implement merge condition checker (CI + Codex + conflicts) in src/services/MergeConditionChecker.ts
-- [ ] T061 [P] [US4] Create CI status aggregator from check_suite events in src/services/CIStatusAggregator.ts
-- [ ] T062 [US4] Implement merge conflict detector via GitHub API in src/services/MergeConflictDetector.ts
-- [ ] T063 [US4] Create auto-merge service with merge API call in src/services/AutoMergeService.ts
-- [ ] T064 [US4] Implement webhook handler for status events (CI completion) in src/webhooks/handlers/status-handler.ts
-- [ ] T065 [US4] Add merge condition re-evaluation on Codex approval comment in src/webhooks/handlers/pr-review-handler.ts
-- [ ] T066 [US4] Add merge condition re-evaluation on CI success in src/webhooks/handlers/check-suite-handler.ts
-- [ ] T067 [US4] Implement merge failure handling and notification in src/services/AutoMergeService.ts
-- [ ] T068 [US4] Add GitHub status comment for merge success/failure in src/services/GitHubNotificationService.ts
-- [ ] T069 [US4] Add Discord notification for merge events in src/services/DiscordNotificationService.ts
+- [ ] T091 [P] [US4] Implement merge condition checker (CI + Codex + conflicts) in src/services/MergeConditionChecker.ts
+- [ ] T092 [P] [US4] Create CI status aggregator from check_suite events in src/services/CIStatusAggregator.ts
+- [ ] T093 [US4] Implement merge conflict detector via GitHub API in src/services/MergeConflictDetector.ts
+- [ ] T094 [US4] Create auto-merge service with merge API call in src/services/AutoMergeService.ts
+- [ ] T095 [US4] Implement webhook handler for status events (CI completion) in src/webhooks/handlers/status-handler.ts
+- [ ] T096 [US4] Add merge condition re-evaluation on Codex approval comment in src/webhooks/handlers/pr-review-comment-handler.ts
+- [ ] T097 [US4] Add merge condition re-evaluation on CI success in src/webhooks/handlers/check-suite-handler.ts
+- [ ] T098 [US4] Implement merge failure handling and notification in src/services/AutoMergeService.ts
+- [ ] T099 [US4] Add GitHub status comment for merge success/failure in src/services/GitHubNotificationService.ts
+- [ ] T100 [US4] Add Discord notification for merge events in src/services/DiscordNotificationService.ts
+
+### Tests for User Story 4 (Test-First Development)
+
+- [ ] T101 [P] [US4] Write unit tests for MergeConditionChecker (DoD validation)
+- [ ] T102 [P] [US4] Write unit tests for AutoMergeService (GitHub merge API call)
+- [ ] T103 [US4] Write integration test for approve + CI success → auto-merge flow
 
 **Checkpoint**: All user stories 1-4 should now be independently functional - complete automation from comment to merge
 
@@ -175,17 +229,22 @@
 
 ### Implementation for User Story 5
 
-- [ ] T070 [P] [US5] Implement Issue blocker parser ("blocked by" / "blocking" syntax) in src/services/IssueBlockerParser.ts
-- [ ] T071 [P] [US5] Create directed graph data structure for dependencies in src/lib/dependency-graph.ts
-- [ ] T072 [US5] Implement blocker graph builder from Issue metadata in src/services/BlockerGraphBuilder.ts
-- [ ] T073 [US5] Create circular dependency detector with cycle detection algorithm in src/services/CircularDependencyDetector.ts
-- [ ] T074 [US5] Implement webhook handler for issues events (closed/reopened) in src/webhooks/handlers/issues-handler.ts
-- [ ] T075 [US5] Create blocked task resolver finding unblocked tasks in src/services/BlockedTaskResolver.ts
-- [ ] T076 [US5] Implement dependency validation preventing out-of-order execution in src/services/DependencyValidator.ts
-- [ ] T077 [US5] Add blocked task queue management in src/services/QueueService.ts
-- [ ] T078 [US5] Implement automatic trigger for unblocked tasks in src/services/BlockedTaskResolver.ts
-- [ ] T079 [US5] Add GitHub status comment for dependency violations in src/services/GitHubNotificationService.ts
-- [ ] T080 [US5] Add logging for blocker graph updates and task resumption in src/services/BlockedTaskResolver.ts
+- [ ] T104 [P] [US5] Implement Issue blocker parser ("blocked by" / "blocking" syntax) in src/services/IssueBlockerParser.ts
+- [ ] T105 [P] [US5] Create directed graph data structure for dependencies in src/lib/dependency-graph.ts
+- [ ] T106 [US5] Implement blocker graph builder from Issue metadata in src/services/BlockerGraphBuilder.ts
+- [ ] T107 [US5] Create circular dependency detector with cycle detection algorithm in src/services/CircularDependencyDetector.ts
+- [ ] T108 [US5] Implement webhook handler for issues events (closed/reopened) in src/webhooks/handlers/issues-handler.ts
+- [ ] T109 [US5] Create blocked task resolver finding unblocked tasks in src/services/BlockedTaskResolver.ts
+- [ ] T110 [US5] Implement dependency validation preventing out-of-order execution in src/services/DependencyValidator.ts
+- [ ] T111 [US5] Implement automatic K8s Job trigger for unblocked tasks in src/services/BlockedTaskResolver.ts
+- [ ] T112 [US5] Add GitHub status comment for dependency violations in src/services/GitHubNotificationService.ts
+- [ ] T113 [US5] Add logging for blocker graph updates and task resumption in src/services/BlockedTaskResolver.ts
+
+### Tests for User Story 5 (Test-First Development)
+
+- [ ] T114 [P] [US5] Write unit tests for IssueBlockerParser (dependency parsing)
+- [ ] T115 [P] [US5] Write unit tests for CircularDependencyDetector (cycle detection)
+- [ ] T116 [US5] Write integration test for Issue close → unblock → auto-trigger flow
 
 **Checkpoint**: All user stories should now be independently functional - complete system with dependency management
 
@@ -195,20 +254,20 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T081 [P] Add comprehensive error messages and user-facing error codes in src/utils/error-codes.ts
-- [ ] T082 [P] Implement rate limiting for GitHub API calls in src/lib/github-client.ts
-- [ ] T083 [P] Add metrics collection for execution times and success rates in src/services/MetricsService.ts
-- [ ] T084 [P] Create health check endpoint for webhook server in src/webhooks/server.ts
-- [ ] T085 [P] Add environment variable validation on startup in src/config/env.ts
-- [ ] T086 [P] Implement graceful shutdown handler in src/webhooks/server.ts
-- [ ] T087 [P] Optimize Prisma Client queries with proper indexes in prisma/schema.prisma
-- [ ] T088 [P] Create README.md with setup and deployment instructions
-- [ ] T089 [P] Document API client configurations in docs/api-clients.md
-- [ ] T090 [P] Add inline code documentation with JSDoc comments
-- [ ] T091 Run quickstart.md validation checklist
-- [ ] T092 Perform security audit for secret handling and authorization
-- [ ] T093 [P] Add performance optimization for blocker graph queries with Prisma
-- [ ] T094 [P] Implement caching for GitHub API responses where appropriate
+- [ ] T117 [P] Add comprehensive error messages and user-facing error codes in src/utils/error-codes.ts
+- [ ] T118 [P] Implement rate limiting for GitHub API calls in src/lib/github-client.ts
+- [ ] T119 [P] Add metrics collection for execution times and success rates in src/services/MetricsService.ts
+- [ ] T120 [P] Create health check endpoint for webhook server in src/webhooks/server.ts
+- [ ] T121 [P] Add environment variable validation on startup in src/config/env.ts
+- [ ] T122 [P] Implement graceful shutdown handler in src/webhooks/server.ts
+- [ ] T123 [P] Optimize Prisma Client queries with proper indexes in prisma/schema.prisma
+- [ ] T124 [P] Create README.md with setup and deployment instructions
+- [ ] T125 [P] Document API client configurations in docs/api-clients.md
+- [ ] T126 [P] Add inline code documentation with JSDoc comments
+- [ ] T127 Run quickstart.md validation checklist
+- [ ] T128 Perform security audit for secret handling and authorization
+- [ ] T129 [P] Add performance optimization for blocker graph queries with Prisma
+- [ ] T130 [P] Implement caching for GitHub API responses where appropriate
 
 ---
 
@@ -349,25 +408,26 @@ With multiple developers after Foundational phase:
 
 ### Success Criteria Mapping
 
-- SC-001 (2min to start): US1 webhook processing (T029)
-- SC-002 (15min to PR): US2 agent execution speed (T038-T041)
-- SC-003 (10min retry): US3 feedback loop (T052-T054)
+- SC-001 (2min to start): US1 webhook processing + K8s Job creation (T053, T055)
+- SC-002 (15min to PR): agent-runner execution in Pod (T030-T048)
+- SC-003 (10min retry): US3 feedback loop + K8s Job re-creation (T079-T081)
 - SC-004 (no duplicates): Idempotency middleware (T024)
-- SC-005 (5min unblock): US5 blocker resolution (T075-T078)
-- SC-006 (5min CI retry): US3 check_suite handler (T050-T051)
-- SC-007 (2min merge): US4 auto-merge (T063)
-- SC-008 (immediate notification): US3 failure notifications (T056-T057)
-- SC-009 (DoD conditions): US4 merge checker (T060)
+- SC-005 (5min unblock): US5 blocker resolution (T109-T111)
+- SC-006 (5min CI retry): US3 check_suite handler (T077-T078)
+- SC-007 (2min merge): US4 auto-merge (T094)
+- SC-008 (immediate notification): US3 failure notifications (T083-T084)
+- SC-009 (DoD conditions): US4 merge checker (T091)
 
 ### Edge Cases Addressed
 
 - Duplicate webhooks: T024 idempotency middleware
-- Review response missing: T052 retry orchestrator with timeout
-- Merge conflicts: T062 conflict detector blocks auto-merge
+- Review response missing: T079 retry orchestrator with timeout
+- Merge conflicts: T093 conflict detector blocks auto-merge
 - Unlimited concurrency: No locking (運用側考慮 per FR-012)
-- Circular dependencies: T073 cycle detector prevents deadlock
-- Rate limits: T082 rate limiting for GitHub API
-- Database queries: T087, T093 Prisma optimization with indexes
+- Circular dependencies: T107 cycle detector prevents deadlock
+- Rate limits: T118 rate limiting for GitHub API
+- Database queries: T123, T129 Prisma optimization with indexes
+- Operator API unreachable: agent-runner exponential backoff retry (T038, T047)
 
 ### Prisma Schema Highlights
 
@@ -387,12 +447,30 @@ model BlockerGraphEdges {
 
 ---
 
-**Total Tasks**: 94 tasks organized across 8 phases (5 tasks reduced by using Prisma)
+**Total Tasks**: 130 tasks organized across 8 phases
 
-**Critical Path**: Phase 1 → Phase 2 → US1 → US2 → US3 → US4 (MVP with quality loop)
+**Breakdown**:
+- Phase 1 (Setup): 7 tasks
+- Phase 2 (Foundational): 41 tasks (includes agent-runner + Operator API)
+- Phase 3 (US1): 15 tasks
+- Phase 4 (US2): 9 tasks
+- Phase 5 (US3): 18 tasks
+- Phase 6 (US4): 13 tasks
+- Phase 7 (US5): 13 tasks
+- Phase 8 (Polish): 14 tasks
 
-**MVP Scope**: Phase 1 + Phase 2 + US1 + US2 = 45 tasks for basic automation
+**Critical Path**: Phase 1 → Phase 2 (with agent-runner) → US1 → US2 → US3 → US4
 
-**Suggested First Delivery**: Complete through US2 for immediate value, then iterate with US3/US4
+**MVP Scope**: Phase 1 + Phase 2 + US1 + US2 = **72 tasks** for basic K8s Pod-based automation
 
-**Prisma Benefits**: Type safety, automatic migrations, reduced boilerplate code, better maintainability
+**Suggested First Delivery**:
+1. Complete Phase 1-2 (Foundation with agent-runner): 48 tasks
+2. Add US1 (Trigger): 15 tasks
+3. Add US2 (PR Creation): 9 tasks
+4. **Stop and validate**: End-to-end flow from GitHub comment → K8s Pod → PR creation
+
+**Technology Stack**:
+- Operator: Node.js 22 + TypeScript + Hono + Prisma + @kubernetes/client-node
+- agent-runner: Go 1.22 + cobra CLI + Kubernetes Pod runtime
+- Database: MySQL 8.0+ with Prisma ORM
+- Testing: Vitest (unit + integration + contract tests)
