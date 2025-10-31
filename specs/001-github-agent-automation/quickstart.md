@@ -85,8 +85,7 @@ MIIEpAIBAAKCAQEA...
 GITHUB_WEBHOOK_SECRET=your_webhook_secret_from_github_app
 
 # External Services
-CODEX_API_KEY=your_codex_api_key
-CODEX_API_URL=https://codex.example.com/api
+CODEX_BOT_USERNAME=codex-bot  # GitHub username of Codex bot for comment detection
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/123456/your_webhook_token
 
 # AI Agent
@@ -182,18 +181,17 @@ Under "Subscribe to events", enable:
 3. Grant permissions
 4. Save installation ID (visible in URL after installation)
 
-### Codex API Setup
+### Codex Integration Setup
 
-**Note**: Replace with actual Codex API documentation when available
+**Note**: Codex is integrated via GitHub PR comments (no separate API required)
 
-1. Sign up for Codex account at `https://codex.example.com`
-2. Generate API key from dashboard
-3. Add to `.env` as `CODEX_API_KEY`
-4. Test API connection:
-   ```bash
-   curl -H "Authorization: Bearer $CODEX_API_KEY" \
-        https://codex.example.com/api/health
-   ```
+1. Ensure Codex GitHub App is installed on your repository
+2. Verify Codex bot has access to your repository
+3. Add Codex bot username to `.env` as `CODEX_BOT_USERNAME` (default: `codex-bot`)
+4. Test integration:
+   - Create a test PR
+   - Comment `@codex review` on the PR
+   - Verify Codex bot responds with review comment
 
 ### Discord Webhook Setup
 

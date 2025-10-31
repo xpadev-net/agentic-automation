@@ -188,8 +188,8 @@ src/
 │   ├── IssueContextCollector.ts        # FR-002: Gather context
 │   ├── AgentExecutionService.ts        # FR-003: Orchestrate execution
 │   ├── CodeGenerationService.ts        # AI agent integration
-│   ├── CodexReviewService.ts           # FR-004: Codex review
-│   ├── CodexApprovalDetector.ts        # FR-011: Approval detection
+│   ├── CodexReviewService.ts           # FR-004: Post @codex review comment via GitHub API
+│   ├── CodexApprovalDetector.ts        # FR-011: Parse Codex bot comments for approval
 │   ├── CIFailureAnalyzer.ts            # FR-014: CI log parsing
 │   ├── RetryOrchestrator.ts            # FR-005: Max 50 retries
 │   ├── FeedbackAggregator.ts           # Combine review + CI
@@ -212,7 +212,6 @@ src/
 ├── lib/                          # External integrations
 │   ├── prisma.ts                # Prisma client singleton
 │   ├── github-client.ts         # @octokit/rest wrapper
-│   ├── codex-client.ts          # Codex API wrapper
 │   ├── discord-client.ts        # Discord webhook client
 │   ├── ai-agent-client.ts       # AI agent API client
 │   ├── git-operations.ts        # Git commands wrapper

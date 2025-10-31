@@ -1,6 +1,6 @@
 # Feature Specification: GitHub Agent Automation
 
-**Feature Branch**: `1-github-agent-automation`  
+**Feature Branch**: `001-github-agent-automation`
 **Created**: 2025-10-30  
 **Status**: Draft  
 **Input**: User description: "githubのissue, prと連携してプロダクトの開発に取り組むシステム\n\n- issueに特定の文字列とともにコメントされた際に起動する\n\n- AIエージェントにissueの内容を食わせて処理する\n\n- 完了したらcommit + push + pr作成する\n\n- codexにレビューを依頼する\n\n- レビューが返ってきたらAIにそれを返して再試行させる\n\n- approveされたらマージする\n\n- 取り組んでいたタスクがブロックしていて、完了によってブロックタスクがなくなった場合にそのタスクに対する取り組みを開始する"

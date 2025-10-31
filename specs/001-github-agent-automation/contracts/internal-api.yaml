@@ -191,6 +191,87 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /api/agent-runs/{id}/report:
+    post:
+      summary: Report agent execution result from Pod
+      description: Called by agent-runner to report task completion (Push-type notification)
+      tags:
+        - AgentRun
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: AgentRun ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - status
+                - agent_type
+              properties:
+                status:
+                  type: string
+                  enum: [succeeded, failed]
+                  description: Execution result
+                  example: succeeded
+                agent_type:
+                  type: string
+                  enum: [claude-code, cursor-agents]
+                  example: claude-code
+                pr_number:
+                  type: integer
+                  description: Created PR number (if succeeded)
+                  example: 101
+                branch:
+                  type: string
+                  description: Git branch name
+                  example: feature/issue-42
+                commit_sha:
+                  type: string
+                  description: Git commit SHA
+                  example: abc123def456
+                error_message:
+                  type: string
+                  description: Error details (if failed)
+                  example: "Lint failed: 5 errors found"
+                logs:
+                  type: string
+                  description: Agent execution logs
+                  example: "Agent output:\n..."
+      responses:
+        '200':
+          description: Report received successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Report received, AgentRun #123 updated to succeeded"
+                  agent_run_id:
+                    type: integer
+                    example: 123
+        '401':
+          description: Invalid or missing Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: AgentRun not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/audit-logs:
     get:
       summary: Query audit logs
@@ -398,6 +479,12 @@ components:
           type: object
           description: Additional error context
           nullable: true
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token for agent-runner authentication (AGENT_RUNNER_API_TOKEN)
 
 tags:
   - name: System

@@ -144,15 +144,21 @@
 
 ### 3.2 Codex Review Integration
 
-**Decision**: HTTP API with Bearer token authentication
+**Decision**: GitHub PR comment-based integration (no dedicated API)
 
-**Assumptions** (to be validated with Codex API docs):
-- POST /review endpoint with PR URL or diff
-- Response includes approval status and comments
-- Rate limit: TBD (implement exponential backoff)
-- Webhook callback for async review completion
+**Integration Method**:
+- Post comment `@codex review` on PR to trigger Codex review
+- Codex bot responds with review comment on the same PR
+- System monitors PR comments via GitHub webhook (pull_request_review_comment)
+- Approval detected by parsing comment body for "Codex Review: Didn't find any major issues."
 
-**Fallback**: If no webhook callback, poll review status every 30s (max 10 minutes)
+**Implementation**:
+- Use GitHub API to post review request comment
+- Subscribe to pull_request_review and pull_request_review_comment webhooks
+- Parse Codex bot responses (identified by bot username)
+- No separate Codex API client required
+
+**Rate Limiting**: Governed by GitHub API limits (5000 req/hour)
 
 ### 3.3 Discord Notifications
 

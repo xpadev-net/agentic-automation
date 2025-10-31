@@ -53,10 +53,12 @@
 - issue_id: INT (FK to Issue.id) - **NEW**: which Issue is being processed
 - pr_id: INT (FK to PullRequest.id, nullable) - PR created by this run
 - state: ENUM(queued/started/succeeded/failed)
+- agent_type: ENUM(claude-code/cursor-agents) - **NEW**: Which AI agent was used
 - input: JSON (Issue context, comments, dependencies)
 - output: JSON (AI agent response, changes made)
 - retry_count: INT (default: 0, max: 50)
 - error_message: TEXT (nullable) - **NEW**: last error if state=failed
+- commit_sha: STRING (nullable) - **NEW**: Git commit SHA if succeeded
 - started_at: DATETIME (nullable)
 - completed_at: DATETIME (nullable)
 - created_at: DATETIME
@@ -207,6 +209,62 @@ started ──[retry_count >= 50 OR unrecoverable error]──> failed
 - state=succeeded requires pr_id to be non-null AND PR.status=merged
 - Automatic Discord + GitHub notification on state transition to failed
 
+### Retry Logic Details
+
+**Retry Interval**: Event-driven (no artificial delay between retries)
+
+**Retry Triggers**:
+1. **Agent execution failed** (agent-runner reports failure)
+   - Extract error logs from agent-runner report
+   - Pass error context to next AI attempt
+   - Increment retry_count +1
+
+2. **CI failure detected** (via check_suite webhook)
+   - Extract CI logs from GitHub API
+   - Parse failure reasons (test failures, build errors)
+   - Aggregate with review feedback if any
+   - Increment retry_count +1
+
+3. **Review feedback received** (Codex review without approval)
+   - Extract review comments from GitHub PR
+   - Combine with CI status
+   - Pass aggregated feedback to AI
+   - Increment retry_count +1
+
+**Same Error Detection**:
+- Hash of (agent error + CI logs + review feedback)
+- If hash matches previous 3 consecutive attempts: notify user, pause auto-retry
+- User can manually reset via CLI: `agent-automation retry <run-id> --reset-count`
+
+**Retry Context Aggregation**:
+```json
+{
+  "previous_attempts": [
+    {
+      "attempt": 1,
+      "agent_error": "Lint failed: missing semicolon",
+      "ci_logs": "Error at line 42: Expected ';'",
+      "review_comments": ["Missing type annotation for variable 'foo'"]
+    },
+    {
+      "attempt": 2,
+      "agent_error": null,
+      "ci_logs": "Tests failed: parser_test.ts:12",
+      "review_comments": []
+    }
+  ],
+  "total_retries": 2,
+  "max_retries": 50
+}
+```
+
+**50 Retries Reached**:
+- Set AgentRun.state = `failed`
+- Post GitHub Issue comment: "❌ Maximum retry limit (50) reached. Manual intervention required."
+- Send Discord notification (embed with error history)
+- Stop auto-retry loop
+- Manual re-trigger available via CLI with `--reset-count` flag
+
 ### PullRequest Merge Conditions (Definition of Done)
 
 A PR can be auto-merged when ALL of the following are true:
@@ -313,10 +371,12 @@ model AgentRun {
   issueId         Int       @map("issue_id")
   prId            Int?      @map("pr_id")
   state           String    // "queued" | "started" | "succeeded" | "failed"
+  agentType       String    @map("agent_type") // "claude-code" | "cursor-agents"
   input           Json
   output          Json
   retryCount      Int       @default(0) @map("retry_count")
   errorMessage    String?   @db.Text @map("error_message")
+  commitSha       String?   @map("commit_sha")
   startedAt       DateTime? @map("started_at")
   completedAt     DateTime? @map("completed_at")
   createdAt       DateTime  @default(now()) @map("created_at")
@@ -328,6 +388,7 @@ model AgentRun {
   @@index([state])
   @@index([issueId])
   @@index([prId])
+  @@index([agentType])
   @@map("agent_runs")
 }
 
