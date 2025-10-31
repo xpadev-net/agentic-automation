@@ -60,4 +60,3 @@ func GetLogger() *zap.Logger {
 	}
 	return Logger
 }
-

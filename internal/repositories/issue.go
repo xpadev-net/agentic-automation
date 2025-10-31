@@ -95,4 +95,3 @@ func (r *IssueRepository) FindByState(state string) ([]models.Issue, error) {
 	}
 	return issues, nil
 }
-

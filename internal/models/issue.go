@@ -17,14 +17,13 @@ type Issue struct {
 	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
 
 	// Relationships
-	AgentRuns          []AgentRun           `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
-	PullRequests       []PullRequest        `gorm:"foreignKey:IssueID;constraint:OnDelete:SET NULL"`
-	BlockerGraphEdges  []BlockerGraphEdge   `gorm:"foreignKey:TaskID;constraint:OnDelete:CASCADE"`
-	DependencyEdges    []BlockerGraphEdge   `gorm:"foreignKey:DependsOnTaskID;constraint:OnDelete:CASCADE"`
+	AgentRuns         []AgentRun         `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	PullRequests      []PullRequest      `gorm:"foreignKey:IssueID;constraint:OnDelete:SET NULL"`
+	BlockerGraphEdges []BlockerGraphEdge `gorm:"foreignKey:TaskID;constraint:OnDelete:CASCADE"`
+	DependencyEdges   []BlockerGraphEdge `gorm:"foreignKey:DependsOnTaskID;constraint:OnDelete:CASCADE"`
 }
 
 // TableName specifies the table name for Issue
 func (Issue) TableName() string {
 	return "issues"
 }
-
