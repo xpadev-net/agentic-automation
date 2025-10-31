@@ -592,7 +592,7 @@ Returns JSON:
 
 ### Structured Logging
 
-All logs are JSON format (Pino):
+All logs are JSON format (zap):
 
 ```json
 {
