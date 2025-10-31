@@ -120,8 +120,18 @@ func (r *agentRunRepository) Update(run *models.AgentRun) error {
 	if result.Error != nil {
 		return result.Error
 	}
+	// MySQL returns RowsAffected=0 when UPDATE writes the same values (idempotent update)
+	// Check if record exists to distinguish between unchanged update and missing record
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		_, err := r.GetByID(run.ID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return gorm.ErrRecordNotFound
+			}
+			return err
+		}
+		// Record exists, update succeeded (even if no values changed)
+		return nil
 	}
 	return nil
 }
@@ -135,8 +145,19 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 	if result.Error != nil {
 		return result.Error
 	}
+	// MySQL returns RowsAffected=0 when UPDATE writes the same value (idempotent state update)
+	// Check if record exists to distinguish between unchanged update and missing record
 	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
+		var run models.AgentRun
+		err := r.db.Select("id").Where("id = ?", id).First(&run).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return gorm.ErrRecordNotFound
+			}
+			return err
+		}
+		// Record exists, update succeeded (even if state unchanged)
+		return nil
 	}
 	return nil
 }
