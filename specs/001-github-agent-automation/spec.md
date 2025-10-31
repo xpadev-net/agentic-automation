@@ -14,9 +14,10 @@
 - Q: "失敗"の判定ロジック？ → A: CIが落ちている場合にAI差し戻し。50回繰り返した場合は失敗とみなす
 - Q: AI再試行は最大何回？ → A: 最大50回まで自動実施とし、それを超えた場合は失敗扱い
 - Q: 再試行全失敗時の通知先は？ → A: GitHub IssueおよびDiscord Webhook両方に通知
-- Q: 再試行IDの一意性は？ → A: タイムスタンプを用いる
+- Q: 再試行IDの一意性は？ → A: GitHub のイベントID（X-GitHub-Delivery）を用いる
 - Q: 再実行ループ防止・閾値？ → A: 制限なし（50回上限超えで失敗）
 - Q: 再試行状況・失敗理由の確認UIは？ → A: GitHub上の自動コメント
+- Q: Codex レビュー応答が欠落・遅延した場合は？ → A: 手動で対処し、イベント駆動を維持する（システムは待機やポーリングを行わない）
 - Q: 空振り要件不一致時は？ → A: 全て通知
 - Q: 全失敗時の通知検出ラグ？ → A: 即時、1分以内
 - Q: 監視可視化は？ → A: Discord Webhook通知
@@ -70,7 +71,7 @@ AI エージェントが Issue 内容を元に変更を作成し、コミット�
 積み上がること。
 
 **Acceptance Scenarios**:
-1. Given PR が存在 When レビュー依頼 Then レビュー結果が取得され記録される
+1. Given PR が作成済み When システムがレビュー依頼を実行 Then PR に `@codex review` コメントが投稿され Codex サービスへのレビュー依頼が送信・記録される
 2. Given レビュー結果がある When AI に再入力 Then 追加コミットが作成される
 
 ---
@@ -105,11 +106,12 @@ PR が承認状態になったら自動でマージする。
 ### Edge Cases
 
 - GitHub Webhook の再送（重複イベント）
-- レビュー応答が欠落・遅延する場合
+- レビュー応答が欠落・遅延する場合（手動対応を前提）
 - マージ競合・保護ブランチ条件での失敗
 - 無制限同時実行時の競合（同一ファイル衝突、重複 PR）
 
-- 外部API障害時はエラー記録・通知し、一定時間後にリトライ（回数上限なし）。
+- 外部API障害時はエラー記録・通知し、指数バックオフ+ジッターで設定した上限回数までリトライする。上限到達時は失敗として通知する。
+- Codex レビュー応答が取得できない場合は手動対応とし、システムは追加のポーリングやハング防止処理を行わない。
 
 ## Requirements (mandatory)
 
@@ -126,8 +128,9 @@ PR が承認状態になったら自動でマージする。
 
 - FR-009: トリガはコメント本文に「/run-agent」を含む場合のみ有効とし、コメント投稿者
   は当該リポジトリの書き込み権限メンバーに限定する (MUST)
-- FR-010: PR 上で「@codex review」のコメントが投稿された場合、Codex サービスにレビュー
-  を依頼し、その結果を保存する (MUST)
+- FR-010: PR 作成完了時にシステムが PR に「@codex review」コメントを投稿して Codex サービス
+  にレビューを依頼し、その結果を保存する。また追加で「@codex review」コメントが投稿された
+  場合も同様にレビューを再依頼する (MUST)
 - FR-011: 承認要件は、Codex ボットにより PR に「Codex Review: Didn't find any major
   issues.」という本文のコメントが統合（投稿）された時点で承認 1 件と見なし、マージ条件
   を満たす (MUST)
@@ -139,15 +142,16 @@ PR が承認状態になったら自動でマージする。
 
 - FR-014: CI 結果は GitHub Webhook で受領し、失敗時は CI ログ要約/レビュー指摘をAIに再入力して最大50回まで自動修正再試行を行う。50回超えは失敗扱いとし、GitHub IssueおよびDiscord Webhookに失敗通知を送る (MUST)
 - FR-015: Codex ボットによる「Codex Review: Didn't find any major issues.」コメントがPRに投稿された時点で、マージ条件を再評価し、自動でマージを試行する（ポーリングは禁止）(MUST)
-- FR-016: 外部 API 呼び出しおよび Git 操作の再試行は、指数バックオフ+ジッターで上限回数を設けて実施する (MUST)
+- FR-016: 外部 API 呼び出しの再試行は、指数バックオフ+ジッターを用い設定した最大リトライ回数まで実施し、上限到達時は失敗として扱う (MUST)
 - FR-017: 冪等化キーに X-GitHub-Delivery を用い、同一 Delivery ID のイベントは一度のみ処理する (MUST)
 - FR-018: 認可は「リポジトリのCollaborator以上」のユーザーのみに限定する (MUST)
+- FR-019: Git pre-commit / pre-push フックによる失敗は上限なく再試行し、成功まで手動介入を促しつつ待機する (MUST)
 
 ### Key Entities (include if feature involves data)
 
 - Issue: ID, タイトル, 本文, ラベル, コメント
 - PullRequest: ID, ブランチ, ステータス, レビュー, マージ状態
-- AgentRun: 状態(queued/started/succeeded/failed), 入力, 出力, リンク(PR/コミット), リトライ回数(最大50), タイムスタンプID
+- AgentRun: 状態(queued/started/succeeded/failed), 入力, 出力, リンク(PR/コミット), リトライ回数(最大50), github_event_id(X-GitHub-Delivery)
 - ReviewFeedback: 出所(Codex), 内容, ステータス, タイムスタンプ
 - BlockerGraph: タスクと依存関係の有向グラフ
 
@@ -157,7 +161,7 @@ PR が承認状態になったら自動でマージする。
 
 #### MySQL Constraints (sketch)
 
-- AgentRun: PK(id), UK(idempotency_key), state ENUM(queued,started,succeeded,failed), pr_id(FK: PullRequest.id, NULL 可), created_at, updated_at
+- AgentRun: PK(id), UK(idempotency_key=X-GitHub-Delivery), state ENUM(queued,started,succeeded,failed), pr_id(FK: PullRequest.id, NULL 可), created_at, updated_at
 - ReviewFeedback: PK(id), pr_id(FK: PullRequest.id), source ENUM(Codex), created_at, updated_at
 - PullRequest: PK(id), repo, number, branch, status, merged_flag, created_at, updated_at
 - Issue: PK(id), repo, number, title, created_at, updated_at
@@ -183,5 +187,3 @@ PR が承認状態になったら自動でマージする。
 - Webhook が正しく署名検証される
 - Codex へのアクセス権とレート制限内での呼び出しが可能
 - Codex ボットのコメントは識別可能なアカウント（もしくは検証可能な署名）から投稿される
-
-
