@@ -13,112 +13,126 @@
 
 ### 2.1 Runtime & Language
 
-**Decision**: Node.js 22 LTS + TypeScript 5.x (strict mode)
+**Decision**: Go 1.22+
 
 **Rationale**:
-- Node.js 22: Long-term support, excellent async I/O for webhook processing
-- TypeScript strict mode: Type safety for complex business logic and API integrations
-- Native ESM support for modern module system
-- Strong ecosystem for GitHub/webhook integrations
+- Go 1.22: Long-term support, excellent concurrency with goroutines for webhook processing
+- Strong type safety at compile time (no need for separate TypeScript layer)
+- Native compilation to single binary for easy deployment
+- Excellent ecosystem for GitHub/webhook integrations (go-github)
+- High performance for concurrent webhook processing
+- Unified codebase with agent-runner (both in Go)
 
 **Alternatives Considered**:
+- Node.js + TypeScript: Rejected to unify stack with agent-runner (already Go)
 - Python + FastAPI: Rejected due to inferior async webhook handling at scale
-- Go: Rejected due to less mature GitHub API libraries and team familiarity
 - Rust: Rejected as overkill for CRUD-heavy event processing
 
 ### 2.2 Web Framework
 
-**Decision**: Hono
+**Decision**: Gin
 
 **Rationale**:
 - Lightweight and fast (minimal overhead for webhook endpoints)
-- TypeScript-first design with excellent type inference
+- Excellent performance with httprouter-based routing
 - Built-in middleware support for signature verification, error handling
 - Simple routing for webhook endpoints
-- Better performance than Express with smaller bundle size
+- Extensive middleware ecosystem
+- Native Go performance without runtime overhead
 
 **Alternatives Considered**:
-- Express: Rejected due to larger footprint and callback-based design
-- Fastify: Considered but Hono has better TypeScript ergonomics
-- NestJS: Rejected as too opinionated/heavy for simple webhook server
+- Echo: Considered but Gin has larger community and more middleware
+- chi: Considered but Gin offers better performance out-of-the-box
+- net/http (standard library): Rejected due to lack of middleware ecosystem
+- Fiber: Rejected as it's Express-inspired (we want Go-native approach)
 
 ### 2.3 Database & ORM
 
-**Decision**: MySQL 8.0+ with Prisma ORM
+**Decision**: MySQL 8.0+ with GORM + goose for migrations
 
 **Rationale**:
 - MySQL: Proven reliability, ACID compliance for critical audit trail
-- Prisma: Type-safe queries, automatic migrations, excellent DX
-- Schema-first approach aligns with data-model.md workflow
+- GORM: Type-safe queries, excellent DX, supports composite keys
+- AutoMigrate for development (rapid iteration)
+- goose for production migrations (SQL-based, version controlled, rollback support)
 - Built-in connection pooling and query optimization
 - Supports composite keys for BlockerGraphEdges
+- Native Go integration (no Node.js runtime needed)
 
 **Alternatives Considered**:
 - PostgreSQL: Rejected per user specification (MySQL required)
 - MongoDB: Rejected due to lack of ACID for financial/audit data
-- TypeORM: Rejected due to inferior type safety vs Prisma
+- sqlx: Rejected due to lack of ORM features (migrations, relationships)
+- Ent (Facebook): Considered but GORM has larger community and better documentation
 - Raw SQL: Rejected due to lack of type safety and migration management
+- migrate (golang-migrate): Using goose instead (better tooling, same foundation)
 
 ### 2.4 Testing Framework
 
-**Decision**: Vitest
+**Decision**: Go standard testing package + testify
 
 **Rationale**:
-- Native ESM support (matches Node.js 22)
-- Fast execution with smart parallelization
-- Jest-compatible API (easy migration if needed)
-- Excellent TypeScript integration
-- Built-in coverage reporting
-- Watch mode for TDD workflow
+- Go standard testing: Built-in, no additional dependencies
+- testify: Rich assertions (assert, require), mocking support (mockery)
+- Fast execution with native Go test runner
+- Excellent IDE integration (VS Code, GoLand)
+- Built-in coverage reporting (go test -cover)
+- Parallel test execution built-in
+- Clean test structure (TestXxx naming convention)
 
 **Alternatives Considered**:
-- Jest: Rejected due to ESM complexity and slower execution
-- Mocha + Chai: Rejected due to fragmented ecosystem
-- AVA: Rejected due to smaller community and plugin ecosystem
+- ginkgo/gomega: Rejected as overkill (BDD-style not needed)
+- GoCheck: Rejected due to smaller community
+- GoConvey: Rejected due to web UI dependency (not needed for CI)
+- Standard testing only: Rejected due to lack of assertions (testify adds value)
 
 ### 2.5 GitHub Integration
 
-**Decision**: @octokit/webhooks + @octokit/rest
+**Decision**: github.com/google/go-github/v62
 
 **Rationale**:
-- Official GitHub libraries with first-class support
-- @octokit/webhooks: Signature verification, typed webhook payloads
-- @octokit/rest: Complete GitHub API coverage with retry logic
-- Auto-generated types from GitHub's OpenAPI spec
+- Official GitHub Go library with first-class support
+- Complete GitHub API coverage with retry logic
+- Strong typing with Go structs (type safety)
+- Webhook event parsing support (github.com/google/go-github/v62/webhooks)
 - Built-in rate limiting and error handling
+- Active maintenance and community support
 
 **Alternatives Considered**:
-- Octokit App: Rejected as too heavyweight (we need simple webhook + API)
-- Probot: Rejected due to framework lock-in and unnecessary abstraction
-- Raw HTTP: Rejected due to reinventing signature verification
+- Raw HTTP client: Rejected due to reinventing signature verification and API wrapper
+- github.com/bradleyfalzon/ghinstallation: Considered but go-github includes this
+- github.com/go-playground/webhooks: Rejected as go-github provides webhook handling
+- Manual implementation: Rejected due to complexity and maintenance burden
 
 ### 2.6 Logging
 
-**Decision**: Pino (structured logging)
+**Decision**: zap (Uber's structured logging)
 
 **Rationale**:
-- Fastest Node.js logger (critical for high-volume webhooks)
+- Fastest Go logger (critical for high-volume webhooks)
 - Structured JSON logs for easy parsing
-- Low overhead (doesn't block event loop)
-- Child loggers for request tracing
-- Production-ready transports (file, stdout, syslog)
+- Low overhead (zero-allocation JSON encoder)
+- Contextual logging with fields (child loggers)
+- Production-ready with multiple log levels
+- Excellent performance benchmarks
 
 **Alternatives Considered**:
-- Winston: Rejected due to slower performance and callback-based API
-- Bunyan: Rejected due to archived status and lack of maintenance
-- Console.log: Rejected due to lack of structure and log levels
+- logrus: Rejected due to slower performance (reflection-based)
+- glog: Rejected due to Google-specific design (not general purpose)
+- zerolog: Considered but zap has larger community and better documentation
+- Standard log: Rejected due to lack of structured logging and levels
 
-### 2.7 Queue System
+### 2.7 Queue / Locking
 
-**Decision**: None (event-driven, stateless)
+**Decision**: No global queue. Event-driven, stateless handlers with PR/branch-level locking.
 
 **Rationale**:
 - Webhook events are naturally async - GitHub retries on failure
-- No need for job queue complexity (YAGNI principle)
-- Database state machine (AgentRun.state) tracks execution
-- Simpler architecture = easier testing and debugging
+- Avoid global queue complexity (YAGNI)
+- Enforce per-branch concurrency=1 and PR/ブランチ単位のロックで重複操作を防止（FR-020/021）
+- Optional in-memory slot control for Pod同時数の制限は許容（構成で最大値を設定）
 
-**Deferred**: If scale requires (>100 concurrent executions), consider BullMQ + Redis
+**Deferred**: If scale requires (>100 concurrent executions), consider BullMQ + Redis for global scheduling
 
 **Alternatives Considered**:
 - BullMQ + Redis: Rejected as premature optimization
@@ -139,7 +153,7 @@
 
 **Implementation**:
 - Check user permission level via GitHub API (Collaborator+)
-- Verify webhook signature using @octokit/webhooks
+- Verify webhook signature using crypto/hmac (standard library)
 - Store app private key in environment variable (not in DB)
 
 ### 3.2 Codex Review Integration
@@ -234,7 +248,7 @@
 - Max attempts: 3-5 (depending on API)
 - Jitter: ±25% to avoid thundering herd
 
-**Libraries**: Use @octokit/rest built-in retry, implement custom for Codex
+**Libraries**: Use go-github built-in retry, implement custom for Codex using golang.org/x/time/rate
 
 ### 4.3 Retry Strategy (AI/CI Failures)
 
@@ -291,7 +305,7 @@
 - Index on AgentRun.state for querying active runs
 - Index on BlockerGraphEdges.dependsOnTaskId for dependency lookup
 - Index on CIStatus.prId for CI result queries
-- Connection pooling: Prisma default (max 10 connections)
+- Connection pooling: GORM default (sql.DB with SetMaxOpenConns, SetMaxIdleConns)
 
 ### 5.3 Observability
 
@@ -310,10 +324,10 @@
 
 ### 5.4 Deployment
 
-**Container**: Docker with Node.js 22 Alpine base
+**Container**: Docker with Go 1.22 Alpine base (multi-stage build)
 **Health Check**: GET /health endpoint (checks DB connection)
-**Startup**: Run Prisma migrations, then start Hono server
-**Shutdown**: Graceful shutdown (finish processing webhooks, close DB)
+**Startup**: Run goose migrations, then start Gin server
+**Shutdown**: Graceful shutdown using context.Context (finish processing webhooks, close DB)
 
 ## 6. Security Considerations
 
@@ -337,9 +351,10 @@
 
 ### 6.3 Dependency Scanning
 
-- npm audit on every build
-- Snyk or Dependabot for CVE monitoring
-- Pin exact versions in package.json
+- go list -m all and go mod verify on every build
+- govulncheck (Go vulnerability database) for CVE monitoring
+- Dependabot for automated dependency updates
+- Pin exact versions in go.mod
 - Review major version bumps for breaking changes
 
 ## 7. Open Questions (All Resolved)

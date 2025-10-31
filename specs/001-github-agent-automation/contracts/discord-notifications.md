@@ -271,12 +271,12 @@ Discord notifications are sent via Discord Webhook for critical events (failures
 
 ## Implementation
 
-### Discord Webhook Client
+### Discord Webhook Client (Go)
 
-**Location**: `src/lib/discord-client.ts`
+**Location**: `internal/clients/discord.go`
 
 **Example**:
-```typescript
+```go
 import axios from 'axios';
 
 export class DiscordNotificationService {
@@ -406,7 +406,7 @@ export class DiscordNotificationService {
 
 **Rate Limiting**: Discord webhooks have rate limit of 30 requests per minute. Implement throttling:
 
-```typescript
+```go
 private lastSent: number = 0;
 private MIN_INTERVAL_MS = 2000; // 2 seconds
 
@@ -446,7 +446,7 @@ private async send(payload: any) {
 
 ### Unit Tests
 
-**Location**: `tests/unit/services/discord-notification.test.ts`
+**Location**: `tests/unit/clients/discord_client_test.go`
 
 **Tests**:
 - Payload format validation
@@ -456,7 +456,7 @@ private async send(payload: any) {
 
 ### Integration Tests
 
-**Location**: `tests/integration/discord-webhook.test.ts`
+**Location**: `tests/integration/discord_webhook_test.go`
 
 **Tests**:
 - Send notification to test webhook URL

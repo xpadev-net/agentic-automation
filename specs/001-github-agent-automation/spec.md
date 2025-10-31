@@ -141,9 +141,10 @@ PR が承認状態になったら自動でマージする。
 - FR-013: 依存関係に反する実行（下流先行など）が検出された場合は当該実行を保留にし、
   ブロック解除イベントで再開する (MUST)
 
+  注記: グローバルには無制限並行実行（FR-012）とするが、per-branch concurrency=1（FR-020）と PR/ブランチ単位のロック（FR-021）を適用して重複操作を防止する。
+
 - FR-014: CI 結果は GitHub Webhook で受領し、失敗時は CI ログ要約/レビュー指摘をAIに再入力して最大50回まで自動修正再試行を行う。50回超えは失敗扱いとし、GitHub IssueおよびDiscord Webhookに失敗通知を送る (MUST)
 - FR-015: Codex ボットによる承認（コメント/レビュー）が PR に投稿・統合された時点で、マージ条件を再評価し、自動でマージを試行する。原則イベント駆動（ポーリング不要）だが、必要に応じて限定的にポーリングを使用してよい。対象イベント（issue_comment, pull_request, pull_request_review, check_suite/check_run/status, push）は適時明確化する (MUST)
- - FR-015: Codex ボットによる承認（コメント/レビュー）が PR に投稿・統合された時点で、マージ条件を再評価し、自動でマージを試行する。原則イベント駆動（ポーリング不要）だが、必要に応じて限定的にポーリングを使用してよい。対象イベントは「Webhook Events (authoritative)」を参照 (MUST)
 - FR-016: 外部 API 呼び出しの再試行は、指数バックオフ+ジッターを用い設定した最大リトライ回数まで実施し、上限到達時は失敗として扱う (MUST)
 - FR-017: 冪等化キーに X-GitHub-Delivery を用い、同一 Delivery ID のイベントは一度のみ処理する。加えて、各操作（pr-create, post-comment, request-review, merge）に operation_id を付与し、操作レベルでも冪等に実行して重複を防止する (MUST)
 - FR-018: 認可は「リポジトリのCollaborator以上」のユーザーのみに限定する (MUST)
@@ -152,7 +153,7 @@ PR が承認状態になったら自動でマージする。
 - FR-020: 同一ブランチに対するエージェント実行は同時に 1 件のみ許可する（per-branch concurrency = 1）(MUST)
 - FR-021: PR/ブランチ単位の操作はロックを取得して実行し、重複操作（PR 作成、コメント投稿、レビュー依頼、マージ）を防止する (MUST)
 - FR-022: 再試行には総経過時間上限および各試行のタイムアウトを設定し、いずれかの上限到達時は失敗として扱う (MUST)
-- FR-023: データストアは MySQL を使用し、データアクセスおよびマイグレーションは Prisma を用いる (MUST)
+- FR-023: データストアは MySQL を使用し、データアクセスは GORM を用い、マイグレーションは goose を用いる (MUST)
 - FR-024: 依存関係は GitHub Issue の blocked by / blocking フィールドを一次情報として利用する (MUST)
 
 ### Webhook Events (authoritative)
@@ -173,6 +174,11 @@ PR が承認状態になったら自動でマージする。
   - Actions: マージ条件の再評価、CI 成功時の自動マージ試行
   - FR refs: FR-011, FR-015
 
+- pull_request_review_comment
+  - Purpose: PR 上の `@codex review` 検知による再レビュー依頼トリガ
+  - Actions: 権限検証の上でレビュー依頼コメント投稿、ReviewFeedback の更新
+  - FR refs: FR-010, FR-017
+
 - check_suite / check_run / status
   - Purpose: PR のコミットに対する CI 結果の追跡
   - Actions: 失敗時は AI へのフィードバックと再試行、成功時はマージ条件再評価
@@ -181,6 +187,11 @@ PR が承認状態になったら自動でマージする。
 - push
   - Purpose: 再試行コミット（追加コミット）の検知、PR head SHA 更新に伴う評価
   - FR refs: FR-005, FR-014, FR-021
+
+- issues
+  - Purpose: 依存関係グラフの更新とブロック解除検知（closed/reopened）
+  - Actions: BlockerGraph の更新、ブロック解除時の AgentRun 起動
+  - FR refs: FR-007, FR-013
 
 - workflow_run（必要に応じて）
   - Purpose: 再利用ワークフロー等で check_* が発火しない CI の代替フック
@@ -203,7 +214,7 @@ PR が承認状態になったら自動でマージする。
 
 - AgentRun: PK(id), UK(idempotency_key=X-GitHub-Delivery), state ENUM(queued,started,succeeded,failed), pr_id(FK: PullRequest.id, NULL 可), created_at, updated_at
 - ReviewFeedback: PK(id), pr_id(FK: PullRequest.id), source ENUM(Codex), created_at, updated_at
-- PullRequest: PK(id), repo, number, branch, status, merged_flag, created_at, updated_at
+- PullRequest: PK(id), repo, number, branch, status, mergeable, created_at, updated_at
 - Issue: PK(id), repo, number, title, created_at, updated_at
 - BlockerGraphEdges: PK(task_id, depends_on_task_id), FK(task_id -> Issue.id, depends_on_task_id -> Issue.id)
 
@@ -227,6 +238,7 @@ PR が承認状態になったら自動でマージする。
 - SC-007: 「Codex Review: Didn't find any major issues.」コメント検知から2分以内にマージ再試行が行われる
 - SC-008: 50回再試行してもCI成功／Approve出ずに失敗となった場合、GitHub IssueおよびDiscord Webhookに即時通知される
 - SC-009: DoD条件はCI成功・ノーコンフリクト・Codex approveの全てを満たすこと
+  かつ PR が実際にマージ完了（status=merged）であること
 
 - SC-010: 同一ブランチで同時実行が 2 件以上発生しない（0 件）
 - SC-011: 承認検知は Bot 検証または Reviews API により誤検知 0 件

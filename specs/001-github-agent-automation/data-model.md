@@ -1,8 +1,8 @@
 # data-model.md: GitHub Agent Automation データモデル
 
 **Last Updated**: 2025-10-31
-**Database**: MySQL 8.0+ with Prisma ORM
-**Schema Location**: `prisma/schema.prisma`
+**Database**: MySQL 8.0+ with GORM (Go)
+**Schema Location**: GORM models in `internal/models`, SQL migrations in `migrations/` (goose)
 
 ## エンティティ定義・属性
 
@@ -32,7 +32,6 @@
 - branch: STRING (e.g., "feature/issue-123")
 - base_branch: STRING (e.g., "main", default: "main")
 - status: ENUM(open/closed/merged)
-- merged_flag: BOOL (default: false)
 - mergeable: BOOL (nullable) - **NEW**: GitHub mergeable status
 - created_at: DATETIME
 - updated_at: DATETIME
@@ -193,6 +192,28 @@ Adjacency list for Issue dependency graph (directed graph)
   - Failures and errors
   - Retry attempts
 
+### OperationLog
+
+Immutable per-operation log to enforce operation-level idempotency and trace actions tied to an AgentRun.
+
+- id: INT (PK, auto-increment)
+- run_id: INT (FK to AgentRun.id)
+- operation_type: ENUM(pr-create, post-comment, request-review, merge)
+- operation_id: STRING (UK) - client-supplied idempotency key per operation
+- status: ENUM(pending, succeeded, failed)
+- created_at: DATETIME
+
+**Relationships**:
+- belongs to AgentRun (via run_id)
+
+**Indexes**:
+- UNIQUE(operation_id)
+- INDEX(run_id, operation_type)
+
+**Business Rules**:
+- Each external side-effecting action MUST record an OperationLog
+- Duplicate operation_id must not create a second side-effect (idempotent)
+
 ## 状態遷移・バリデーション要件
 
 ### AgentRun State Machine
@@ -293,7 +314,7 @@ A PR can be auto-merged when ALL of the following are true:
 - If cycle detected: log warning, add to AuditLog, notify in GitHub comment
 - Do NOT block execution (spec allows human resolution)
 
-## 制約情報（MySQL/Prisma）
+## 制約情報（MySQL/GORM）
 
 ### Unique Constraints
 - Issue: UNIQUE(repo, number)
@@ -342,108 +363,105 @@ A PR can be auto-merged when ALL of the following are true:
   - Or exact: "Codex Review: Didn't find any major issues."
 - Used by MergeConditionChecker to validate DoD
 
-## Prisma Schema Hints
+## GORM Model Hints (Go)
 
-```prisma
-model Issue {
-  id        Int       @id @default(autoincrement())
-  repo      String
-  number    Int
-  title     String
-  body      String?   @db.Text
-  labels    Json      @default("[]")
-  state     String    @default("open") // "open" | "closed"
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
+```go
+// internal/models/issue.go
+type Issue struct {
+    ID        int       `gorm:"primaryKey;autoIncrement"`
+    Repo      string    `gorm:"size:255;index:idx_issue_repo_number,unique"`
+    Number    int       `gorm:"index:idx_issue_repo_number,unique"`
+    Title     string    `gorm:"size:512"`
+    Body      *string   `gorm:"type:text"`
+    Labels    datatypes.JSON `gorm:"type:json"`
+    State     string    `gorm:"type:enum('open','closed');default:'open'"`
+    CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
+    UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
 
-  agentRuns       AgentRun[]
-  pullRequests    PullRequest[]
-  blockedBy       BlockerGraphEdges[] @relation("BlockedTask")
-  blocking        BlockerGraphEdges[] @relation("BlockingTask")
-
-  @@unique([repo, number])
-  @@map("issues")
+    AgentRuns    []AgentRun
+    PullRequests []PullRequest
 }
 
-model AgentRun {
-  id              Int       @id @default(autoincrement())
-  idempotencyKey  String    @unique @map("idempotency_key")
-  issueId         Int       @map("issue_id")
-  prId            Int?      @map("pr_id")
-  state           String    // "queued" | "started" | "succeeded" | "failed"
-  agentType       String    @map("agent_type") // "claude-code" | "cursor-agents"
-  input           Json
-  output          Json
-  retryCount      Int       @default(0) @map("retry_count")
-  errorMessage    String?   @db.Text @map("error_message")
-  commitSha       String?   @map("commit_sha")
-  startedAt       DateTime? @map("started_at")
-  completedAt     DateTime? @map("completed_at")
-  createdAt       DateTime  @default(now()) @map("created_at")
-  updatedAt       DateTime  @updatedAt @map("updated_at")
+// internal/models/agent_run.go
+type AgentRun struct {
+    ID             int            `gorm:"primaryKey;autoIncrement"`
+    IdempotencyKey string         `gorm:"column:idempotency_key;uniqueIndex;size:191"`
+    IssueID        int            `gorm:"column:issue_id;index"`
+    PRID           *int           `gorm:"column:pr_id;index"`
+    State          string         `gorm:"type:enum('queued','started','succeeded','failed');index"`
+    AgentType      string         `gorm:"column:agent_type;type:enum('claude-code','cursor-agents');index"`
+    Input          datatypes.JSON `gorm:"type:json"`
+    Output         datatypes.JSON `gorm:"type:json"`
+    RetryCount     int            `gorm:"column:retry_count;default:0"`
+    ErrorMessage   *string        `gorm:"column:error_message;type:text"`
+    CommitSHA      *string        `gorm:"column:commit_sha;size:191"`
+    StartedAt      *time.Time     `gorm:"column:started_at"`
+    CompletedAt    *time.Time     `gorm:"column:completed_at"`
+    CreatedAt      time.Time      `gorm:"column:created_at;autoCreateTime"`
+    UpdatedAt      time.Time      `gorm:"column:updated_at;autoUpdateTime"`
 
-  issue         Issue         @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  pullRequest   PullRequest?  @relation(fields: [prId], references: [id], onDelete: SetNull)
-
-  @@index([state])
-  @@index([issueId])
-  @@index([prId])
-  @@index([agentType])
-  @@map("agent_runs")
+    Issue       Issue        `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+    PullRequest *PullRequest `gorm:"foreignKey:PRID;constraint:OnDelete:SET NULL"`
 }
 
-model CIStatus {
-  id            Int       @id @default(autoincrement())
-  prId          Int       @map("pr_id")
-  checkSuiteId  String    @map("check_suite_id")
-  checkRunId    String?   @map("check_run_id")
-  name          String
-  status        String    // "queued" | "in_progress" | "completed"
-  conclusion    String?   // "success" | "failure" | "cancelled" | "skipped" | "neutral"
-  logs          String?   @db.Text
-  logsUrl       String?   @map("logs_url")
-  startedAt     DateTime? @map("started_at")
-  completedAt   DateTime? @map("completed_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+// internal/models/ci_status.go
+type CIStatus struct {
+    ID           int        `gorm:"primaryKey;autoIncrement"`
+    PRID         int        `gorm:"column:pr_id;index"`
+    CheckSuiteID string     `gorm:"column:check_suite_id;size:191"`
+    CheckRunID   *string    `gorm:"column:check_run_id;size:191"`
+    Name         string     `gorm:"size:191"`
+    Status       string     `gorm:"type:enum('queued','in_progress','completed');index"`
+    Conclusion   *string    `gorm:"type:enum('success','failure','cancelled','skipped','neutral');index"`
+    Logs         *string    `gorm:"type:text"`
+    LogsURL      *string    `gorm:"column:logs_url;size:512"`
+    StartedAt    *time.Time `gorm:"column:started_at"`
+    CompletedAt  *time.Time `gorm:"column:completed_at"`
+    CreatedAt    time.Time  `gorm:"column:created_at;autoCreateTime"`
+    UpdatedAt    time.Time  `gorm:"column:updated_at;autoUpdateTime"`
 
-  pullRequest PullRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
+    PullRequest PullRequest `gorm:"foreignKey:PRID;constraint:OnDelete:CASCADE"`
 
-  @@unique([prId, checkSuiteId, checkRunId])
-  @@index([prId, status])
-  @@index([conclusion])
-  @@map("ci_statuses")
+    // Unique composite index
+    // Add via goose migration: UNIQUE KEY (pr_id, check_suite_id, check_run_id)
 }
 
-model AuditLog {
-  id              Int      @id @default(autoincrement())
-  eventType       String   @map("event_type")
-  actor           String
-  resourceType    String   @map("resource_type")
-  resourceId      Int      @map("resource_id")
-  payload         Json
-  idempotencyKey  String?  @map("idempotency_key")
-  ipAddress       String?  @map("ip_address")
-  userAgent       String?  @db.Text @map("user_agent")
-  createdAt       DateTime @default(now()) @map("created_at")
+// internal/models/operation_log.go
+type OperationLog struct {
+    ID            int       `gorm:"primaryKey;autoIncrement"`
+    RunID         int       `gorm:"column:run_id;index:idx_run_type"`
+    OperationType string    `gorm:"column:operation_type;type:enum('pr-create','post-comment','request-review','merge');index:idx_run_type"`
+    OperationID   string    `gorm:"column:operation_id;uniqueIndex;size:191"`
+    Status        string    `gorm:"type:enum('pending','succeeded','failed')"`
+    CreatedAt     time.Time `gorm:"column:created_at;autoCreateTime"`
+}
 
-  @@index([eventType, createdAt(sort: Desc)])
-  @@index([resourceType, resourceId])
-  @@index([actor])
-  @@index([idempotencyKey])
-  @@map("audit_logs")
+// internal/models/audit_log.go
+type AuditLog struct {
+    ID             int            `gorm:"primaryKey;autoIncrement"`
+    EventType      string         `gorm:"column:event_type;index;size:191"`
+    Actor          string         `gorm:"size:191;index"`
+    ResourceType   string         `gorm:"column:resource_type;index;size:191"`
+    ResourceID     int            `gorm:"column:resource_id;index"`
+    Payload        datatypes.JSON `gorm:"type:json"`
+    IdempotencyKey *string        `gorm:"column:idempotency_key;index;size:191"`
+    IPAddress      *string        `gorm:"column:ip_address;size:45"`
+    UserAgent      *string        `gorm:"column:user_agent;type:text"`
+    CreatedAt      time.Time      `gorm:"column:created_at;autoCreateTime"`
 }
 ```
 
-## Migration Strategy
+## Migration Strategy (goose)
 
-1. Initial migration creates all tables
-2. Seed data: create test Issue/PR for development
-3. Add indexes after tables created (performance optimization)
-4. Prisma handles schema sync automatically
+1. Create initial SQL migration with all tables under `migrations/000001_init.up.sql` and corresponding `down.sql`
+2. Apply migrations:
+   - Development: `goose -dir migrations mysql "<dsn>" up`
+   - Production: run goose in CI/CD with manual approval for down migrations
+3. Add explicit indexes and unique constraints in SQL (composite keys, unique keys)
+4. Use GORM AutoMigrate only in development if needed (never in production)
 
-**Rollback Plan**: Each migration has corresponding down migration for reverting changes
+**Rollback Plan**: Use goose down migrations (e.g., `goose down`, `goose down-to <version>`) to revert schema changes safely
 
 ---
 
-**Data Model Complete**: All entities defined with relationships, constraints, and business rules. Ready for Prisma schema implementation.
+**Data Model Complete**: All entities defined with relationships, constraints, and business rules. Ready for GORM model implementation and goose SQL migrations.

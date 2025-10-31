@@ -484,7 +484,7 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Bearer token for agent-runner authentication (AGENT_RUNNER_API_TOKEN)
+      description: Bearer token for agent-runner authentication (OPERATOR_API_TOKEN)
 
 tags:
   - name: System

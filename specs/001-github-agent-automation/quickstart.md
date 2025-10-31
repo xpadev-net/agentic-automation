@@ -1,7 +1,7 @@
 # quickstart.md: GitHub Agent Automation
 
 **Last Updated**: 2025-10-31
-**Prerequisites**: Node.js 22+, MySQL 8.0+, **Kubernetes cluster access (kubectl configured)**, GitHub account with admin access to target repository
+**Prerequisites**: Go 1.22+, MySQL 8.0+, **Kubernetes cluster access (kubectl configured)**, GitHub account with admin access to target repository
 
 ## Overview
 
@@ -35,9 +35,7 @@ cd agentic-automation
 git checkout 001-github-agent-automation
 
 # Install dependencies
-npm install
-# Or with pnpm (recommended):
-pnpm install
+go mod download
 ```
 
 ### 2. Setup Database
@@ -101,35 +99,36 @@ KUBE_CONFIG_PATH=/path/to/.kube/config
 
 # Server Configuration
 PORT=3000
-NODE_ENV=development
+ENV=development  # development | production
 LOG_LEVEL=info
 ```
 
 ### 4. Run Database Migrations
 
 ```bash
-# Generate Prisma Client from schema
-npx prisma generate
+# Install goose migration tool (if not already installed)
+go install github.com/pressly/goose/v3/cmd/goose@latest
 
 # Run migrations to create tables
-npx prisma migrate dev --name init
+goose -dir migrations mysql "agent_user:secure_password@tcp(localhost:3306)/github_agent_automation?charset=utf8mb4&parseTime=True&loc=Local" up
 
-# Optional: Seed test data
-npx prisma db seed
+# Optional: Verify migration status
+goose -dir migrations mysql "agent_user:secure_password@tcp(localhost:3306)/github_agent_automation?charset=utf8mb4&parseTime=True&loc=Local" status
 ```
 
 ### 5. Start the Server
 
 ```bash
-# Development mode with hot reload
-npm run dev
+# Development mode
+go run cmd/operator/main.go
 
-# Or with pnpm:
-pnpm dev
+# Or build and run:
+go build -o bin/operator cmd/operator/main.go
+./bin/operator
 
-# Production mode
-npm run build
-npm start
+# Production mode (with optimizations)
+go build -ldflags="-s -w" -o bin/operator cmd/operator/main.go
+./bin/operator
 ```
 
 Server should be running at `http://localhost:3000`
@@ -157,6 +156,7 @@ Under "Permissions", set:
   - Contents: Read & Write
   - Issues: Read & Write
   - Pull requests: Read & Write
+  - Pull request reviews: Read (review detection; may be covered under Pull Requests)
   - Checks: Read
   - Metadata: Read
 
@@ -257,18 +257,26 @@ The system parses these and won't start execution until dependencies are closed.
 ### Manual Operations (CLI)
 
 ```bash
+# Build CLI binary first
+go build -o bin/operator cmd/operator/main.go
+
 # Check execution status
-npm run cli status <agent-run-id>
+./bin/operator status <agent-run-id>
 
 # Manual retry (if automatic retries exhausted)
-npm run cli retry <agent-run-id>
+./bin/operator retry <agent-run-id>
 
 # Manual trigger (for testing without webhook)
-npm run cli trigger <issue-id>
+./bin/operator trigger <issue-id>
 
 # View logs
-npm run cli logs --follow
+tail -f logs/app.log
 ```
+
+### Agent Runner Requirements
+
+- The runner image must include the GitHub CLI `gh` (used for PR creation).
+- Add installation steps for `gh` in your agent-runner Dockerfile.
 
 ### Testing Locally
 
@@ -309,17 +317,17 @@ curl http://localhost:3000/health
 Logs are written to stdout (JSON format) and can be piped to file:
 
 ```bash
-npm start | tee -a logs/app.log
+./bin/operator 2>&1 | tee -a logs/app.log
 ```
 
 ### Reset Database
 
 ```bash
 # WARNING: Deletes all data
-npx prisma migrate reset
+goose -dir migrations mysql "agent_user:secure_password@tcp(localhost:3306)/github_agent_automation?charset=utf8mb4&parseTime=True&loc=Local" down-to 0
 
 # Re-run migrations
-npx prisma migrate dev
+goose -dir migrations mysql "agent_user:secure_password@tcp(localhost:3306)/github_agent_automation?charset=utf8mb4&parseTime=True&loc=Local" up
 ```
 
 ---
@@ -428,14 +436,14 @@ docker-compose up -d
 
 ### Production Checklist
 
-- [ ] Set `NODE_ENV=production` in `.env`
+- [ ] Set `ENV=production` in `.env`
 - [ ] Use strong database password
 - [ ] Enable HTTPS (reverse proxy with nginx/Caddy)
 - [ ] Setup log aggregation (e.g., Loki, ELK)
 - [ ] Configure backup for MySQL database
 - [ ] Setup monitoring (Prometheus, Grafana)
 - [ ] Enable rate limiting at nginx level
-- [ ] Review security headers (helmet.js)
+- [ ] Review security headers (Gin middleware)
 - [ ] Setup alerting for failures (Discord + PagerDuty)
 - [ ] Document rollback procedure
 - [ ] Test disaster recovery plan
@@ -452,7 +460,7 @@ docker-compose up -d
        │
        ▼
 ┌──────────────────┐     ┌─────────────┐
-│  Hono Server     │────▶│  Prisma DB  │
+│  Gin Server      │────▶│  GORM DB    │
 │  (Port 3000)     │     │  (MySQL)    │
 └────────┬─────────┘     └─────────────┘
          │
@@ -465,11 +473,11 @@ docker-compose up -d
 
 ### Core Components
 
-- **Webhook Server** (Hono): Receives GitHub events
-- **Services Layer**: Business logic (TDD with Vitest)
-- **Repositories Layer**: Database access (Prisma ORM)
+- **Webhook Server** (Gin): Receives GitHub events
+- **Services Layer**: Business logic (TDD with Go testing + testify)
+- **Repositories Layer**: Database access (GORM ORM)
 - **External Clients**: GitHub, Codex, Discord, AI Agent
-- **CLI Commands**: Manual operations for testing
+- **CLI Commands**: Manual operations for testing (cobra)
 
 ---
 
@@ -482,18 +490,19 @@ docker-compose up -d
 CREATE INDEX idx_agent_runs_active ON agent_runs(state, created_at DESC) WHERE state IN ('queued', 'started');
 ```
 
-### Prisma Connection Pooling
+### GORM Connection Pooling
 
-Edit `prisma/schema.prisma`:
+Edit `internal/config/database.go`:
 
-```prisma
-datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
-  relationMode = "prisma"
-  // Adjust pool size for production
-  // ?connection_limit=10&pool_timeout=20
-}
+```go
+db.SetMaxOpenConns(25) // Maximum open connections
+db.SetMaxIdleConns(10) // Maximum idle connections
+db.SetConnMaxLifetime(time.Hour) // Maximum connection lifetime
+```
+
+Or via `DATABASE_URL` query parameters:
+```
+mysql://user:pass@host/db?parseTime=true&maxOpenConns=25&maxIdleConns=10
 ```
 
 ### Rate Limiting
@@ -544,15 +553,15 @@ Only users with Collaborator+ permission on the repository can trigger agent exe
 Run regular security audits:
 
 ```bash
-# npm
-npm audit
-npm audit fix
+# Check for known vulnerabilities
+go list -json -deps | nancy sleuth
 
-# Or with pnpm
-pnpm audit
+# Or use govulncheck (Go's official vulnerability checker)
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
 
-# Use Snyk for continuous monitoring
-npx snyk test
+# Verify module checksums
+go mod verify
 ```
 
 ---
@@ -649,7 +658,7 @@ GITHUB_API_URL=https://github.company.com/api/v3
 
 Before contributing:
 1. Read constitution.md (TDD required)
-2. Run tests: `npm test`
+2. Run tests: `go test ./...`
 3. Follow project structure in plan.md
 4. Add integration tests for new features
 

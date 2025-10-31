@@ -309,6 +309,12 @@ Triggered when a CI check suite is completed.
    - If all conditions met, call AutoMergeService
 5. Log to AuditLog
 
+**Precedence & De-duplication with `status` events**:
+
+- `check_suite` を優先シグナルとし、`status` はレガシー互換として使用する。
+- 両方が発火した場合は `head_sha` が同一かつ最新のタイムスタンプのイベントを採用し二重処理を避ける。
+- 既存の CIStatus レコード更新は idempotent に設計する（同一 `head_sha` の重複更新は無害）。
+
 ---
 
 ### 7. status
@@ -347,23 +353,24 @@ Triggered when commit status changes (legacy CI systems).
 
 ### Signature Verification
 
-All webhooks MUST be verified using HMAC-SHA256:
+All webhooks MUST be verified using HMAC-SHA256 (Go example):
 
-```typescript
-import { createHmac } from 'crypto';
+```go
+import (
+  "crypto/hmac"
+  "crypto/sha256"
+  "encoding/hex"
+)
 
-function verifySignature(
-  payload: string,
-  signature: string,
-  secret: string
-): boolean {
-  const hmac = createHmac('sha256', secret);
-  const digest = 'sha256=' + hmac.update(payload).digest('hex');
-  return signature === digest;
+func verifySignature(payload []byte, signature, secret string) bool {
+  mac := hmac.New(sha256.New, []byte(secret))
+  mac.Write(payload)
+  expected := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+  return hmac.Equal([]byte(expected), []byte(signature))
 }
 ```
 
-**Library**: Use `@octokit/webhooks` for automatic verification
+**Library**: Use `github.com/google/go-github/v62/github` helpers if desired, or manual verification as above
 
 **Rejection**: Return 401 Unauthorized for invalid signatures
 
@@ -429,20 +436,15 @@ Store test payloads in `tests/fixtures/webhooks/`:
 
 ### Contract Tests
 
-Use Vitest to validate:
+Use Go testing to validate:
 
-```typescript
-import { describe, it, expect } from 'vitest';
-import issueCommentPayload from './fixtures/webhooks/issue_comment_trigger.json';
-
-describe('issue_comment webhook', () => {
-  it('should parse trigger phrase', () => {
-    const trigger = TriggerDetectionService.detect(
-      issueCommentPayload.comment.body
-    );
-    expect(trigger).toBe(true);
-  });
-});
+```go
+func TestTriggerDetection(t *testing.T) {
+  body := "/run-agent please"
+  if !DetectTrigger(body) {
+    t.Fatalf("expected trigger to be detected")
+  }
+}
 ```
 
 ### Local Testing
@@ -482,7 +484,7 @@ Set up alerts for:
 ## References
 
 - GitHub Webhooks Documentation: https://docs.github.com/webhooks
-- @octokit/webhooks TypeScript types: https://github.com/octokit/webhooks.js
+- go-github: https://github.com/google/go-github
 - spec.md: Functional requirements (FR-001 through FR-018)
 - data-model.md: Database schema for webhook data
 

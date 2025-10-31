@@ -11,16 +11,18 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 
 ## Technical Context
 
-**Language/Version**: Node.js 22 LTS + TypeScript 5.x (strict mode)
+**Language/Version**: Go 1.22+
 **Primary Dependencies**:
-- Hono (lightweight web framework for webhook server)
-- Prisma ORM (type-safe database access)
-- @octokit/webhooks (GitHub webhook event handling)
-- @octokit/rest (GitHub API client)
-- @kubernetes/client-node (Kubernetes API client for Job/Pod management)
-- Vitest (test runner)
+- Gin (lightweight web framework for webhook server)
+- GORM (type-safe database ORM)
+- github.com/google/go-github/v62 (GitHub API client and webhook event handling)
+- k8s.io/client-go (Kubernetes API client for Job/Pod management)
+- go.uber.org/zap (structured logging)
+- github.com/golang-migrate/migrate (database migrations - goose)
+- github.com/stretchr/testify (testing framework)
+- github.com/spf13/cobra (CLI framework)
 
-**Agent Runner** (separate Go project):
+**Agent Runner** (Go binary in Pod):
 - Go 1.22+ with cobra CLI framework
 - Runs in Kubernetes Pod
 - Executes claude-code or cursor-agents
@@ -28,11 +30,11 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 - Commits and pushes changes
 - Reports results to Operator REST API
 
-**Storage**: MySQL 8.0+ with Prisma schema for Issue, PullRequest, AgentRun, ReviewFeedback, BlockerGraphEdges, CIStatus, AuditLog
+**Storage**: MySQL 8.0+ with GORM models for Issue, PullRequest, AgentRun, ReviewFeedback, BlockerGraphEdges, CIStatus, AuditLog
 
-**Testing**: Vitest with coverage reporting, contract tests for GitHub/Codex APIs
+**Testing**: Go standard testing package + testify for assertions and mocks, contract tests for GitHub/Codex APIs
 
-**Target Platform**: Linux server (Docker container), requires Node.js 22 runtime
+**Target Platform**: Linux server (Docker container), requires Go 1.22+ runtime
 
 **Project Type**: Single backend service (event-driven webhook processor)
 
@@ -48,7 +50,7 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 - Exponential backoff for API retries (max 3-5 attempts)
 - AI retry limit: 50 attempts per Issue
 - No queue system (event-driven, stateless webhook handlers)
-- Must support concurrent execution without locking
+ - No global queue/lock; PR/branch-level locking enforced (per FR-020/021)
 
 **Scale/Scope**:
 - Handle 10-50 Issues per hour
@@ -63,10 +65,10 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 ### Principle I: Library-First ✅ PASS
 
 **Compliance**:
-- Core services (AgentExecutionService, CodexReviewService, GitHubClient) designed as independent modules with clear boundaries
+- Core services (AgentExecutionService, CodexReviewService, GitHubClient) designed as independent packages with clear boundaries
 - Each service has single responsibility and minimal external dependencies
-- Repository layer abstracts database access through Prisma
-- External API clients (GitHub, Codex, Discord) wrapped in dedicated modules
+- Repository layer abstracts database access through GORM
+- External API clients (GitHub, Codex, Discord) wrapped in dedicated packages
 
 **Verification**:
 - Each service module exports public API and hides implementation
@@ -91,7 +93,7 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 ### Principle III: Test-First (NON-NEGOTIABLE) ✅ PASS
 
 **Compliance**:
-- Vitest configured with coverage reporting
+- Go standard testing package + testify configured with coverage reporting
 - TDD workflow: acceptance test → failing test → implementation → refactor
 - Test structure: unit/, integration/, contract/
 - All webhook handlers and services require tests before implementation
@@ -117,7 +119,7 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 ### Principle V: Observability, Versioning & Simplicity ✅ PASS
 
 **Compliance**:
-- Structured logging with Winston/Pino (JSON format)
+- Structured logging with zap (JSON format)
 - SemVer versioning for releases
 - Audit log table for all operations
 - Simple architecture: webhook → service → database (no complex orchestration)
@@ -131,10 +133,10 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 
 **Security**:
 - Minimum privilege: GitHub App with scoped permissions
-- Webhook signature verification (@octokit/webhooks)
+- Webhook signature verification (crypto/hmac standard library)
 - Environment variables for secrets (never logged)
 - Collaborator+ authorization check (FR-018)
-- Dependency scanning with npm audit / Snyk
+- Dependency scanning with go list -m all and go mod verify
 
 **Performance**:
 - p95 goals in spec (SC-001 through SC-009)
@@ -143,7 +145,7 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 
 **Deployment**:
 - Docker container with health checks
-- Database migrations via Prisma (idempotent)
+- Database migrations via goose (idempotent)
 - Rollback: database migration down, container rollback
 
 ### Gate Result: ✅ PASS WITH NOTES
@@ -170,92 +172,100 @@ specs/[###-feature]/
 ### Source Code (repository root)
 
 ```text
-src/
-├── cli/                          # CLI commands (Constitution Principle II)
-│   ├── commands/
-│   │   ├── server.ts            # Start webhook server
-│   │   ├── trigger.ts           # Manual trigger for testing
-│   │   ├── status.ts            # Check execution status
-│   │   └── retry.ts             # Manual retry
-│   └── index.ts                 # CLI entry point
-├── webhooks/
-│   ├── server.ts                # Hono webhook server
+cmd/
+├── operator/                     # Operator binary (main entry point)
+│   └── main.go
+└── agent-runner/                 # Agent runner binary (separate project)
+    └── main.go
+
+internal/
+├── webhooks/                     # Webhook handlers
+│   ├── server.go                # Gin webhook server
 │   ├── handlers/
-│   │   ├── issue-comment.ts     # FR-001: Trigger detection
-│   │   ├── pull-request.ts      # PR events
-│   │   ├── pull-request-review.ts # FR-010: Codex review
-│   │   ├── check-suite.ts       # FR-014: CI results
-│   │   ├── status.ts            # CI status events
-│   │   └── issues.ts            # FR-013: Dependency management
+│   │   ├── issue_comment.go     # FR-001: Trigger detection
+│   │   ├── pull_request.go      # PR events
+│   │   ├── pull_request_review.go # FR-010: Codex review
+│   │   ├── check_suite.go       # FR-014: CI results
+│   │   ├── status.go            # CI status events
+│   │   └── issues.go            # FR-013: Dependency management
 │   └── middleware/
-│       ├── idempotency.ts       # FR-017: X-GitHub-Delivery
-│       ├── signature.ts         # Webhook signature verification
-│       └── error-handler.ts     # Global error handling
+│       ├── idempotency.go       # FR-017: X-GitHub-Delivery
+│       ├── signature.go         # Webhook signature verification
+│       └── error_handler.go     # Global error handling
 ├── services/                     # Business logic (Library-First)
-│   ├── TriggerDetectionService.ts      # Detect "/run-agent"
-│   ├── AuthorizationService.ts         # FR-018: Collaborator check
-│   ├── IssueContextCollector.ts        # FR-002: Gather context
-│   ├── AgentExecutionService.ts        # FR-003: Orchestrate execution
-│   ├── CodeGenerationService.ts        # AI agent integration
-│   ├── CodexReviewService.ts           # FR-004: Post @codex review comment via GitHub API
-│   ├── CodexApprovalDetector.ts        # FR-011: Parse Codex bot comments for approval
-│   ├── CIFailureAnalyzer.ts            # FR-014: CI log parsing
-│   ├── RetryOrchestrator.ts            # FR-005: Max 50 retries
-│   ├── FeedbackAggregator.ts           # Combine review + CI
-│   ├── MergeConditionChecker.ts        # FR-006: DoD validation
-│   ├── AutoMergeService.ts             # FR-006: Auto-merge
-│   ├── BlockerGraphBuilder.ts          # FR-007: Dependency graph
-│   ├── BlockedTaskResolver.ts          # FR-013: Unblock detection
-│   ├── DependencyValidator.ts          # FR-013: Order validation
-│   ├── GitHubNotificationService.ts    # GitHub comments
-│   ├── DiscordNotificationService.ts   # FR-014: Discord webhooks
-│   └── MetricsService.ts               # Performance metrics
-├── repositories/                 # Data access (Prisma)
-│   ├── IssueRepository.ts
-│   ├── PullRequestRepository.ts
-│   ├── AgentRunRepository.ts
-│   ├── ReviewFeedbackRepository.ts
-│   ├── BlockerGraphRepository.ts
-│   ├── CIStatusRepository.ts
-│   └── AuditLogRepository.ts
-├── lib/                          # External integrations
-│   ├── prisma.ts                # Prisma client singleton
-│   ├── github-client.ts         # @octokit/rest wrapper
-│   ├── discord-client.ts        # Discord webhook client
-│   ├── ai-agent-client.ts       # AI agent API client
-│   ├── git-operations.ts        # Git commands wrapper
-│   └── logger.ts                # Structured logging (Winston/Pino)
+│   ├── trigger_detection.go     # Detect "/run-agent"
+│   ├── authorization.go         # FR-018: Collaborator check
+│   ├── issue_context.go         # FR-002: Gather context
+│   ├── agent_execution.go       # FR-003: Orchestrate execution
+│   ├── code_generation.go       # AI agent integration
+│   ├── codex_review.go          # FR-004: Post @codex review comment via GitHub API
+│   ├── codex_approval.go        # FR-011: Parse Codex bot comments for approval
+│   ├── ci_failure.go            # FR-014: CI log parsing
+│   ├── retry_orchestrator.go    # FR-005: Max 50 retries
+│   ├── feedback_aggregator.go   # Combine review + CI
+│   ├── merge_condition.go       # FR-006: DoD validation
+│   ├── auto_merge.go            # FR-006: Auto-merge
+│   ├── blocker_graph.go         # FR-007: Dependency graph
+│   ├── blocked_task.go          # FR-013: Unblock detection
+│   ├── dependency_validator.go  # FR-013: Order validation
+│   ├── github_notification.go   # GitHub comments
+│   ├── discord_notification.go  # FR-014: Discord webhooks
+│   └── metrics.go               # Performance metrics
+├── repositories/                 # Data access (GORM)
+│   ├── issue.go
+│   ├── pull_request.go
+│   ├── agent_run.go
+│   ├── review_feedback.go
+│   ├── blocker_graph.go
+│   ├── ci_status.go
+│   └── audit_log.go
+├── models/                       # GORM models
+│   ├── issue.go
+│   ├── pull_request.go
+│   ├── agent_run.go
+│   ├── review_feedback.go
+│   ├── blocker_graph.go
+│   ├── ci_status.go
+│   └── audit_log.go
+├── clients/                      # External integrations
+│   ├── github.go                # go-github client wrapper
+│   ├── discord.go               # Discord webhook client
+│   └── kubernetes.go            # k8s.io/client-go wrapper
 ├── utils/
-│   ├── retry.ts                 # FR-016: Exponential backoff
-│   ├── comment-parser.ts        # Parse trigger strings
-│   ├── branch-name-generator.ts # Generate branch names
-│   ├── commit-message-generator.ts
-│   └── error-codes.ts           # User-facing error codes
-├── config/
-│   └── env.ts                   # Environment validation
+│   ├── retry.go                 # FR-016: Exponential backoff
+│   ├── comment_parser.go        # Parse trigger strings
+│   ├── branch_name.go           # Generate branch names
+│   ├── commit_message.go
+│   └── error_codes.go           # User-facing error codes
+└── config/
+    ├── database.go              # GORM connection
+    └── env.go                   # Environment validation
+
+pkg/                              # Public packages (if needed)
 └── types/
-    ├── webhook-events.ts        # GitHub webhook types
-    └── api-contracts.ts         # Internal API types
+    ├── webhook.go               # GitHub webhook types
+    └── api.go                   # Internal API types
+
+migrations/                       # Database migrations (goose)
+├── 000001_init.up.sql
+├── 000001_init.down.sql
+└── ...
 
 tests/
 ├── contract/                     # External API contracts
-│   ├── github-webhooks.test.ts  # Validate webhook payloads
-│   ├── github-api.test.ts       # GitHub REST API
-│   └── codex-api.test.ts        # Codex API
+│   ├── github_webhooks_test.go  # Validate webhook payloads
+│   ├── github_api_test.go       # GitHub REST API
+│   └── codex_api_test.go        # Codex API
 ├── integration/                  # Cross-service flows
-│   ├── trigger-to-pr.test.ts    # US1 + US2
-│   ├── review-retry.test.ts     # US3
-│   ├── auto-merge.test.ts       # US4
-│   └── dependency-chain.test.ts # US5
+│   ├── trigger_to_pr_test.go    # US1 + US2
+│   ├── review_retry_test.go     # US3
+│   ├── auto_merge_test.go       # US4
+│   └── dependency_chain_test.go # US5
 └── unit/                         # Service unit tests
     ├── services/
     ├── repositories/
     ├── webhooks/
     └── utils/
-
-prisma/
-├── schema.prisma                # Database schema
-└── migrations/                  # Migration history
 
 .specify/                         # Project documentation
 ├── memory/
@@ -275,7 +285,7 @@ specs/                            # Feature specifications
     └── contracts/
 ```
 
-**Structure Decision**: Single backend service architecture selected. No frontend or mobile components. Event-driven webhook processor with library-first design - each service independently testable and composable. CLI layer added per Constitution Principle II. Repository pattern abstracts Prisma for testability.
+**Structure Decision**: Single backend service architecture selected. No frontend or mobile components. Event-driven webhook processor with library-first design - each service independently testable and composable. CLI layer added per Constitution Principle II. Repository pattern abstracts GORM for testability. Standard Go project layout (cmd/, internal/, pkg/) used for clean separation of concerns.
 
 ## Complexity Tracking
 

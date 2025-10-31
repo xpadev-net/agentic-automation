@@ -15,8 +15,8 @@
 
 ## Path Conventions
 
-- **Single project**: `src/`, `tests/` at repository root
-- Paths assume single project structure based on plan.md
+- **Single project**: `cmd/`, `internal/`, `pkg/`, `tests/` at repository root
+- Paths assume Go project structure based on plan.md
 
 ---
 
@@ -24,13 +24,12 @@
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create project structure with src/, tests/, config/, prisma/, k8s/, agent-runner/ directories (PARTIAL: root exists, need subdirs)
-- [ ] T002 Initialize Node.js/TypeScript project with package.json and tsconfig.json (NEEDS FIX: tsconfig has Next.js config, should be Node.js)
-- [ ] T003 [P] Install core dependencies (Hono, @octokit/webhooks, @octokit/rest, axios, prisma, @prisma/client, @kubernetes/client-node) (NEEDS FIX: Hono not installed, express incorrectly added)
-- [ ] T004 [P] Configure TypeScript compiler options in tsconfig.json (NEEDS FIX: align with plan.md strict mode for Node.js)
-- [ ] T005 [P] Setup ESLint and Prettier configuration files (PARTIAL: Biome installed instead, need ESLint/Prettier or update plan to use Biome)
-- [x] T006 [P] Create .env.example with required environment variables (COMPLETE: updated with CODEX_BOT_USERNAME, OPERATOR_API_URL, OPERATOR_API_TOKEN)
-- [ ] T007 [P] Setup .gitignore for node_modules, .env, dist/, *.pem, k8s/secrets/ (INCOMPLETE: missing .env, dist/, *.pem, k8s/secrets/)
+- [ ] T001 Create project structure with cmd/, internal/, pkg/, tests/, migrations/, k8s/, agent-runner/ directories
+- [ ] T002 Initialize Go module with `go mod init` and base dependencies (gin, gorm, go-github, zap, testify)
+- [ ] T003 [P] Setup Makefile or task runner (build, test, goose up/down)
+- [ ] T004 [P] Configure logger (zap) and config loader in `internal/config`
+- [x] T006 [P] Create .env.example with required environment variables (includes CODEX_BOT_USERNAME, OPERATOR_API_URL, OPERATOR_API_TOKEN)
+- [ ] T007 [P] Setup .gitignore for `bin/`, `.env`, `migrations/*.sql`, `*.pem`, `k8s/secrets/`
 
 ---
 
@@ -40,39 +39,39 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-### Database & ORM Setup (Prisma)
+### Database & ORM Setup (GORM + goose)
 
-- [ ] T008 Create Prisma schema in prisma/schema.prisma with 5 models (Issue, PullRequest, AgentRun, ReviewFeedback, BlockerGraphEdges)
-- [ ] T009 Initialize Prisma Client singleton in src/lib/prisma.ts
-- [ ] T010 Generate Prisma Client and run initial migration with `prisma migrate dev`
+- [ ] T008 Create GORM models in `internal/models/` (Issue, PullRequest, AgentRun, ReviewFeedback, CIStatus, BlockerGraphEdges, AuditLog, OperationLog)
+- [ ] T009 Implement GORM database connection in `internal/config/database.go`
+- [ ] T010 Create initial goose SQL migration `migrations/000001_init.up.sql` and `down.sql`
 
-### Repository Layer (Prisma-based)
+### Repository Layer (GORM-based)
 
-- [ ] T011 [P] Implement IssueRepository using Prisma Client in src/repositories/IssueRepository.ts
-- [ ] T012 [P] Implement PullRequestRepository using Prisma Client in src/repositories/PullRequestRepository.ts
-- [ ] T013 [P] Implement AgentRunRepository with idempotency check using Prisma Client in src/repositories/AgentRunRepository.ts
-- [ ] T014 [P] Implement ReviewFeedbackRepository using Prisma Client in src/repositories/ReviewFeedbackRepository.ts
-- [ ] T015 [P] Implement BlockerGraphRepository using Prisma Client in src/repositories/BlockerGraphRepository.ts
+- [ ] T011 [P] Implement IssueRepository using GORM in `internal/repositories/issue.go`
+- [ ] T012 [P] Implement PullRequestRepository using GORM in `internal/repositories/pull_request.go`
+- [ ] T013 [P] Implement AgentRunRepository with idempotency check using GORM in `internal/repositories/agent_run.go`
+- [ ] T014 [P] Implement ReviewFeedbackRepository using GORM in `internal/repositories/review_feedback.go`
+- [ ] T015 [P] Implement BlockerGraphRepository using GORM in `internal/repositories/blocker_graph.go`
 
-### Infrastructure & Services
+### Infrastructure & Services (Go)
 
-- [ ] T016 Setup GitHub webhook server (Hono) with signature verification in src/webhooks/server.ts
-- [ ] T017 [P] Implement GitHub API client wrapper in src/lib/github-client.ts
-- [ ] T018 [P] Implement Discord webhook client in src/lib/discord-client.ts
-- [ ] T019 [P] Implement Kubernetes client wrapper in src/lib/kubernetes-client.ts
-- [ ] T020 Create global error handler middleware in src/webhooks/middleware/error-handler.ts
-- [ ] T021 [P] Setup structured logging with Pino in src/lib/logger.ts
-- [ ] T022 [P] Implement retry utility with exponential backoff and jitter in src/utils/retry.ts
-- [ ] T023 [P] Create environment configuration loader in src/config/env.ts
-- [ ] T024 Implement idempotency middleware using X-GitHub-Delivery header in src/webhooks/middleware/idempotency.ts
+- [ ] T016 Setup GitHub webhook server (Gin) with signature verification in `internal/webhooks/server.go`
+- [ ] T017 [P] Implement GitHub API client wrapper using go-github in `internal/clients/github.go`
+- [ ] T018 [P] Implement Discord webhook client in `internal/clients/discord.go`
+- [ ] T019 [P] Implement Kubernetes client wrapper using client-go in `internal/clients/kubernetes.go`
+- [ ] T020 Create global error handler middleware in `internal/webhooks/middleware/error_handler.go`
+- [ ] T021 [P] Setup structured logging with zap in `internal/config/logger.go`
+- [ ] T022 [P] Implement retry utility with exponential backoff and jitter in `internal/utils/retry.go`
+- [ ] T023 [P] Create environment configuration loader in `internal/config/env.go`
+- [ ] T024 Implement idempotency middleware using X-GitHub-Delivery header in `internal/webhooks/middleware/idempotency.go`
 
 ### Operator API for Agent Report (NEW - Push型通知)
 
-- [ ] T025 [P] Create agent-report-handler.ts in src/webhooks/handlers/ with Bearer token validation
-- [ ] T026 Add POST /api/agent-runs/:id/report route to Hono server in src/webhooks/server.ts
-- [ ] T027 [P] Implement AgentRunRepository.update() method for state transitions
-- [ ] T028 [P] Write unit tests for agent-report-handler (Bearer token validation, state updates)
-- [ ] T029 [P] Write integration test for Pod → Operator report flow with mock requests
+- [ ] T025 [P] Create agent-report-handler in `internal/webhooks/handlers/agent_report.go` with Bearer token validation
+- [ ] T026 Add POST /api/agent-runs/:id/report route to Gin server in `internal/webhooks/server.go`
+- [ ] T027 [P] Implement AgentRunRepository.UpdateState for state transitions
+- [ ] T028 [P] Write unit tests for agent-report-handler (Bearer token validation, state updates) in `tests/unit/webhooks/`
+- [ ] T029 [P] Write integration test for Pod → Operator report flow with mock requests in `tests/integration/`
 
 ### Agent Runner Setup (NEW - Go binary in Pod)
 
@@ -260,13 +259,13 @@
 - [ ] T120 [P] Create health check endpoint for webhook server in src/webhooks/server.ts
 - [ ] T121 [P] Add environment variable validation on startup in src/config/env.ts
 - [ ] T122 [P] Implement graceful shutdown handler in src/webhooks/server.ts
-- [ ] T123 [P] Optimize Prisma Client queries with proper indexes in prisma/schema.prisma
+- [ ] T123 [P] Add/optimize SQL indexes via goose migrations in `migrations/*.sql`
 - [ ] T124 [P] Create README.md with setup and deployment instructions
 - [ ] T125 [P] Document API client configurations in docs/api-clients.md
 - [ ] T126 [P] Add inline code documentation with JSDoc comments
 - [ ] T127 Run quickstart.md validation checklist
 - [ ] T128 Perform security audit for secret handling and authorization
-- [ ] T129 [P] Add performance optimization for blocker graph queries with Prisma
+- [ ] T129 [P] Add performance optimization for blocker graph queries with SQL indexes (goose)
 - [ ] T130 [P] Implement caching for GitHub API responses where appropriate
 
 ---
@@ -429,19 +428,19 @@ With multiple developers after Foundational phase:
 - Database queries: T123, T129 Prisma optimization with indexes
 - Operator API unreachable: agent-runner exponential backoff retry (T038, T047)
 
-### Prisma Schema Highlights
+### GORM Model Highlights
 
-```prisma
-model AgentRun {
-  idempotencyKey  String   @unique  // X-GitHub-Delivery
-  retryCount      Int      @default(0)  // Max 50
-  state           String   // queued/started/succeeded/failed
+```go
+type AgentRun struct {
+  IdempotencyKey string `gorm:"uniqueIndex"` // X-GitHub-Delivery
+  RetryCount     int    `gorm:"default:0"`   // Max 50
+  State          string // queued/started/succeeded/failed
   // ... other fields
 }
 
-model BlockerGraphEdges {
-  @@id([taskId, dependsOnTaskId])  // Composite key
-  // Bidirectional relations for dependency graph
+type BlockerGraphEdge struct {
+  TaskID          int `gorm:"primaryKey"`
+  DependsOnTaskID int `gorm:"primaryKey"`
 }
 ```
 
@@ -470,7 +469,7 @@ model BlockerGraphEdges {
 4. **Stop and validate**: End-to-end flow from GitHub comment → K8s Pod → PR creation
 
 **Technology Stack**:
-- Operator: Node.js 22 + TypeScript + Hono + Prisma + @kubernetes/client-node
+- Operator: Go 1.22 + Gin + GORM + client-go
 - agent-runner: Go 1.22 + cobra CLI + Kubernetes Pod runtime
-- Database: MySQL 8.0+ with Prisma ORM
-- Testing: Vitest (unit + integration + contract tests)
+- Database: MySQL 8.0+ with goose migrations
+- Testing: Go testing + testify (unit + integration + contract tests)
