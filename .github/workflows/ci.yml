@@ -142,5 +142,8 @@ jobs:
         run: go mod download
 
       - name: Build binaries
-        run: make build
+        run: |
+          mkdir -p bin
+          go build -o bin/operator ./cmd/operator
+          go build -o bin/agent-runner ./cmd/agent-runner
 
