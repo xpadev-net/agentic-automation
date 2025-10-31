@@ -1,0 +1,408 @@
+openapi: 3.0.0
+info:
+  title: GitHub Agent Automation Internal API
+  version: '1.0.0'
+  description: |
+    Internal REST API for GitHub Agent Automation system.
+    Used for health checks, metrics, and manual operations via CLI.
+
+    Primary interface is GitHub webhooks (see github-webhooks.md).
+
+servers:
+  - url: http://localhost:3000
+    description: Development server
+  - url: https://agent.example.com
+    description: Production server
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns server health status and database connectivity
+      tags:
+        - System
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded]
+                    example: ok
+                  database:
+                    type: string
+                    enum: [connected, disconnected]
+                    example: connected
+                  uptime:
+                    type: number
+                    description: Server uptime in seconds
+                    example: 86400
+                  version:
+                    type: string
+                    example: "1.0.0"
+        '503':
+          description: Server is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /metrics:
+    get:
+      summary: System metrics endpoint
+      description: Returns operational metrics for monitoring
+      tags:
+        - System
+      responses:
+        '200':
+          description: Metrics data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Metrics'
+
+  /api/agent-runs/{id}:
+    get:
+      summary: Get agent run status
+      description: Retrieve detailed status of an agent execution
+      tags:
+        - AgentRun
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: AgentRun ID
+      responses:
+        '200':
+          description: Agent run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRun'
+        '404':
+          description: Agent run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/agent-runs/{id}/retry:
+    post:
+      summary: Manual retry of failed agent run
+      description: Trigger manual retry for a failed or exhausted agent run
+      tags:
+        - AgentRun
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reset_retry_count:
+                  type: boolean
+                  description: If true, reset retry counter to 0
+                  default: false
+      responses:
+        '202':
+          description: Retry queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Retry queued for agent run #123"
+                  agent_run_id:
+                    type: integer
+                    example: 123
+        '400':
+          description: Invalid request (e.g., run not in failed state)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/issues/{issue_id}/trigger:
+    post:
+      summary: Manual trigger agent for issue
+      description: Manually trigger agent execution for an issue (bypasses comment trigger)
+      tags:
+        - AgentRun
+      parameters:
+        - name: issue_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: GitHub Issue ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repo
+                - number
+              properties:
+                repo:
+                  type: string
+                  description: Repository in owner/name format
+                  example: "octocat/hello-world"
+                number:
+                  type: integer
+                  description: Issue number
+                  example: 42
+      responses:
+        '202':
+          description: Agent execution queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Agent execution queued"
+                  agent_run_id:
+                    type: integer
+                    example: 456
+                  issue_id:
+                    type: integer
+                    example: 123
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/audit-logs:
+    get:
+      summary: Query audit logs
+      description: Retrieve audit trail with filtering
+      tags:
+        - Audit
+      parameters:
+        - name: event_type
+          in: query
+          schema:
+            type: string
+          description: Filter by event type
+          example: "webhook.received"
+        - name: actor
+          in: query
+          schema:
+            type: string
+          description: Filter by actor (username)
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+          description: Filter by resource type
+          example: "AgentRun"
+        - name: resource_id
+          in: query
+          schema:
+            type: integer
+          description: Filter by resource ID
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+          description: Maximum number of records
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+          description: Pagination offset
+      responses:
+        '200':
+          description: Audit log records
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total:
+                    type: integer
+                    example: 5000
+                  limit:
+                    type: integer
+                    example: 100
+                  offset:
+                    type: integer
+                    example: 0
+                  records:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditLog'
+
+components:
+  schemas:
+    AgentRun:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 123
+        idempotency_key:
+          type: string
+          example: "abc-123-def-456"
+        issue_id:
+          type: integer
+          example: 789
+        pr_id:
+          type: integer
+          nullable: true
+          example: 101
+        state:
+          type: string
+          enum: [queued, started, succeeded, failed]
+          example: "started"
+        retry_count:
+          type: integer
+          example: 3
+        error_message:
+          type: string
+          nullable: true
+          example: "CI failed: test suite timeout"
+        input:
+          type: object
+          description: Issue context and metadata
+        output:
+          type: object
+          description: AI agent response
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Metrics:
+      type: object
+      properties:
+        webhooks_received:
+          type: integer
+          description: Total webhooks received since startup
+          example: 1234
+        agent_runs_started:
+          type: integer
+          example: 567
+        agent_runs_succeeded:
+          type: integer
+          example: 450
+        agent_runs_failed:
+          type: integer
+          example: 17
+        prs_created:
+          type: integer
+          example: 550
+        prs_merged:
+          type: integer
+          example: 440
+        avg_execution_time_ms:
+          type: number
+          description: Average execution time in milliseconds
+          example: 45000
+        github_api_calls_last_hour:
+          type: integer
+          description: GitHub API calls in the last hour
+          example: 234
+        github_rate_limit_remaining:
+          type: integer
+          description: Remaining GitHub API quota
+          example: 4766
+        active_agent_runs:
+          type: integer
+          description: Currently running agents
+          example: 5
+
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        event_type:
+          type: string
+          example: "webhook.received"
+        actor:
+          type: string
+          example: "octocat"
+        resource_type:
+          type: string
+          example: "AgentRun"
+        resource_id:
+          type: integer
+          example: 123
+        payload:
+          type: object
+          description: Full event payload (JSON)
+        idempotency_key:
+          type: string
+          nullable: true
+          example: "abc-123"
+        ip_address:
+          type: string
+          nullable: true
+          example: "192.0.2.1"
+        user_agent:
+          type: string
+          nullable: true
+          example: "GitHub-Hookshot/abc123"
+        created_at:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "AGENT_RUN_NOT_FOUND"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Agent run with ID 123 not found"
+        details:
+          type: object
+          description: Additional error context
+          nullable: true
+
+tags:
+  - name: System
+    description: Health checks and metrics
+  - name: AgentRun
+    description: Agent execution management
+  - name: Audit
+    description: Audit log access
