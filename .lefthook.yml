@@ -1,0 +1,39 @@
+pre-commit:
+  commands:
+    format:
+      run: gofmt -s -w {staged_files}
+      glob: "*.go"
+      stage_fixed: true
+    deps-check:
+      run: |
+        go mod verify
+        go mod tidy
+        if ! git diff --exit-code go.mod go.sum 2>/dev/null; then
+          echo "go.mod or go.sum are not tidy. Run 'go mod tidy' and commit the changes."
+          exit 1
+        fi
+      glob: "go.mod"
+
+pre-push:
+  commands:
+    format:
+      run: gofmt -s -w {staged_files}
+      glob: "*.go"
+      stage_fixed: true
+    deps-check:
+      run: |
+        go mod verify
+        go mod tidy
+        if ! git diff --exit-code go.mod go.sum 2>/dev/null; then
+          echo "go.mod or go.sum are not tidy. Run 'go mod tidy' and commit the changes."
+          exit 1
+        fi
+      glob: "go.mod"
+    test:
+      run: go test ./... -v
+    build:
+      run: |
+        mkdir -p bin
+        go build -o bin/operator ./cmd/operator
+        go build -o bin/agent-runner ./cmd/agent-runner
+
