@@ -212,16 +212,25 @@ Under "Subscribe to events", enable:
 
 ### AI Agent Configuration
 
-For Claude API:
+AI agent authentication is handled via Kubernetes Secrets, not environment variables in the Operator.
 
-1. Get API key from https://console.anthropic.com
-2. Add to `.env`:
-   ```env
-   AI_AGENT_API_KEY=sk-ant-...
-   AI_AGENT_API_URL=https://api.anthropic.com/v1/messages
+**Important**: The Operator does not directly call AI APIs. Instead, it creates Kubernetes Pods that execute the agents. API credentials are injected into these Pods at runtime as follows:
+
+- **For Claude Code**: `ANTHROPIC_API_KEY` (from Kubernetes Secret)
+- **For Cursor Agents**: `CURSOR_API_KEY` (from Kubernetes Secret)
+
+To configure:
+
+1. Get API key from https://console.anthropic.com (for Claude) or your AI provider
+2. Create a Kubernetes Secret:
+   ```bash
+   kubectl create secret generic ai-agent-credentials \
+     --from-literal=ANTHROPIC_API_KEY=sk-ant-... \
+     --from-literal=CURSOR_API_KEY=your-cursor-key
    ```
+3. The agent-runner Pod template (managed by the Operator) automatically injects these credentials
 
-For other AI providers (OpenAI, etc.), adjust `AI_AGENT_API_URL` accordingly.
+See [ai-agent-execution.md](contracts/ai-agent-execution.md) for Pod configuration details.
 
 ---
 
@@ -357,11 +366,12 @@ goose -dir migrations mysql "agent_user:secure_password@tcp(localhost:3306)/gith
 ### Issue: AI Agent execution fails
 
 **Solution**:
-1. Check API key is valid and not expired
-2. Verify rate limits not exceeded
-3. Check `AI_AGENT_API_URL` is correct
-4. Test API directly with curl
-5. Review logs for detailed error messages
+1. Check Kubernetes Secret contains valid API keys (`ANTHROPIC_API_KEY` or `CURSOR_API_KEY`)
+2. Verify API keys are not expired (test with direct API call)
+3. Check rate limits not exceeded on AI provider side
+4. Verify Pod has access to the Secret (check Pod environment variables)
+5. Review agent-runner Pod logs: `kubectl logs <pod-name>`
+6. Check Operator logs for Pod creation errors
 
 ### Issue: Codex review not detected
 
