@@ -6,15 +6,16 @@ import (
 
 // Issue represents a GitHub Issue
 type Issue struct {
-	ID        int       `gorm:"primaryKey;autoIncrement"`
-	Repo      string    `gorm:"size:255;index:idx_issue_repo_number,unique"`
-	Number    int       `gorm:"index:idx_issue_repo_number,unique"`
-	Title     string    `gorm:"size:512"`
-	Body      *string   `gorm:"type:text"`
-	Labels    string    `gorm:"type:json"` // JSON array stored as string, parsed in application layer
-	State     string    `gorm:"type:enum('open','closed');default:'open'"`
-	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
+	ID            int       `gorm:"primaryKey;autoIncrement"`
+	Repo          string    `gorm:"size:255;index:idx_issue_repo_number,unique"`
+	Number        int       `gorm:"index:idx_issue_repo_number,unique"`
+	GitHubIssueID int       `gorm:"column:github_issue_id;index"` // GitHub's numeric issue ID
+	Title         string    `gorm:"size:512"`
+	Body          *string   `gorm:"type:text"`
+	Labels        string    `gorm:"type:json"` // JSON array stored as string, parsed in application layer
+	State         string    `gorm:"type:enum('open','closed');default:'open'"`
+	CreatedAt     time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;autoUpdateTime"`
 
 	// Relationships
 	AgentRuns         []AgentRun         `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
