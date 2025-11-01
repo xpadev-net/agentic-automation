@@ -2,9 +2,11 @@ package middleware
 
 import (
 	"agentic-automation/internal/config"
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -79,8 +81,11 @@ func VerifyWebhookSignature() gin.HandlerFunc {
 			return
 		}
 
-		// Store the payload back in context for handlers to use
-		// (since GetRawData() consumes the body)
+		// Restore request body so downstream handlers can read it
+		// GetRawData() drains c.Request.Body, so we need to restore it
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(payload))
+
+		// Store the payload in context as well for backwards compatibility
 		c.Set("webhook_payload", payload)
 
 		// Continue to next handler
