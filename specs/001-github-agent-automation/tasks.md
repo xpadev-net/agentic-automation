@@ -63,15 +63,15 @@
 - [x] T021 [P] Setup structured logging with zap in `internal/config/logger.go`
 - [x] T022 [P] Implement retry utility with exponential backoff and jitter in `internal/utils/retry.go`
 - [x] T023 [P] Create environment configuration loader in `internal/config/env.go`
-- [ ] T024 Implement idempotency middleware using X-GitHub-Delivery header in `internal/webhooks/middleware/idempotency.go`
+- [x] T024 Implement idempotency middleware using X-GitHub-Delivery header in `internal/webhooks/middleware/idempotency.go`
 
 ### Operator API for Agent Report (NEW - Push型通知)
 
-- [ ] T025 [P] Create agent-report-handler in `internal/webhooks/handlers/agent_report.go` with Bearer token validation
-- [ ] T026 Add POST /api/agent-runs/:id/report route to Gin server in `internal/webhooks/server.go`
-- [ ] T027 [P] Implement AgentRunRepository.UpdateState for state transitions
-- [ ] T028 [P] Write unit tests for agent-report-handler (Bearer token validation, state updates) in `tests/unit/webhooks/`
-- [ ] T029 [P] Write integration test for Pod → Operator report flow with mock requests in `tests/integration/`
+- [x] T025 [P] Create agent-report-handler in `internal/webhooks/handlers/agent_report.go` with Bearer token validation
+- [x] T026 Add POST /api/agent-runs/:id/report route to Gin server in `internal/webhooks/server.go`
+- [x] T027 [P] Implement AgentRunRepository.UpdateState for state transitions
+- [x] T028 [P] Write unit tests for agent-report-handler (Bearer token validation, state updates) in `tests/unit/webhooks/`
+- [x] T029 [P] Write integration test for Pod → Operator report flow with mock requests in `tests/integration/`
 
 ### Agent Runner Setup (NEW - Go binary in Pod)
 
