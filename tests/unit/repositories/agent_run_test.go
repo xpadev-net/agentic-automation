@@ -3,6 +3,8 @@ package repositories
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,8 +16,9 @@ import (
 )
 
 // setupTestDB creates an in-memory SQLite database for testing
+// Uses file::memory:?cache=shared to allow multiple connections to share the same database
 func setupTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
@@ -365,6 +368,183 @@ func TestUpdateState_ZeroID(t *testing.T) {
 	}
 	if err.Error() != "cannot update AgentRun with zero ID" {
 		t.Errorf("UpdateState() error = %v, want 'cannot update AgentRun with zero ID'", err)
+	}
+}
+
+func TestUpdateState_ConcurrentStateTransition(t *testing.T) {
+	db := setupTestDB(t)
+	repo := repositories.NewAgentRunRepository(db)
+
+	// Create test Issue (createTestAgentRun will create another, but we need one for PR)
+	issue := &models.Issue{
+		Repo:          "test/repo",
+		Number:        1,
+		GitHubIssueID: 123,
+		Title:         "Test Issue",
+		State:         "open",
+	}
+	if err := db.Create(issue).Error; err != nil {
+		t.Fatalf("Failed to create test issue: %v", err)
+	}
+
+	// Create PR for succeeded transition
+	pr := &models.PullRequest{
+		Repo:       "test/repo",
+		Number:     1,
+		Branch:     "test-branch",
+		BaseBranch: "main",
+		Status:     "open",
+		Mergeable:  boolPtr(true),
+	}
+	if err := db.Create(pr).Error; err != nil {
+		t.Fatalf("Failed to create test PR: %v", err)
+	}
+
+	// Create AgentRun in started state with pr_id
+	// Note: createTestAgentRun creates its own Issue, but we'll use the PR we created
+	run := createTestAgentRun(t, db, "started", &pr.ID)
+
+	// Verify the run exists and table is ready before starting goroutines
+	_, err := repo.GetByID(run.ID)
+	if err != nil {
+		t.Fatalf("Failed to verify AgentRun exists before concurrent test: %v", err)
+	}
+
+	// Test concurrent transitions: one to succeeded, one to failed
+	// Only one should succeed, the other should detect conflict
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+
+	wg.Add(2)
+
+	// Goroutine 1: transition to succeeded
+	go func() {
+		defer wg.Done()
+		errs[0] = repo.UpdateState(run.ID, "succeeded")
+	}()
+
+	// Goroutine 2: transition to failed
+	go func() {
+		defer wg.Done()
+		errs[1] = repo.UpdateState(run.ID, "failed")
+	}()
+
+	wg.Wait()
+
+	// One should succeed, one should fail with ErrInvalidStateTransition or database lock
+	successCount := 0
+	transitionErrorCount := 0
+	lockErrorCount := 0
+
+	for i, err := range errs {
+		if err == nil {
+			successCount++
+		} else {
+			var transitionErr *repositories.ErrInvalidStateTransition
+			if errors.As(err, &transitionErr) {
+				transitionErrorCount++
+			} else {
+				errStr := err.Error()
+				if strings.Contains(errStr, "database table is locked") || strings.Contains(errStr, "table is locked") {
+					// SQLite lock error is acceptable, but the important thing is that
+					// the race was detected and only one transition succeeded
+					lockErrorCount++
+				} else {
+					t.Errorf("Unexpected error in goroutine %d: %v", i, err)
+				}
+			}
+		}
+	}
+
+	// Exactly one should succeed (due to WHERE id = ? AND state = ? optimistic locking)
+	// The other should either get a transition error or a lock error
+	if successCount != 1 {
+		t.Errorf("Expected exactly 1 successful update, got %d (transition errors: %d, lock errors: %d)",
+			successCount, transitionErrorCount, lockErrorCount)
+	}
+
+	// At least one should have a transition error or lock error (the one that lost the race)
+	// If both got lock errors, that's also acceptable - the WHERE condition prevented invalid transitions
+	totalConflicts := transitionErrorCount + lockErrorCount
+	if totalConflicts == 0 && successCount == 2 {
+		t.Error("Expected at least one conflict (transition error or lock error), but both updates succeeded")
+	}
+
+	// Verify final state is either succeeded or failed
+	final, err := repo.GetByID(run.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+
+	if final.State != "succeeded" && final.State != "failed" {
+		t.Errorf("Final state = %v, expected succeeded or failed", final.State)
+	}
+
+	// Verify that we can't transition from the final terminal state
+	err = repo.UpdateState(run.ID, "started")
+	var transitionErr *repositories.ErrInvalidStateTransition
+	if !errors.As(err, &transitionErr) {
+		t.Errorf("UpdateState() error = %v, want ErrInvalidStateTransition", err)
+	}
+}
+
+func TestUpdateState_ConcurrentIdempotentUpdate(t *testing.T) {
+	db := setupTestDB(t)
+	repo := repositories.NewAgentRunRepository(db)
+
+	// Create AgentRun in started state (createTestAgentRun creates its own Issue)
+	run := createTestAgentRun(t, db, "started", nil)
+
+	// Verify the run exists and table is ready before starting goroutines
+	_, err := repo.GetByID(run.ID)
+	if err != nil {
+		t.Fatalf("Failed to verify AgentRun exists before concurrent test: %v", err)
+	}
+
+	// Multiple goroutines trying to update to the same state (idempotent)
+	var wg sync.WaitGroup
+	errs := make([]error, 5)
+
+	wg.Add(5)
+	for i := 0; i < 5; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = repo.UpdateState(run.ID, "started")
+		}(i)
+	}
+
+	wg.Wait()
+
+	// All should succeed (idempotent updates)
+	// Note: SQLite may return "database table is locked" errors due to concurrent writes,
+	// but in production MySQL this won't be an issue. The important thing is that
+	// the state remains correct and no invalid transitions occur.
+	successCount := 0
+	for i, err := range errs {
+		if err != nil {
+			// Check if it's a SQLite lock error (acceptable for concurrent idempotent updates)
+			errStr := err.Error()
+			if !strings.Contains(errStr, "database table is locked") && !strings.Contains(errStr, "table is locked") {
+				t.Errorf("Goroutine %d: UpdateState() error = %v, want nil or lock error", i, err)
+			}
+		} else {
+			successCount++
+		}
+	}
+
+	// At least some updates should succeed
+	if successCount == 0 {
+		t.Error("Expected at least some successful idempotent updates")
+	}
+
+	// Verify state is still started
+	final, err := repo.GetByID(run.ID)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+
+	if final.State != "started" {
+		t.Errorf("Final state = %v, expected started", final.State)
 	}
 }
 

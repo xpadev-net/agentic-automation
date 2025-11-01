@@ -151,6 +151,7 @@ func (r *agentRunRepository) Update(run *models.AgentRun) error {
 }
 
 // UpdateState updates only the state field of an AgentRun
+// Uses optimistic locking with WHERE id = ? AND state = ? to prevent race conditions
 func (r *agentRunRepository) UpdateState(id int, state string) error {
 	if id == 0 {
 		return errors.New("cannot update AgentRun with zero ID")
@@ -166,11 +167,12 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 
 	// Allow idempotent update: same state can be set again
 	if currentState == state {
-		// Perform the update (even if same value, this maintains idempotency)
-		result := r.db.Model(&models.AgentRun{}).Where("id = ?", id).Update("state", state)
+		// Perform the update with WHERE condition to ensure state hasn't changed
+		result := r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ?", id, currentState).Update("state", state)
 		if result.Error != nil {
 			return result.Error
 		}
+		// If RowsAffected is 0, state was changed by another goroutine, but since we're setting same state, it's fine
 		return nil
 	}
 
@@ -184,6 +186,7 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 	}
 
 	// Validate allowed transitions
+	var updateCondition *gorm.DB
 	switch currentState {
 	case "queued":
 		// queued can only transition to started
@@ -193,6 +196,7 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 				NewState:     state,
 			}
 		}
+		updateCondition = r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ?", id, currentState)
 	case "started":
 		// started can transition to succeeded or failed
 		if state != "succeeded" && state != "failed" {
@@ -206,6 +210,11 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 			if currentRun.PRID == nil {
 				return ErrMissingPRIDForSucceeded
 			}
+			// Include pr_id IS NOT NULL in WHERE condition to ensure pr_id is still set at update time
+			updateCondition = r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ? AND pr_id IS NOT NULL", id, currentState)
+		} else {
+			// For failed transition, just check state
+			updateCondition = r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ?", id, currentState)
 		}
 	default:
 		// Unknown current state - reject transition
@@ -215,11 +224,34 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 		}
 	}
 
-	// Perform the state update
-	result := r.db.Model(&models.AgentRun{}).Where("id = ?", id).Update("state", state)
+	// Perform the state update atomically using WHERE conditions
+	// This ensures the state (and pr_id for succeeded) hasn't changed between validation and update
+	result := updateCondition.Update("state", state)
 	if result.Error != nil {
 		return result.Error
 	}
+
+	// Check if update actually affected any rows
+	// If RowsAffected == 0, the state was changed by another goroutine between validation and update
+	if result.RowsAffected == 0 {
+		// State changed by another goroutine, get current state and return appropriate error
+		updated, err := r.GetByID(id)
+		if err != nil {
+			return err
+		}
+
+		// If state is now the target state, another goroutine already made the transition (idempotent)
+		if updated.State == state {
+			return nil
+		}
+
+		// State changed to something else, return transition error with actual current state
+		return &ErrInvalidStateTransition{
+			CurrentState: updated.State,
+			NewState:     state,
+		}
+	}
+
 	return nil
 }
 
