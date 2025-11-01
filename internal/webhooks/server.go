@@ -34,15 +34,11 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 		gin.SetMode(gin.DebugMode)
 	}
 
-	// Create router
-	var router *gin.Engine
-	if env == "production" {
-		router = gin.New()
-		// Add recovery middleware for production
-		router.Use(gin.Recovery())
-	} else {
-		router = gin.Default()
-	}
+	// Create router (use gin.New() for all environments)
+	router := gin.New()
+
+	// Apply global error handling middleware (before signature verification)
+	router.Use(middleware.ErrorHandler())
 
 	// Apply signature verification middleware to webhook endpoint
 	router.POST(webhookPath, middleware.VerifyWebhookSignature(), handleGitHubWebhook)
@@ -66,8 +62,7 @@ func handleGitHubWebhook(c *gin.Context) {
 		// If payload is not in context, try to read from request body
 		body, err := c.GetRawData()
 		if err != nil {
-			logger.Error("Failed to read webhook payload", zap.Error(err))
-			c.JSON(500, gin.H{"error": "failed to read payload"})
+			c.Error(err)
 			return
 		}
 		payload = body
