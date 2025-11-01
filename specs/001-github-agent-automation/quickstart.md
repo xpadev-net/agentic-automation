@@ -288,6 +288,103 @@ tail -f logs/app.log
 - GitHub API token provided via GITHUB_TOKEN environment variable.
 - Node.js runtime required for claude-code/cursor-agents execution.
 
+### Repository Manifest Configuration (.agent-config.yaml)
+
+Each target repository can customize pre-execution hooks, validation commands, and post-execution hooks by adding an `.agent-config.yaml` file to the repository root.
+
+**File Location**: `.agent-config.yaml` (commit to repository root)
+
+**Purpose**:
+- Run pre-hooks before AI agent starts (e.g., `npm install`, `go mod download`)
+- Run validations after AI agent completes (e.g., `npm run lint`, `go vet ./...`)
+- Run post-hooks after PR is created (e.g., Discord notifications, trigger CI/CD)
+
+**Example for Node.js/TypeScript Project**:
+
+```yaml
+version: "1.0"
+
+hooks:
+  pre:
+    - name: "install-dependencies"
+      command: "npm ci"
+      description: "Install npm dependencies"
+      timeout: "5m"
+      required: true
+
+validation:
+  - name: "lint"
+    command: "npm run lint"
+    description: "ESLint validation"
+    timeout: "3m"
+    required: true
+
+  - name: "type-check"
+    command: "npm run type-check"
+    description: "TypeScript type checking"
+    timeout: "2m"
+    required: true
+
+  - name: "tests"
+    command: "npm run test"
+    description: "Run test suite"
+    timeout: "10m"
+    required: false  # Optional - AI can fix test failures
+
+hooks:
+  post:
+    - name: "notify-discord"
+      command: "curl -X POST $DISCORD_WEBHOOK_URL -H 'Content-Type: application/json' -d '{\"content\": \"PR created for issue #$ISSUE_NUMBER\"}'"
+      description: "Send Discord notification"
+      timeout: "30s"
+      required: false
+```
+
+**Example for Go Project**:
+
+```yaml
+version: "1.0"
+
+hooks:
+  pre:
+    - name: "download-dependencies"
+      command: "go mod download"
+      description: "Download Go modules"
+      timeout: "3m"
+      required: true
+
+validation:
+  - name: "fmt-check"
+      command: "test -z $(gofmt -l .)"
+      description: "Check Go formatting"
+      timeout: "1m"
+      required: true
+
+  - name: "vet"
+    command: "go vet ./..."
+    description: "Go static analysis"
+    timeout: "2m"
+    required: true
+
+  - name: "build"
+    command: "go build ./..."
+    description: "Compile packages"
+    timeout: "5m"
+    required: true
+
+hooks:
+  post: []
+```
+
+**Behavior**:
+- If `.agent-config.yaml` does NOT exist → All hooks/validations are skipped
+- If `.agent-config.yaml` exists → Commands are executed per manifest
+- Pre-hook failure (required: true) → Abort workflow, report error
+- Validation failure (required: true) → Retry AI agent with error feedback
+- Post-hook failure → Log warning, continue (PR already created)
+
+**Full Specification**: See [agent-manifest.md](contracts/agent-manifest.md) for complete schema and examples.
+
 ### Testing Locally
 
 Use ngrok to expose local webhook server:

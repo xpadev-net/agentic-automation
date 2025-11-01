@@ -26,7 +26,7 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 - Go 1.22+ with cobra CLI framework
 - Runs in Kubernetes Pod
 - Executes claude-code or cursor-agents
-- Performs lint/typecheck (npm run lint, npm run type-check)
+- Executes pre-hooks, validations, and post-hooks from `.agent-config.yaml` (see [agent-manifest.md](./contracts/agent-manifest.md))
 - Commits and pushes changes
 - Reports results to Operator REST API
 

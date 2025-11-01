@@ -53,7 +53,7 @@
 - pr_id: INT (FK to PullRequest.id, nullable) - PR created by this run
 - state: ENUM(queued/started/succeeded/failed)
 - agent_type: ENUM(claude-code/cursor-agents) - **NEW**: Which AI agent was used
-- input: JSON (Issue context, comments, dependencies)
+- input: JSON (Issue context, comments, dependencies, **manifest config**)
 - output: JSON (AI agent response, changes made)
 - retry_count: INT (default: 0, max: 50)
 - error_message: TEXT (nullable) - **NEW**: last error if state=failed
@@ -64,6 +64,26 @@
 - completed_at: DATETIME (nullable)
 - created_at: DATETIME
 - updated_at: DATETIME
+
+**Input JSON Structure**:
+```json
+{
+  "issue_title": "Fix authentication bug",
+  "issue_body": "Users cannot login...",
+  "comments": [...],
+  "dependencies": [...],
+  "manifest_config": {
+    "version": "1.0",
+    "hooks": {
+      "pre": [...],
+      "post": [...]
+    },
+    "validation": [...]
+  }
+}
+```
+
+**Note**: The `manifest_config` field stores the parsed `.agent-config.yaml` content for audit trail and debugging. If no manifest exists in the repository, this field is null.
 
 **State Transition**:
 - queued → started (on execution begin)

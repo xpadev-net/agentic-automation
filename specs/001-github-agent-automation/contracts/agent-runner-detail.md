@@ -113,9 +113,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"agent-runner/pkg/agent"
+	"agent-runner/pkg/config"
 	"agent-runner/pkg/context"
 	"agent-runner/pkg/git"
-	"agent-runner/pkg/lint"
+	"agent-runner/pkg/hooks"
 	"agent-runner/pkg/reporter"
 )
 
@@ -161,30 +162,43 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Git clone failed: %v", err))
 	}
 
-	// 2.5. Restore session from S3 (if retry)
+	// 3. Load manifest (.agent-config.yaml)
+	manifest, err := config.LoadManifest(workDir)
+	if err != nil {
+		return reporter.ReportFailure(cfg, fmt.Sprintf("Failed to load manifest: %v", err))
+	}
+
+	// 4. Execute pre-hooks
+	if manifest != nil {
+		if err := hooks.RunPreHooks(manifest.Hooks.Pre, workDir); err != nil {
+			return reporter.ReportFailure(cfg, fmt.Sprintf("Pre-hook failed: %v", err))
+		}
+	}
+
+	// 5. Restore session from S3 (if retry)
 	if cfg.RetryCount > 0 {
 		if err := storage.RestoreSession(cfg.AgentRunID, cfg.RetryCount); err != nil {
 			return reporter.ReportFailure(cfg, fmt.Sprintf("Session restore failed: %v", err))
 		}
 	}
 
-	// 3. Create feature branch
+	// 6. Create feature branch
 	branchName := fmt.Sprintf("feature/issue-%d", issueID)
 	if err := git.CreateBranch(workDir, branchName); err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Branch creation failed: %v", err))
 	}
 
-	// 4. Build agent prompt
+	// 7. Build agent prompt
 	fullPrompt := context.BuildPrompt(prompt, previousAttempts, ciLogs)
 
-	// 5. Execute selected agent
+	// 8. Execute selected agent
 	executor := agent.NewExecutor(cfg.AgentType)
 	output, err := executor.Execute(workDir, fullPrompt)
 	if err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Agent execution failed: %v\nOutput: %s", err, output))
 	}
 
-	// 6. Check for file changes
+	// 9. Check for file changes
 	hasChanges, err := git.HasChanges(workDir)
 	if err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Git diff check failed: %v", err))
@@ -193,39 +207,45 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		return reporter.ReportFailure(cfg, "No file changes detected after agent execution")
 	}
 
-	// 7. Run lint validation
-	if err := lint.RunLint(workDir); err != nil {
-		return reporter.ReportFailure(cfg, fmt.Sprintf("Lint failed: %v", err))
+	// 10. Execute validations
+	if manifest != nil {
+		if err := hooks.RunValidations(manifest.Validation, workDir); err != nil {
+			// Validation failure triggers agent retry with error feedback
+			return reporter.ReportValidationFailure(cfg, err.Error())
+		}
 	}
 
-	// 8. Run type check validation
-	if err := lint.RunTypeCheck(workDir); err != nil {
-		return reporter.ReportFailure(cfg, fmt.Sprintf("Type check failed: %v", err))
-	}
-
-	// 9. Commit changes
+	// 11. Commit changes
 	commitSHA, err := git.CommitChanges(workDir, fmt.Sprintf("feat: implement issue #%d", issueID))
 	if err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Git commit failed: %v", err))
 	}
 
-	// 10. Push to remote
+	// 12. Push to remote
 	if err := git.PushBranch(workDir, branchName, cfg.GitHubToken); err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Git push failed: %v", err))
 	}
 
-	// 10.5. Save session to S3 (always, success or failure)
+	// 13. Save session to S3 (always, success or failure)
 	if err := storage.SaveSession(cfg.AgentRunID, cfg.AgentType); err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Session save failed: %v", err))
 	}
 
-	// 11. Create Pull Request via GitHub API
+	// 14. Create Pull Request via GitHub API
 	prNumber, err := git.CreatePR(cfg.GitHubToken, repo, branchName, issueID)
 	if err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("PR creation failed: %v", err))
 	}
 
-	// 12. Report success to Operator API
+	// 15. Execute post-hooks
+	if manifest != nil {
+		if err := hooks.RunPostHooks(manifest.Hooks.Post, workDir); err != nil {
+			// Post-hook failures are logged as warnings, don't abort
+			log.Warnf("Post-hook failed: %v", err)
+		}
+	}
+
+	// 16. Report success to Operator API
 	return reporter.ReportSuccess(cfg, prNumber, branchName, commitSHA)
 }
 ```
@@ -369,32 +389,161 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 
 ---
 
-### Lint Runner (pkg/lint/runner.go)
+### Manifest Config Loader (pkg/config/loader.go)
 
 ```go
-package lint
+package config
 
 import (
-	"os/exec"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
-func RunLint(workDir string) error {
-	cmd := exec.Command("npm", "run", "lint")
-	cmd.Dir = workDir
-	output, err := cmd.CombinedOutput()
+type Manifest struct {
+	Version    string      `yaml:"version"`
+	Hooks      Hooks       `yaml:"hooks"`
+	Validation []Command   `yaml:"validation"`
+}
+
+type Hooks struct {
+	Pre  []Command `yaml:"pre"`
+	Post []Command `yaml:"post"`
+}
+
+type Command struct {
+	Name        string        `yaml:"name"`
+	Command     string        `yaml:"command"`
+	Description string        `yaml:"description"`
+	Timeout     time.Duration `yaml:"timeout"`
+	Required    bool          `yaml:"required"`
+}
+
+// LoadManifest loads .agent-config.yaml from the working directory.
+// Returns nil if file does not exist (skip hooks/validations).
+func LoadManifest(workDir string) (*Manifest, error) {
+	manifestPath := filepath.Join(workDir, ".agent-config.yaml")
+
+	// Check if file exists
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		// File doesn't exist - skip all hooks/validations
+		return nil, nil
+	}
+
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return fmt.Errorf("lint failed: %w\nOutput: %s", err, string(output))
+		return nil, fmt.Errorf("failed to read manifest: %w", err)
+	}
+
+	var manifest Manifest
+	if err := yaml.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse manifest: %w", err)
+	}
+
+	// Validate version
+	if manifest.Version != "1.0" {
+		return nil, fmt.Errorf("unsupported manifest version: %s", manifest.Version)
+	}
+
+	return &manifest, nil
+}
+```
+
+---
+
+### Hooks Runner (pkg/hooks/runner.go)
+
+```go
+package hooks
+
+import (
+	"context"
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+
+	"agent-runner/pkg/config"
+)
+
+type HookError struct {
+	Name    string
+	Command string
+	Output  string
+	Err     error
+}
+
+func (e *HookError) Error() string {
+	return fmt.Sprintf("hook '%s' failed: %v\nCommand: %s\nOutput: %s", e.Name, e.Err, e.Command, e.Output)
+}
+
+// RunPreHooks executes pre-execution hooks sequentially.
+// If a required hook fails, returns error immediately.
+func RunPreHooks(commands []config.Command, workDir string) error {
+	for _, cmd := range commands {
+		if err := runCommand(cmd, workDir); err != nil {
+			if cmd.Required {
+				return err
+			}
+			// Optional hook failed - log warning and continue
+			fmt.Printf("WARNING: Optional pre-hook '%s' failed: %v\n", cmd.Name, err)
+		}
 	}
 	return nil
 }
 
-func RunTypeCheck(workDir string) error {
-	cmd := exec.Command("npm", "run", "type-check")
-	cmd.Dir = workDir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("type check failed: %w\nOutput: %s", err, string(output))
+// RunValidations executes validation commands sequentially.
+// If a required validation fails, returns error for agent retry.
+func RunValidations(commands []config.Command, workDir string) error {
+	var failedValidations []string
+
+	for _, cmd := range commands {
+		if err := runCommand(cmd, workDir); err != nil {
+			if cmd.Required {
+				failedValidations = append(failedValidations, err.Error())
+			} else {
+				fmt.Printf("WARNING: Optional validation '%s' failed: %v\n", cmd.Name, err)
+			}
+		}
 	}
+
+	if len(failedValidations) > 0 {
+		return fmt.Errorf("validation failures:\n%s", strings.Join(failedValidations, "\n"))
+	}
+	return nil
+}
+
+// RunPostHooks executes post-execution hooks sequentially.
+// Failures are logged but do not abort (PR already created).
+func RunPostHooks(commands []config.Command, workDir string) error {
+	for _, cmd := range commands {
+		if err := runCommand(cmd, workDir); err != nil {
+			fmt.Printf("WARNING: Post-hook '%s' failed: %v\n", cmd.Name, err)
+		}
+	}
+	return nil
+}
+
+func runCommand(cmd config.Command, workDir string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), cmd.Timeout)
+	defer cancel()
+
+	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd.Command)
+	execCmd.Dir = workDir
+
+	output, err := execCmd.CombinedOutput()
+	if err != nil {
+		return &HookError{
+			Name:    cmd.Name,
+			Command: cmd.Command,
+			Output:  string(output),
+			Err:     err,
+		}
+	}
+
 	return nil
 }
 ```
