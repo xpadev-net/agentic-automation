@@ -2,7 +2,9 @@ package repositories
 
 import (
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -18,15 +20,59 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
 
-	// AutoMigrate all models
-	err = db.AutoMigrate(
-		&models.Issue{},
-		&models.PullRequest{},
-		&models.AgentRun{},
-	)
-	if err != nil {
-		t.Fatalf("Failed to migrate test database: %v", err)
-	}
+	// SQLite doesn't support ENUM, so we create tables manually with TEXT types
+	// This matches the behavior in production MySQL but uses TEXT for SQLite
+	db.Exec(`
+		CREATE TABLE IF NOT EXISTS issues (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT,
+			number INTEGER,
+			github_issue_id INTEGER,
+			title TEXT,
+			body TEXT,
+			labels TEXT,
+			state TEXT DEFAULT 'open',
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+	`)
+
+	db.Exec(`
+		CREATE TABLE IF NOT EXISTS pull_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT,
+			number INTEGER,
+			issue_id INTEGER,
+			branch TEXT,
+			base_branch TEXT,
+			status TEXT,
+			mergeable BOOLEAN,
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+	`)
+
+	db.Exec(`
+		CREATE TABLE IF NOT EXISTS agent_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			idempotency_key TEXT UNIQUE,
+			issue_id INTEGER,
+			pr_id INTEGER,
+			state TEXT,
+			agent_type TEXT,
+			input TEXT,
+			output TEXT,
+			retry_count INTEGER DEFAULT 0,
+			error_message TEXT,
+			commit_sha TEXT,
+			s3_session_key TEXT,
+			session_saved_at DATETIME,
+			started_at DATETIME,
+			completed_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+	`)
 
 	return db
 }
@@ -45,9 +91,12 @@ func createTestAgentRun(t *testing.T, db *gorm.DB, state string, prID *int) *mod
 		t.Fatalf("Failed to create test issue: %v", err)
 	}
 
+	// Generate unique idempotency key using timestamp and state
+	idempotencyKey := fmt.Sprintf("test-key-%s-%d", state, time.Now().UnixNano())
+
 	// Create test AgentRun
 	run := &models.AgentRun{
-		IdempotencyKey: "test-key-" + state,
+		IdempotencyKey: idempotencyKey,
 		IssueID:        issue.ID,
 		PRID:           prID,
 		State:          state,
