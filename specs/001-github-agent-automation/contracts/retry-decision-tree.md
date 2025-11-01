@@ -111,6 +111,7 @@ This document clarifies when to retry agent execution and how to count retry att
 - GitHub API timeout (connection timeout)
 - Network partition (connection refused)
 - Operator API unreachable (agent-runner → Operator report call)
+- S3 connection failure (session upload/download failures)
 
 **Action**:
 1. **Do NOT** increment `AgentRun.retry_count`
@@ -127,6 +128,7 @@ This document clarifies when to retry agent execution and how to count retry att
 - Send Discord notification (infrastructure issue)
 - For agent-runner → Operator API failure: Pod exits with code 1
 - For GitHub API failure: Proceed with AI retry (+1 to count)
+- For S3 failure (upload/download): Pod exits with code 1 → Operator creates new Job (API Retry)
 
 ---
 
@@ -219,6 +221,54 @@ This document clarifies when to retry agent execution and how to count retry att
 ```
 
 **Retry Type**: Hybrid (API retry first, then AI retry if all fail)
+
+---
+
+### Scenario F: S3 Session Upload Failure
+
+**Flow**:
+```
+1. agent-runner completes all steps successfully
+2. agent-runner attempts to save session to S3
+3. PUT s3://agent-sessions/sessions/123/session.tar.gz → connection timeout
+4. agent-runner retries with exponential backoff (5 attempts: 1s, 2s, 4s, 8s, 16s)
+5. All retries fail (S3/MinIO unavailable)
+6. agent-runner logs error: "S3 session upload failed after 5 retries"
+7. agent-runner exits with code 1 (Pod failure)
+8. Operator detects Job failure (Pod exit 1, no report received)
+9. Operator does NOT increment AgentRun.retry_count (infrastructure failure)
+10. Operator creates new Job (API Retry)
+11. New Pod attempts full workflow again (including S3 upload)
+```
+
+**Retry Type**: API Retry (not counted against 50 AI retries)
+
+**Note**: If S3 remains unavailable, the cycle repeats. Manual intervention required to fix S3 infrastructure.
+
+---
+
+### Scenario G: S3 Session Download Failure (on Retry)
+
+**Flow**:
+```
+1. Operator creates new Job for retry (AgentRun.retry_count = 3)
+2. Pod starts, passes RETRY_COUNT=3 environment variable
+3. agent-runner clones repository
+4. agent-runner attempts to restore session from S3
+5. GET s3://agent-sessions/sessions/123/session.tar.gz → HTTP 503 Service Unavailable
+6. agent-runner retries with exponential backoff (5 attempts)
+7. All retries fail
+8. agent-runner logs error: "S3 session download failed after 5 retries"
+9. agent-runner exits with code 1 (Pod failure)
+10. Operator detects Job failure
+11. Operator does NOT increment AgentRun.retry_count (API Retry)
+12. Operator creates new Job
+13. Cycle repeats until S3 is available
+```
+
+**Retry Type**: API Retry (not counted)
+
+**Rationale**: Without session context, AI retry would be less effective. Ensure S3 is accessible before proceeding with work.
 
 ---
 

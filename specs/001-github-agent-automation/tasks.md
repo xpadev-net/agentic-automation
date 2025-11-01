@@ -95,6 +95,26 @@
 - [ ] T047 [P] Write unit tests for reporter client (mock HTTP requests, retry logic)
 - [ ] T048 Write integration test for full agent-runner execution flow (end-to-end)
 
+### S3 Session Persistence (NEW - Session context across retries)
+
+- [ ] T049_S3 Add AWS SDK Go v2 and backoff dependencies to agent-runner/go.mod
+- [ ] T050_S3 [P] Implement pkg/storage/config.go (S3 configuration struct, env var loading)
+- [ ] T051_S3 [P] Implement pkg/storage/s3.go (S3 client with UsePathStyle support, Upload/Download with exponential backoff)
+- [ ] T052_S3 [P] Implement pkg/storage/session.go (SaveSession, RestoreSession, tar.gz compression/extraction)
+- [ ] T053_S3 [P] Implement pkg/storage/exclusion.go (credential file filtering, .env/.pem/.key exclusion)
+- [ ] T054_S3 Integrate session restore into main.go (step 2.5: call RestoreSession if retry_count > 0)
+- [ ] T055_S3 Integrate session save into main.go (step 10.5: call SaveSession before reporting)
+- [ ] T056_S3 Add RETRY_COUNT environment variable to Kubernetes Pod template (k8s/pod-template.yaml)
+- [ ] T057_S3 Add S3 environment variables to Kubernetes Pod template (S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_USE_PATH_STYLE, S3_MAX_RETRIES)
+- [ ] T058_S3 Update internal/clients/kubernetes.go to inject S3 config and RETRY_COUNT into Job creation
+- [ ] T059_S3 [P] Create scripts/setup-minio.sh for MinIO bucket initialization (create agent-sessions bucket)
+- [ ] T060_S3 [P] Write unit tests for S3 client (mock S3 API, test retry logic, path-style URLs)
+- [ ] T061_S3 [P] Write unit tests for session archive/restore (tar.gz operations, file exclusion)
+- [ ] T062_S3 [P] Write unit tests for exponential backoff retry (mock failures, verify backoff intervals)
+- [ ] T063_S3 Write integration test for session save/restore flow (MinIO test server, full lifecycle)
+- [ ] T064_S3 Write integration test for S3 failure scenarios (unavailable S3, Pod exit 1 verification)
+- [ ] T065_S3 Add migration for AgentRun.s3_session_key and session_saved_at columns (goose migration)
+
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
 ---
@@ -107,24 +127,24 @@
 
 ### Implementation for User Story 1
 
-- [ ] T049 [P] [US1] Create webhook event types definition in internal/models/webhook_events.go
-- [ ] T050 [P] [US1] Implement trigger detection service in internal/services/trigger_detection.go
-- [ ] T051 [US1] Implement comment parser to detect "/run-agent" in internal/utils/comment_parser.go
-- [ ] T052 [US1] Implement GitHub user permission checker (Collaborator+) in internal/services/authorization.go
-- [ ] T053 [US1] Create webhook handler for issue_comment events in internal/webhooks/handlers/issue_comment.go
-- [ ] T054 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in internal/services/agent_run_state_machine.go
-- [ ] T055 [US1] Implement Kubernetes Job creation service in internal/services/kubernetes_job.go
-- [ ] T056 [US1] Implement Issue context collector (body, comments, labels) in internal/services/issue_context.go
-- [ ] T057 [US1] Implement agent type detector from Issue labels in internal/services/agent_type_detector.go
-- [ ] T058 [US1] Add logging for trigger detection and authorization failures in internal/webhooks/handlers/issue_comment.go
-- [ ] T059 [US1] Implement GitHub status comment poster for execution start in internal/services/github_notification.go
+- [ ] T066 [P] [US1] Create webhook event types definition in internal/models/webhook_events.go
+- [ ] T067 [P] [US1] Implement trigger detection service in internal/services/trigger_detection.go
+- [ ] T068 [US1] Implement comment parser to detect "/run-agent" in internal/utils/comment_parser.go
+- [ ] T069 [US1] Implement GitHub user permission checker (Collaborator+) in internal/services/authorization.go
+- [ ] T070 [US1] Create webhook handler for issue_comment events in internal/webhooks/handlers/issue_comment.go
+- [ ] T071 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in internal/services/agent_run_state_machine.go
+- [ ] T072 [US1] Implement Kubernetes Job creation service in internal/services/kubernetes_job.go
+- [ ] T073 [US1] Implement Issue context collector (body, comments, labels) in internal/services/issue_context.go
+- [ ] T074 [US1] Implement agent type detector from Issue labels in internal/services/agent_type_detector.go
+- [ ] T075 [US1] Add logging for trigger detection and authorization failures in internal/webhooks/handlers/issue_comment.go
+- [ ] T076 [US1] Implement GitHub status comment poster for execution start in internal/services/github_notification.go
 
 ### Tests for User Story 1 (Test-First Development)
 
-- [ ] T060 [P] [US1] Write contract tests for issue_comment webhook payload validation
-- [ ] T061 [P] [US1] Write unit tests for TriggerDetectionService ("/run-agent" detection)
-- [ ] T062 [P] [US1] Write unit tests for AuthorizationService (Collaborator+ check)
-- [ ] T063 [US1] Write integration test for webhook → K8s Job creation flow
+- [ ] T077 [P] [US1] Write contract tests for issue_comment webhook payload validation
+- [ ] T078 [P] [US1] Write unit tests for TriggerDetectionService ("/run-agent" detection)
+- [ ] T079 [P] [US1] Write unit tests for AuthorizationService (Collaborator+ check)
+- [ ] T080 [US1] Write integration test for webhook → K8s Job creation flow
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently - webhook triggers K8s Pod execution
 
@@ -140,18 +160,18 @@
 
 **Note**: US2 is mostly handled by agent-runner in Pod. Operator側は結果受信とPR管理のみ。
 
-- [ ] T064 [P] [US2] Implement PullRequest upsert logic in internal/repositories/pull_request.go (from agent-runner report)
-- [ ] T065 [US2] Implement PR URL generation and storage to AgentRun record in internal/webhooks/handlers/agent_report.go
-- [ ] T066 [US2] Add GitHub status comment for PR creation success in internal/services/github_notification.go
-- [ ] T067 [US2] Implement Discord notification for PR creation in internal/services/discord_notification.go
-- [ ] T068 [US2] Handle agent-runner failure reports and extract error logs in internal/webhooks/handlers/agent_report.go
+- [ ] T081 [P] [US2] Implement PullRequest upsert logic in internal/repositories/pull_request.go (from agent-runner report)
+- [ ] T082 [US2] Implement PR URL generation and storage to AgentRun record in internal/webhooks/handlers/agent_report.go
+- [ ] T083 [US2] Add GitHub status comment for PR creation success in internal/services/github_notification.go
+- [ ] T084 [US2] Implement Discord notification for PR creation in internal/services/discord_notification.go
+- [ ] T085 [US2] Handle agent-runner failure reports and extract error logs in internal/webhooks/handlers/agent_report.go
 
 ### Tests for User Story 2 (Test-First Development)
 
-- [ ] T069 [P] [US2] Write unit tests for PullRequest upsert logic
-- [ ] T070 [P] [US2] Write unit tests for GitHub notification service (PR created message)
-- [ ] T071 [US2] Write integration test for agent-runner success report → PR record creation
-- [ ] T072 [US2] Write integration test for agent-runner failure report → retry trigger
+- [ ] T086 [P] [US2] Write unit tests for PullRequest upsert logic
+- [ ] T087 [P] [US2] Write unit tests for GitHub notification service (PR created message)
+- [ ] T088 [US2] Write integration test for agent-runner success report → PR record creation
+- [ ] T089 [US2] Write integration test for agent-runner failure report → retry trigger
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently - full automation from comment to PR (via Pod)
 
@@ -165,27 +185,27 @@
 
 ### Implementation for User Story 3
 
-- [ ] T073 [P] [US3] Implement webhook handler for pull_request_review_comment events in internal/webhooks/handlers/pr_review_comment.go
-- [ ] T074 [P] [US3] Implement Codex review request service (post "@codex review" comment) in internal/services/codex_review.go
-- [ ] T075 [US3] Implement "@codex review" comment detection in internal/utils/comment_parser.go
-- [ ] T076 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in internal/services/codex_approval.go
-- [ ] T077 [US3] Implement webhook handler for check_suite events (CI results) in internal/webhooks/handlers/check_suite.go
-- [ ] T078 [US3] Create CI failure analyzer parsing check logs in internal/services/ci_failure.go
-- [ ] T079 [US3] Implement retry orchestrator managing retry_count (max 50) in internal/services/retry_orchestrator.go
-- [ ] T080 [US3] Create feedback aggregator combining review + CI results in internal/services/feedback_aggregator.go
-- [ ] T081 [US3] Implement K8s Job re-creation with aggregated feedback for AI retry in internal/services/kubernetes_job.go
-- [ ] T082 [US3] Add retry count validation and failure threshold (50) in internal/services/retry_orchestrator.go
-- [ ] T083 [US3] Implement failure notification to GitHub Issue on max retries in internal/services/github_notification.go
-- [ ] T084 [US3] Implement failure notification to Discord webhook on max retries in internal/services/discord_notification.go
-- [ ] T085 [US3] Add GitHub status comment updates for retry progress in internal/services/github_notification.go
-- [ ] T086 [US3] Store ReviewFeedback records for each review cycle in internal/repositories/review_feedback.go
+- [ ] T090 [P] [US3] Implement webhook handler for pull_request_review_comment events in internal/webhooks/handlers/pr_review_comment.go
+- [ ] T091 [P] [US3] Implement Codex review request service (post "@codex review" comment) in internal/services/codex_review.go
+- [ ] T092 [US3] Implement "@codex review" comment detection in internal/utils/comment_parser.go
+- [ ] T093 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in internal/services/codex_approval.go
+- [ ] T094 [US3] Implement webhook handler for check_suite events (CI results) in internal/webhooks/handlers/check_suite.go
+- [ ] T095 [US3] Create CI failure analyzer parsing check logs in internal/services/ci_failure.go
+- [ ] T096 [US3] Implement retry orchestrator managing retry_count (max 50) in internal/services/retry_orchestrator.go
+- [ ] T097 [US3] Create feedback aggregator combining review + CI results in internal/services/feedback_aggregator.go
+- [ ] T098 [US3] Implement K8s Job re-creation with aggregated feedback for AI retry in internal/services/kubernetes_job.go
+- [ ] T099 [US3] Add retry count validation and failure threshold (50) in internal/services/retry_orchestrator.go
+- [ ] T100 [US3] Implement failure notification to GitHub Issue on max retries in internal/services/github_notification.go
+- [ ] T101 [US3] Implement failure notification to Discord webhook on max retries in internal/services/discord_notification.go
+- [ ] T102 [US3] Add GitHub status comment updates for retry progress in internal/services/github_notification.go
+- [ ] T103 [US3] Store ReviewFeedback records for each review cycle in internal/repositories/review_feedback.go
 
 ### Tests for User Story 3 (Test-First Development)
 
-- [ ] T087 [P] [US3] Write unit tests for CodexApprovalDetector (approval pattern matching)
-- [ ] T088 [P] [US3] Write unit tests for RetryOrchestrator (max 50 retries logic)
-- [ ] T089 [P] [US3] Write unit tests for FeedbackAggregator (review + CI combination)
-- [ ] T090 [US3] Write integration test for CI failure → retry → success flow
+- [ ] T104 [P] [US3] Write unit tests for CodexApprovalDetector (approval pattern matching)
+- [ ] T105 [P] [US3] Write unit tests for RetryOrchestrator (max 50 retries logic)
+- [ ] T106 [P] [US3] Write unit tests for FeedbackAggregator (review + CI combination)
+- [ ] T107 [US3] Write integration test for CI failure → retry → success flow
 
 **Checkpoint**: All user stories 1-3 should now be independently functional - quality loop with automatic improvements
 
@@ -199,22 +219,22 @@
 
 ### Implementation for User Story 4
 
-- [ ] T091 [P] [US4] Implement merge condition checker (CI + Codex + conflicts) in internal/services/merge_condition.go
-- [ ] T092 [P] [US4] Create CI status aggregator from check_suite events in internal/services/ci_status_aggregator.go
-- [ ] T093 [US4] Implement merge conflict detector via GitHub API in internal/services/merge_conflict_detector.go
-- [ ] T094 [US4] Create auto-merge service with merge API call in internal/services/auto_merge.go
-- [ ] T095 [US4] Implement webhook handler for status events (CI completion) in internal/webhooks/handlers/status.go
-- [ ] T096 [US4] Add merge condition re-evaluation on Codex approval comment in internal/webhooks/handlers/pr_review_comment.go
-- [ ] T097 [US4] Add merge condition re-evaluation on CI success in internal/webhooks/handlers/check_suite.go
-- [ ] T098 [US4] Implement merge failure handling and notification in internal/services/auto_merge.go
-- [ ] T099 [US4] Add GitHub status comment for merge success/failure in internal/services/github_notification.go
-- [ ] T100 [US4] Add Discord notification for merge events in internal/services/discord_notification.go
+- [ ] T108 [P] [US4] Implement merge condition checker (CI + Codex + conflicts) in internal/services/merge_condition.go
+- [ ] T109 [P] [US4] Create CI status aggregator from check_suite events in internal/services/ci_status_aggregator.go
+- [ ] T110 [US4] Implement merge conflict detector via GitHub API in internal/services/merge_conflict_detector.go
+- [ ] T111 [US4] Create auto-merge service with merge API call in internal/services/auto_merge.go
+- [ ] T112 [US4] Implement webhook handler for status events (CI completion) in internal/webhooks/handlers/status.go
+- [ ] T113 [US4] Add merge condition re-evaluation on Codex approval comment in internal/webhooks/handlers/pr_review_comment.go
+- [ ] T114 [US4] Add merge condition re-evaluation on CI success in internal/webhooks/handlers/check_suite.go
+- [ ] T115 [US4] Implement merge failure handling and notification in internal/services/auto_merge.go
+- [ ] T116 [US4] Add GitHub status comment for merge success/failure in internal/services/github_notification.go
+- [ ] T117 [US4] Add Discord notification for merge events in internal/services/discord_notification.go
 
 ### Tests for User Story 4 (Test-First Development)
 
-- [ ] T101 [P] [US4] Write unit tests for MergeConditionChecker (DoD validation)
-- [ ] T102 [P] [US4] Write unit tests for AutoMergeService (GitHub merge API call)
-- [ ] T103 [US4] Write integration test for approve + CI success → auto-merge flow
+- [ ] T118 [P] [US4] Write unit tests for MergeConditionChecker (DoD validation)
+- [ ] T119 [P] [US4] Write unit tests for AutoMergeService (GitHub merge API call)
+- [ ] T120 [US4] Write integration test for approve + CI success → auto-merge flow
 
 **Checkpoint**: All user stories 1-4 should now be independently functional - complete automation from comment to merge
 
@@ -228,22 +248,22 @@
 
 ### Implementation for User Story 5
 
-- [ ] T104 [P] [US5] Implement Issue blocker parser ("blocked by" / "blocking" syntax) in internal/services/issue_blocker_parser.go
-- [ ] T105 [P] [US5] Create directed graph data structure for dependencies in internal/utils/dependency_graph.go
-- [ ] T106 [US5] Implement blocker graph builder from Issue metadata in internal/services/blocker_graph.go
-- [ ] T107 [US5] Create circular dependency detector with cycle detection algorithm in internal/services/circular_dependency_detector.go
-- [ ] T108 [US5] Implement webhook handler for issues events (closed/reopened) in internal/webhooks/handlers/issues.go
-- [ ] T109 [US5] Create blocked task resolver finding unblocked tasks in internal/services/blocked_task.go
-- [ ] T110 [US5] Implement dependency validation preventing out-of-order execution in internal/services/dependency_validator.go
-- [ ] T111 [US5] Implement automatic K8s Job trigger for unblocked tasks in internal/services/blocked_task.go
-- [ ] T112 [US5] Add GitHub status comment for dependency violations in internal/services/github_notification.go
-- [ ] T113 [US5] Add logging for blocker graph updates and task resumption in internal/services/blocked_task.go
+- [ ] T121 [P] [US5] Implement Issue blocker parser ("blocked by" / "blocking" syntax) in internal/services/issue_blocker_parser.go
+- [ ] T122 [P] [US5] Create directed graph data structure for dependencies in internal/utils/dependency_graph.go
+- [ ] T123 [US5] Implement blocker graph builder from Issue metadata in internal/services/blocker_graph.go
+- [ ] T124 [US5] Create circular dependency detector with cycle detection algorithm in internal/services/circular_dependency_detector.go
+- [ ] T125 [US5] Implement webhook handler for issues events (closed/reopened) in internal/webhooks/handlers/issues.go
+- [ ] T126 [US5] Create blocked task resolver finding unblocked tasks in internal/services/blocked_task.go
+- [ ] T127 [US5] Implement dependency validation preventing out-of-order execution in internal/services/dependency_validator.go
+- [ ] T128 [US5] Implement automatic K8s Job trigger for unblocked tasks in internal/services/blocked_task.go
+- [ ] T129 [US5] Add GitHub status comment for dependency violations in internal/services/github_notification.go
+- [ ] T130 [US5] Add logging for blocker graph updates and task resumption in internal/services/blocked_task.go
 
 ### Tests for User Story 5 (Test-First Development)
 
-- [ ] T114 [P] [US5] Write unit tests for IssueBlockerParser (dependency parsing)
-- [ ] T115 [P] [US5] Write unit tests for CircularDependencyDetector (cycle detection)
-- [ ] T116 [US5] Write integration test for Issue close → unblock → auto-trigger flow
+- [ ] T131 [P] [US5] Write unit tests for IssueBlockerParser (dependency parsing)
+- [ ] T132 [P] [US5] Write unit tests for CircularDependencyDetector (cycle detection)
+- [ ] T133 [US5] Write integration test for Issue close → unblock → auto-trigger flow
 
 **Checkpoint**: All user stories should now be independently functional - complete system with dependency management
 
@@ -253,20 +273,20 @@
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T117 [P] Add comprehensive error messages and user-facing error codes in internal/utils/error_codes.go
-- [ ] T118 [P] Implement rate limiting for GitHub API calls in internal/clients/github.go
-- [ ] T119 [P] Add metrics collection for execution times and success rates in internal/services/metrics.go
-- [ ] T120 [P] Create health check endpoint for webhook server in internal/webhooks/server.go
-- [ ] T121 [P] Add environment variable validation on startup in internal/config/env.go
-- [ ] T122 [P] Implement graceful shutdown handler in internal/webhooks/server.go
-- [ ] T123 [P] Add/optimize SQL indexes via goose migrations in `migrations/*.sql`
-- [ ] T124 [P] Create README.md with setup and deployment instructions
-- [ ] T125 [P] Document API client configurations in docs/api-clients.md
-- [ ] T126 [P] Add inline code documentation with Go doc comments
-- [ ] T127 Run quickstart.md validation checklist
-- [ ] T128 Perform security audit for secret handling and authorization
-- [ ] T129 [P] Add performance optimization for blocker graph queries with SQL indexes (goose)
-- [ ] T130 [P] Implement caching for GitHub API responses where appropriate
+- [ ] T134 [P] Add comprehensive error messages and user-facing error codes in internal/utils/error_codes.go
+- [ ] T135 [P] Implement rate limiting for GitHub API calls in internal/clients/github.go
+- [ ] T136 [P] Add metrics collection for execution times and success rates in internal/services/metrics.go
+- [ ] T137 [P] Create health check endpoint for webhook server in internal/webhooks/server.go
+- [ ] T138 [P] Add environment variable validation on startup in internal/config/env.go
+- [ ] T139 [P] Implement graceful shutdown handler in internal/webhooks/server.go
+- [ ] T140 [P] Add/optimize SQL indexes via goose migrations in `migrations/*.sql`
+- [ ] T141 [P] Create README.md with setup and deployment instructions
+- [ ] T142 [P] Document API client configurations in docs/api-clients.md
+- [ ] T143 [P] Add inline code documentation with Go doc comments
+- [ ] T144 Run quickstart.md validation checklist
+- [ ] T145 Perform security audit for secret handling and authorization
+- [ ] T146 [P] Add performance optimization for blocker graph queries with SQL indexes (goose)
+- [ ] T147 [P] Implement caching for GitHub API responses where appropriate
 
 ---
 
@@ -326,10 +346,10 @@
 - T060, T061 can run in parallel
 
 **User Story 5 (Phase 7):**
-- T070, T071 can run in parallel
+- T104, T105 can run in parallel
 
 **Polish Phase (Phase 8):**
-- Almost all tasks marked [P] can run in parallel (T081-T090, T093-T094)
+- Almost all tasks marked [P] can run in parallel (T081-T107, T110-T111)
 
 **Once Foundational phase completes:**
 - US1 can start immediately
@@ -409,23 +429,23 @@ With multiple developers after Foundational phase:
 
 - SC-001 (2min to start): US1 webhook processing + K8s Job creation (T053, T055)
 - SC-002 (15min to PR): agent-runner execution in Pod (T030-T048)
-- SC-003 (10min retry): US3 feedback loop + K8s Job re-creation (T079-T081)
+- SC-003 (10min retry): US3 feedback loop + K8s Job re-creation (T113-T081)
 - SC-004 (no duplicates): Idempotency middleware (T024)
-- SC-005 (5min unblock): US5 blocker resolution (T109-T111)
-- SC-006 (5min CI retry): US3 check_suite handler (T077-T078)
-- SC-007 (2min merge): US4 auto-merge (T094)
+- SC-005 (5min unblock): US5 blocker resolution (T126-T128)
+- SC-006 (5min CI retry): US3 check_suite handler (T111-T112)
+- SC-007 (2min merge): US4 auto-merge (T111)
 - SC-008 (immediate notification): US3 failure notifications (T083-T084)
-- SC-009 (DoD conditions): US4 merge checker (T091)
+- SC-009 (DoD conditions): US4 merge checker (T108)
 
 ### Edge Cases Addressed
 
 - Duplicate webhooks: T024 idempotency middleware
-- Review response missing: T079 retry orchestrator with timeout
-- Merge conflicts: T093 conflict detector blocks auto-merge
+- Review response missing: T113 retry orchestrator with timeout
+- Merge conflicts: T110 conflict detector blocks auto-merge
 - Unlimited concurrency: No locking (運用側考慮 per FR-012)
-- Circular dependencies: T107 cycle detector prevents deadlock
-- Rate limits: T118 rate limiting for GitHub API
-- Database queries: T123, T129 optimize with SQL indexes (goose)
+- Circular dependencies: T124 cycle detector prevents deadlock
+- Rate limits: T135 rate limiting for GitHub API
+- Database queries: T140, T146 optimize with SQL indexes (goose)
 - Operator API unreachable: agent-runner exponential backoff retry (T038, T047)
 
 ### GORM Model Highlights
@@ -446,30 +466,34 @@ type BlockerGraphEdge struct {
 
 ---
 
-**Total Tasks**: 130 tasks organized across 8 phases
+**Total Tasks**: 147 tasks organized across 8 phases
 
 **Breakdown**:
 - Phase 1 (Setup): 7 tasks
-- Phase 2 (Foundational): 41 tasks (includes agent-runner + Operator API)
-- Phase 3 (US1): 15 tasks
-- Phase 4 (US2): 9 tasks
-- Phase 5 (US3): 18 tasks
-- Phase 6 (US4): 13 tasks
-- Phase 7 (US5): 13 tasks
-- Phase 8 (Polish): 14 tasks
+- Phase 2 (Foundational): 58 tasks (includes agent-runner + Operator API + S3 session persistence)
+  - Agent Runner: 24 tasks (T025-T048)
+  - S3 Session Persistence: 17 tasks (T049_S3-T065_S3)
+  - Operator API: 17 tasks (T025-T024, foundational services)
+- Phase 3 (US1): 15 tasks (T066-T080)
+- Phase 4 (US2): 9 tasks (T081-T089)
+- Phase 5 (US3): 18 tasks (T090-T107)
+- Phase 6 (US4): 13 tasks (T108-T120)
+- Phase 7 (US5): 13 tasks (T121-T133)
+- Phase 8 (Polish): 14 tasks (T134-T147)
 
-**Critical Path**: Phase 1 → Phase 2 (with agent-runner) → US1 → US2 → US3 → US4
+**Critical Path**: Phase 1 → Phase 2 (with agent-runner + S3) → US1 → US2 → US3 → US4
 
-**MVP Scope**: Phase 1 + Phase 2 + US1 + US2 = **72 tasks** for basic K8s Pod-based automation
+**MVP Scope**: Phase 1 + Phase 2 + US1 + US2 = **89 tasks** for K8s Pod-based automation with session persistence
 
 **Suggested First Delivery**:
-1. Complete Phase 1-2 (Foundation with agent-runner): 48 tasks
+1. Complete Phase 1-2 (Foundation with agent-runner + S3): 65 tasks
 2. Add US1 (Trigger): 15 tasks
 3. Add US2 (PR Creation): 9 tasks
-4. **Stop and validate**: End-to-end flow from GitHub comment → K8s Pod → PR creation
+4. **Stop and validate**: End-to-end flow from GitHub comment → K8s Pod → PR creation with session persistence
 
 **Technology Stack**:
 - Operator: Go 1.22 + Gin + GORM + client-go
-- agent-runner: Go 1.22 + cobra CLI + Kubernetes Pod runtime
+- agent-runner: Go 1.22 + cobra CLI + AWS SDK Go v2 (S3) + Kubernetes Pod runtime
+- Storage: MinIO (S3-compatible) for AI agent session persistence
 - Database: MySQL 8.0+ with goose migrations
 - Testing: Go testing + testify (unit + integration + contract tests)
