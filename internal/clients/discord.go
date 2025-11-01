@@ -65,13 +65,7 @@ type DiscordClient struct {
 // NewDiscordClient creates a new Discord webhook client
 // If webhookURL is empty, it attempts to load from DISCORD_WEBHOOK_URL environment variable
 // Returns nil if webhook URL is not available (non-blocking, logs warning)
-// If logger is nil, defaults to zap.NewNop() to prevent nil pointer dereference
 func NewDiscordClient(webhookURL string, logger *zap.Logger) *DiscordClient {
-	// Default to no-op logger if nil to prevent nil pointer dereference
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-
 	// If webhookURL is not provided, try to get from environment
 	if webhookURL == "" {
 		webhookURL = config.GetEnv("DISCORD_WEBHOOK_URL", "")
@@ -79,8 +73,15 @@ func NewDiscordClient(webhookURL string, logger *zap.Logger) *DiscordClient {
 
 	// If still empty, log warning and return nil
 	if webhookURL == "" {
-		logger.Warn("Discord webhook URL is not configured. Discord notifications will be disabled.")
+		if logger != nil {
+			logger.Warn("Discord webhook URL is not configured. Discord notifications will be disabled.")
+		}
 		return nil
+	}
+
+	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	if logger == nil {
+		logger = zap.NewNop()
 	}
 
 	return &DiscordClient{
