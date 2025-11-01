@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
+	"strings"
 
 	appconfig "agentic-automation/internal/config"
 	"go.uber.org/zap"
@@ -41,6 +43,52 @@ type KubernetesClient struct {
 	logger    *zap.Logger
 }
 
+const (
+	// ServiceAccountNamespaceFile is the path to the namespace file in a Pod
+	ServiceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+)
+
+// getNamespace determines the Kubernetes namespace to use
+// Priority:
+// 1. KUBERNETES_NAMESPACE environment variable (if explicitly set)
+// 2. Service account namespace file (when running in-cluster)
+// 3. "default" (fallback)
+func getNamespace(logger *zap.Logger) string {
+	// 1. Check environment variable first
+	if ns := os.Getenv("KUBERNETES_NAMESPACE"); ns != "" {
+		logger.Info("Using namespace from environment variable",
+			zap.String("namespace", ns),
+		)
+		return ns
+	}
+
+	// 2. Try to read from service account namespace file (in-cluster)
+	nsBytes, err := os.ReadFile(ServiceAccountNamespaceFile)
+	if err == nil {
+		ns := strings.TrimSpace(string(nsBytes))
+		if ns != "" {
+			logger.Info("Using namespace from service account file",
+				zap.String("namespace", ns),
+				zap.String("file", ServiceAccountNamespaceFile),
+			)
+			return ns
+		}
+		logger.Warn("Service account namespace file is empty",
+			zap.String("file", ServiceAccountNamespaceFile),
+		)
+	} else if !os.IsNotExist(err) {
+		// Log error only if it's not "file not found" (which is expected when using kubeconfig)
+		logger.Warn("Failed to read service account namespace file",
+			zap.String("file", ServiceAccountNamespaceFile),
+			zap.Error(err),
+		)
+	}
+
+	// 3. Fallback to default
+	logger.Info("Using default namespace (no explicit namespace configured)")
+	return "default"
+}
+
 // NewKubernetesClient creates a new Kubernetes client
 // It supports both in-cluster config (when running in a Pod) and kubeconfig file
 func NewKubernetesClient(logger *zap.Logger) (*KubernetesClient, error) {
@@ -69,7 +117,7 @@ func NewKubernetesClient(logger *zap.Logger) (*KubernetesClient, error) {
 		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
 
-	namespace := appconfig.GetEnv("KUBERNETES_NAMESPACE", "default")
+	namespace := getNamespace(logger)
 
 	return &KubernetesClient{
 		clientset: clientset,
