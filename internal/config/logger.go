@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"os"
 
 	"go.uber.org/zap"
@@ -9,6 +10,18 @@ import (
 
 // Logger is the global logger instance
 var Logger *zap.Logger
+
+// contextKey is a type for context keys to avoid collisions
+type contextKey string
+
+const (
+	// githubEventIDKey is the context key for GitHub event ID (X-GitHub-Delivery)
+	githubEventIDKey contextKey = "github_event_id"
+	// agentRunIDKey is the context key for agent run ID
+	agentRunIDKey contextKey = "agent_run_id"
+	// operationIDKey is the context key for operation ID
+	operationIDKey contextKey = "operation_id"
+)
 
 // InitLogger initializes the global logger with configuration from environment variables
 func InitLogger() error {
@@ -59,4 +72,73 @@ func GetLogger() *zap.Logger {
 		return logger
 	}
 	return Logger
+}
+
+// ContextWithTraceIDs creates a context with trace IDs attached.
+// Empty strings are ignored, allowing partial trace ID assignment.
+// This function can be called multiple times to add additional trace IDs.
+func ContextWithTraceIDs(ctx context.Context, githubEventID, agentRunID, operationID string) context.Context {
+	if githubEventID != "" {
+		ctx = context.WithValue(ctx, githubEventIDKey, githubEventID)
+	}
+	if agentRunID != "" {
+		ctx = context.WithValue(ctx, agentRunIDKey, agentRunID)
+	}
+	if operationID != "" {
+		ctx = context.WithValue(ctx, operationIDKey, operationID)
+	}
+	return ctx
+}
+
+// LoggerWithTraceIDs returns a logger with trace IDs extracted from the context.
+// Extracts github_event_id, agent_run_id, and operation_id from context if present.
+// Returns a logger with trace ID fields attached, or the base logger if no trace IDs are found.
+func LoggerWithTraceIDs(ctx context.Context) *zap.Logger {
+	logger := GetLogger()
+	var fields []zap.Field
+
+	if githubEventID := ctx.Value(githubEventIDKey); githubEventID != nil {
+		if id, ok := githubEventID.(string); ok && id != "" {
+			fields = append(fields, zap.String("github_event_id", id))
+		}
+	}
+
+	if agentRunID := ctx.Value(agentRunIDKey); agentRunID != nil {
+		if id, ok := agentRunID.(string); ok && id != "" {
+			fields = append(fields, zap.String("agent_run_id", id))
+		}
+	}
+
+	if operationID := ctx.Value(operationIDKey); operationID != nil {
+		if id, ok := operationID.(string); ok && id != "" {
+			fields = append(fields, zap.String("operation_id", id))
+		}
+	}
+
+	if len(fields) > 0 {
+		return logger.With(fields...)
+	}
+	return logger
+}
+
+// WithTraceIDs adds trace IDs to a logger instance.
+// Convenient wrapper for logger.With() with trace ID fields.
+// Empty strings are ignored.
+func WithTraceIDs(logger *zap.Logger, githubEventID, agentRunID, operationID string) *zap.Logger {
+	var fields []zap.Field
+
+	if githubEventID != "" {
+		fields = append(fields, zap.String("github_event_id", githubEventID))
+	}
+	if agentRunID != "" {
+		fields = append(fields, zap.String("agent_run_id", agentRunID))
+	}
+	if operationID != "" {
+		fields = append(fields, zap.String("operation_id", operationID))
+	}
+
+	if len(fields) > 0 {
+		return logger.With(fields...)
+	}
+	return logger
 }
