@@ -302,7 +302,6 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 	cpuLimit := appconfig.GetEnv("AGENT_RUNNER_CPU_LIMIT", "2000m")
 
 	jobSpec := &batchv1.JobSpec{
-		ActiveDeadlineSeconds: int64Ptr(int64(config.TimeoutMinutes * 60)),
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: map[string]string{
@@ -335,6 +334,12 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 				},
 			},
 		},
+	}
+
+	// Only set ActiveDeadlineSeconds if TimeoutMinutes is positive
+	// Kubernetes API validates this field as strictly positive integer
+	if config.TimeoutMinutes > 0 {
+		jobSpec.ActiveDeadlineSeconds = int64Ptr(int64(config.TimeoutMinutes * 60))
 	}
 
 	return jobSpec
