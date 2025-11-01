@@ -74,6 +74,18 @@ func GetLogger() *zap.Logger {
 	return Logger
 }
 
+// SetLoggerForTesting sets the logger instance for testing purposes only
+// This function should only be used in test files
+func SetLoggerForTesting(testLogger *zap.Logger) {
+	Logger = testLogger
+}
+
+// ResetLoggerForTesting resets the logger instance to nil for testing purposes only
+// This function should only be used in test files
+func ResetLoggerForTesting() {
+	Logger = nil
+}
+
 // ContextWithTraceIDs creates a context with trace IDs attached.
 // Empty strings are ignored, allowing partial trace ID assignment.
 // This function can be called multiple times to add additional trace IDs.
