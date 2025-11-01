@@ -32,18 +32,25 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	// Create error channel for startup failures
+	errChan := make(chan error, 1)
+
 	// Start server in a goroutine
 	go func() {
 		if err := server.Start(); err != nil {
-			logger.Error("Server error", zap.Error(err))
+			errChan <- err
 		}
 	}()
 
-	logger.Info("Webhook server started. Press Ctrl+C to stop.")
+	logger.Info("Webhook server starting. Press Ctrl+C to stop.")
 
-	// Wait for interrupt signal
-	<-sigChan
-	logger.Info("Shutdown signal received")
+	// Wait for interrupt signal or startup error
+	select {
+	case sig := <-sigChan:
+		logger.Info("Shutdown signal received", zap.String("signal", sig.String()))
+	case err := <-errChan:
+		logger.Fatal("Server failed to start", zap.Error(err))
+	}
 
 	// Create context with timeout for graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
