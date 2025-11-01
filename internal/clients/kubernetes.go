@@ -133,24 +133,45 @@ func getNamespace(kubeConfigPath string, logger *zap.Logger) string {
 
 // NewKubernetesClient creates a new Kubernetes client
 // It supports both in-cluster config (when running in a Pod) and kubeconfig file
+// Priority order:
+// 1. KUBE_CONFIG_PATH environment variable (explicit custom path)
+// 2. KUBECONFIG environment variable or ~/.kube/config (standard kubeconfig)
+// 3. rest.InClusterConfig() (when running inside a Pod)
 func NewKubernetesClient(logger *zap.Logger) (*KubernetesClient, error) {
 	var err error
-
-	// Check if KUBE_CONFIG_PATH is set (for local development)
-	kubeConfigPath := appconfig.GetEnv("KUBE_CONFIG_PATH", "")
 	var k8sConfig *rest.Config
+	var kubeConfigPath string
+
+	// 1. Check if KUBE_CONFIG_PATH is set (explicit custom path)
+	kubeConfigPath = appconfig.GetEnv("KUBE_CONFIG_PATH", "")
 	if kubeConfigPath != "" {
-		logger.Info("Using kubeconfig file", zap.String("path", kubeConfigPath))
+		logger.Info("Using kubeconfig from KUBE_CONFIG_PATH", zap.String("path", kubeConfigPath))
 		k8sConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfigPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build config from kubeconfig: %w", err)
+			return nil, fmt.Errorf("failed to build config from kubeconfig path: %w", err)
 		}
 	} else {
-		// Use in-cluster config (when running inside a Pod)
-		logger.Info("Using in-cluster config")
-		k8sConfig, err = rest.InClusterConfig()
+		// 2. Try to use default kubeconfig loading rules (KUBECONFIG env var or ~/.kube/config)
+		// BuildConfigFromFlags with empty strings uses default loading rules
+		logger.Info("Attempting to load default kubeconfig")
+		k8sConfig, err = clientcmd.BuildConfigFromFlags("", "")
 		if err != nil {
-			return nil, fmt.Errorf("failed to get in-cluster config: %w", err)
+			// 3. Fall back to in-cluster config if kubeconfig is not available
+			logger.Info("Kubeconfig not available, attempting in-cluster config")
+			k8sConfig, err = rest.InClusterConfig()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get kubeconfig or in-cluster config: %w", err)
+			}
+			logger.Info("Using in-cluster config")
+		} else {
+			// Determine which kubeconfig was actually used
+			loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+			actualPath := loadingRules.GetDefaultFilename()
+			if envKubeconfig := os.Getenv("KUBECONFIG"); envKubeconfig != "" {
+				actualPath = envKubeconfig
+			}
+			logger.Info("Using kubeconfig", zap.String("path", actualPath))
+			kubeConfigPath = actualPath
 		}
 	}
 
