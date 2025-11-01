@@ -168,17 +168,17 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Failed to load manifest: %v", err))
 	}
 
-	// 4. Execute pre-hooks
-	if manifest != nil {
-		if err := hooks.RunPreHooks(manifest.Hooks.Pre, workDir); err != nil {
-			return reporter.ReportFailure(cfg, fmt.Sprintf("Pre-hook failed: %v", err))
-		}
-	}
-
-	// 5. Restore session from S3 (if retry)
+	// 4. Restore session from S3 (if retry) - MUST run before pre-hooks
 	if cfg.RetryCount > 0 {
 		if err := storage.RestoreSession(cfg.AgentRunID, cfg.RetryCount); err != nil {
 			return reporter.ReportFailure(cfg, fmt.Sprintf("Session restore failed: %v", err))
+		}
+	}
+
+	// 5. Execute pre-hooks (after session restore to apply to correct workspace)
+	if manifest != nil {
+		if err := hooks.RunPreHooks(manifest.Hooks.Pre, workDir); err != nil {
+			return reporter.ReportFailure(cfg, fmt.Sprintf("Pre-hook failed: %v", err))
 		}
 	}
 

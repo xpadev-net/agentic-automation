@@ -311,6 +311,12 @@ hooks:
       description: "Install npm dependencies"
       timeout: "5m"
       required: true
+  post:
+    - name: "notify-discord"
+      command: "curl -X POST $DISCORD_WEBHOOK_URL -H 'Content-Type: application/json' -d '{\"content\": \"PR created for issue #$ISSUE_NUMBER\"}'"
+      description: "Send Discord notification"
+      timeout: "30s"
+      required: false
 
 validation:
   - name: "lint"
@@ -330,14 +336,6 @@ validation:
     description: "Run test suite"
     timeout: "10m"
     required: false  # Optional - AI can fix test failures
-
-hooks:
-  post:
-    - name: "notify-discord"
-      command: "curl -X POST $DISCORD_WEBHOOK_URL -H 'Content-Type: application/json' -d '{\"content\": \"PR created for issue #$ISSUE_NUMBER\"}'"
-      description: "Send Discord notification"
-      timeout: "30s"
-      required: false
 ```
 
 **Example for Go Project**:
@@ -352,13 +350,14 @@ hooks:
       description: "Download Go modules"
       timeout: "3m"
       required: true
+  post: []
 
 validation:
   - name: "fmt-check"
-      command: "test -z $(gofmt -l .)"
-      description: "Check Go formatting"
-      timeout: "1m"
-      required: true
+    command: "test -z $(gofmt -l .)"
+    description: "Check Go formatting"
+    timeout: "1m"
+    required: true
 
   - name: "vet"
     command: "go vet ./..."
@@ -371,9 +370,6 @@ validation:
     description: "Compile packages"
     timeout: "5m"
     required: true
-
-hooks:
-  post: []
 ```
 
 **Behavior**:

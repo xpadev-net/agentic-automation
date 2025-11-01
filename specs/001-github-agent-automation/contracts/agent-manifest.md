@@ -181,6 +181,12 @@ hooks:
       description: "Install npm dependencies using package-lock.json"
       timeout: "5m"
       required: true
+  post:
+    - name: "notify-discord"
+      command: "curl -X POST $DISCORD_WEBHOOK_URL -H 'Content-Type: application/json' -d '{\"content\": \"PR created for issue #$ISSUE_NUMBER\"}'"
+      description: "Send Discord notification"
+      timeout: "30s"
+      required: false
 
 validation:
   - name: "lint"
@@ -200,14 +206,6 @@ validation:
     description: "Run test suite"
     timeout: "10m"
     required: false
-
-hooks:
-  post:
-    - name: "notify-discord"
-      command: "curl -X POST $DISCORD_WEBHOOK_URL -H 'Content-Type: application/json' -d '{\"content\": \"PR created for issue #$ISSUE_NUMBER\"}'"
-      description: "Send Discord notification"
-      timeout: "30s"
-      required: false
 ```
 
 ### Example 2: Go Project
@@ -222,6 +220,7 @@ hooks:
       description: "Download Go module dependencies"
       timeout: "3m"
       required: true
+  post: []
 
 validation:
   - name: "fmt-check"
@@ -241,9 +240,6 @@ validation:
     description: "Compile all packages"
     timeout: "5m"
     required: true
-
-hooks:
-  post: []
 ```
 
 ### Example 3: Python Project
@@ -258,6 +254,7 @@ hooks:
       description: "Install Python dependencies"
       timeout: "5m"
       required: true
+  post: []
 
 validation:
   - name: "black"
@@ -277,9 +274,6 @@ validation:
     description: "Run pytest test suite"
     timeout: "10m"
     required: false
-
-hooks:
-  post: []
 ```
 
 ## Execution Flow
