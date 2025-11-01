@@ -1,0 +1,85 @@
+package agent
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+)
+
+// Executor executes AI agents (claude-code or cursor-agents).
+type Executor struct {
+	agentType string
+}
+
+// NewExecutor creates a new agent executor for the specified agent type.
+// Valid agent types are "claude-code" and "cursor-agents".
+func NewExecutor(agentType string) *Executor {
+	return &Executor{agentType: agentType}
+}
+
+// Execute runs the configured agent with the given prompt in the specified working directory.
+// It returns the combined output (stdout + stderr) and any error that occurred during execution.
+func (e *Executor) Execute(workDir, prompt string) (string, error) {
+	switch e.agentType {
+	case "claude-code":
+		return e.executeClaudeCode(workDir, prompt)
+	case "cursor-agents":
+		return e.executeCursor(workDir, prompt)
+	default:
+		return "", fmt.Errorf("unknown agent type: %s", e.agentType)
+	}
+}
+
+// executeClaudeCode executes the claude-code agent.
+func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
+	// Check if ANTHROPIC_API_KEY is set
+	if os.Getenv("ANTHROPIC_API_KEY") == "" {
+		return "", fmt.Errorf("ANTHROPIC_API_KEY environment variable is not set")
+	}
+
+	// Build command: claude-code -p "<prompt>"
+	// Additional flags for workspace and non-interactive mode may be needed
+	cmd := exec.Command("claude-code", "-p", prompt)
+	cmd.Dir = workDir
+
+	// Preserve existing environment and ensure ANTHROPIC_API_KEY is set
+	cmd.Env = os.Environ()
+
+	// Execute and capture combined output (stdout + stderr)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	// If command execution failed, wrap the error with output context
+	if err != nil {
+		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput: %s", err, outputStr)
+	}
+
+	return outputStr, nil
+}
+
+// executeCursor executes the cursor-agents agent.
+func (e *Executor) executeCursor(workDir, prompt string) (string, error) {
+	// Check if CURSOR_API_KEY is set
+	if os.Getenv("CURSOR_API_KEY") == "" {
+		return "", fmt.Errorf("CURSOR_API_KEY environment variable is not set")
+	}
+
+	// Build command: cursor agent -p "<prompt>"
+	// Additional flags for working directory and headless mode may be needed
+	cmd := exec.Command("cursor", "agent", "-p", prompt)
+	cmd.Dir = workDir
+
+	// Preserve existing environment and ensure CURSOR_API_KEY is set
+	cmd.Env = os.Environ()
+
+	// Execute and capture combined output (stdout + stderr)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	// If command execution failed, wrap the error with output context
+	if err != nil {
+		return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput: %s", err, outputStr)
+	}
+
+	return outputStr, nil
+}
