@@ -9,8 +9,8 @@ RUN go build -o agent-runner main.go
 # Stage 2: Runtime image with Node.js and agent CLIs
 FROM node:22-alpine
 
-# Install git (required for git operations)
-RUN apk add --no-cache git
+# Install git and curl (required for git operations and Cursor CLI installation)
+RUN apk add --no-cache git curl
 
 # Install Claude Code CLI
 RUN npm install -g @anthropic/claude-code
