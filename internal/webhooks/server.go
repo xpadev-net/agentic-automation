@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/webhooks/handlers"
 	"agentic-automation/internal/webhooks/middleware"
 	"context"
 	"net/http"
@@ -45,6 +46,11 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 		middleware.VerifyWebhookSignature(),
 		middleware.IdempotencyMiddleware(),
 		handleGitHubWebhook)
+
+	// APIルート (Bearer認証)
+	router.POST("/api/agent-runs/:id/report",
+		middleware.VerifyBearerToken(),
+		handlers.HandleAgentReport)
 
 	return router
 }
