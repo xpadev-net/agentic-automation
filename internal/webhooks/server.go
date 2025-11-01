@@ -1,0 +1,142 @@
+package webhooks
+
+import (
+	"agentic-automation/internal/config"
+	"agentic-automation/internal/webhooks/middleware"
+	"context"
+	"net/http"
+	"os"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+)
+
+const (
+	eventHeader    = "X-GitHub-Event"
+	deliveryHeader = "X-GitHub-Delivery"
+	webhookPath    = "/webhooks/github"
+)
+
+// Server represents the webhook server
+type Server struct {
+	router *gin.Engine
+	logger *zap.Logger
+	server *http.Server
+}
+
+// setupRouter creates and configures the Gin router
+func setupRouter(logger *zap.Logger) *gin.Engine {
+	// Set Gin mode based on environment
+	env := config.GetEnv("ENV", "development")
+	if env == "production" {
+		gin.SetMode(gin.ReleaseMode)
+	} else {
+		gin.SetMode(gin.DebugMode)
+	}
+
+	// Create router
+	var router *gin.Engine
+	if env == "production" {
+		router = gin.New()
+		// Add recovery middleware for production
+		router.Use(gin.Recovery())
+	} else {
+		router = gin.Default()
+	}
+
+	// Apply signature verification middleware to webhook endpoint
+	router.POST(webhookPath, middleware.VerifyWebhookSignature(), handleGitHubWebhook)
+
+	return router
+}
+
+// handleGitHubWebhook is the handler for GitHub webhook events
+// This is a temporary implementation that logs the event and delivery ID.
+// It will be replaced by proper handlers in subsequent tasks.
+func handleGitHubWebhook(c *gin.Context) {
+	logger := config.GetLogger()
+
+	// Get headers
+	eventType := c.GetHeader(eventHeader)
+	deliveryID := c.GetHeader(deliveryHeader)
+
+	// Get payload from context (set by signature middleware)
+	payload, exists := c.Get("webhook_payload")
+	if !exists {
+		// If payload is not in context, try to read from request body
+		body, err := c.GetRawData()
+		if err != nil {
+			logger.Error("Failed to read webhook payload", zap.Error(err))
+			c.JSON(500, gin.H{"error": "failed to read payload"})
+			return
+		}
+		payload = body
+	}
+
+	// Log the webhook event
+	logger.Info("Received GitHub webhook",
+		zap.String("event_type", eventType),
+		zap.String("delivery_id", deliveryID),
+		zap.Int("payload_size", len(payload.([]byte))),
+	)
+
+	// Return 200 OK to acknowledge receipt
+	c.JSON(200, gin.H{
+		"status":      "received",
+		"event":       eventType,
+		"delivery_id": deliveryID,
+	})
+}
+
+// NewServer creates a new webhook server instance
+func NewServer() (*Server, error) {
+	logger := config.GetLogger()
+
+	// Get port from environment (default: 3000)
+	port := config.GetEnv("PORT", "3000")
+
+	// Setup router
+	router := setupRouter(logger)
+
+	// Create HTTP server
+	httpServer := &http.Server{
+		Addr:    ":" + port,
+		Handler: router,
+	}
+
+	return &Server{
+		router: router,
+		logger: logger,
+		server: httpServer,
+	}, nil
+}
+
+// Start starts the webhook server
+func (s *Server) Start() error {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3000"
+	}
+
+	s.logger.Info("Starting webhook server", zap.String("port", port))
+
+	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		s.logger.Error("Failed to start server", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
+// Shutdown gracefully shuts down the webhook server
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.logger.Info("Shutting down webhook server")
+
+	if err := s.server.Shutdown(ctx); err != nil {
+		s.logger.Error("Error during server shutdown", zap.Error(err))
+		return err
+	}
+
+	s.logger.Info("Webhook server stopped")
+	return nil
+}
