@@ -48,12 +48,46 @@ const (
 	ServiceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 )
 
+// getNamespaceFromKubeconfig reads the namespace from kubeconfig's current context
+func getNamespaceFromKubeconfig(kubeConfigPath string, logger *zap.Logger) string {
+	// Use default loading rules if path is empty
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeConfigPath != "" {
+		loadingRules.ExplicitPath = kubeConfigPath
+	}
+
+	config := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		loadingRules,
+		&clientcmd.ConfigOverrides{},
+	)
+
+	ns, _, err := config.Namespace()
+	if err != nil {
+		logger.Debug("Failed to read namespace from kubeconfig",
+			zap.String("path", kubeConfigPath),
+			zap.Error(err),
+		)
+		return ""
+	}
+
+	if ns != "" {
+		logger.Info("Using namespace from kubeconfig",
+			zap.String("namespace", ns),
+			zap.String("path", kubeConfigPath),
+		)
+		return ns
+	}
+
+	return ""
+}
+
 // getNamespace determines the Kubernetes namespace to use
 // Priority:
 // 1. KUBERNETES_NAMESPACE environment variable (if explicitly set)
-// 2. Service account namespace file (when running in-cluster)
-// 3. "default" (fallback)
-func getNamespace(logger *zap.Logger) string {
+// 2. kubeconfig's current context namespace (when using kubeconfig)
+// 3. Service account namespace file (when running in-cluster)
+// 4. "default" (fallback)
+func getNamespace(kubeConfigPath string, logger *zap.Logger) string {
 	// 1. Check environment variable first
 	if ns := os.Getenv("KUBERNETES_NAMESPACE"); ns != "" {
 		logger.Info("Using namespace from environment variable",
@@ -62,7 +96,15 @@ func getNamespace(logger *zap.Logger) string {
 		return ns
 	}
 
-	// 2. Try to read from service account namespace file (in-cluster)
+	// 2. Try to read from kubeconfig (when using kubeconfig)
+	if kubeConfigPath != "" || os.Getenv("KUBECONFIG") != "" {
+		ns := getNamespaceFromKubeconfig(kubeConfigPath, logger)
+		if ns != "" {
+			return ns
+		}
+	}
+
+	// 3. Try to read from service account namespace file (in-cluster)
 	nsBytes, err := os.ReadFile(ServiceAccountNamespaceFile)
 	if err == nil {
 		ns := strings.TrimSpace(string(nsBytes))
@@ -84,7 +126,7 @@ func getNamespace(logger *zap.Logger) string {
 		)
 	}
 
-	// 3. Fallback to default
+	// 4. Fallback to default
 	logger.Info("Using default namespace (no explicit namespace configured)")
 	return "default"
 }
@@ -117,7 +159,7 @@ func NewKubernetesClient(logger *zap.Logger) (*KubernetesClient, error) {
 		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
 
-	namespace := getNamespace(logger)
+	namespace := getNamespace(kubeConfigPath, logger)
 
 	return &KubernetesClient{
 		clientset: clientset,
