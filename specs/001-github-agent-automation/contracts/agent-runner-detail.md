@@ -161,6 +161,13 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Git clone failed: %v", err))
 	}
 
+	// 2.5. Restore session from S3 (if retry)
+	if cfg.RetryCount > 0 {
+		if err := storage.RestoreSession(cfg.AgentRunID, cfg.RetryCount); err != nil {
+			return reporter.ReportFailure(cfg, fmt.Sprintf("Session restore failed: %v", err))
+		}
+	}
+
 	// 3. Create feature branch
 	branchName := fmt.Sprintf("feature/issue-%d", issueID)
 	if err := git.CreateBranch(workDir, branchName); err != nil {
@@ -205,6 +212,11 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	// 10. Push to remote
 	if err := git.PushBranch(workDir, branchName, cfg.GitHubToken); err != nil {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Git push failed: %v", err))
+	}
+
+	// 10.5. Save session to S3 (always, success or failure)
+	if err := storage.SaveSession(cfg.AgentRunID, cfg.AgentType); err != nil {
+		return reporter.ReportFailure(cfg, fmt.Sprintf("Session save failed: %v", err))
 	}
 
 	// 11. Create Pull Request via GitHub API
@@ -521,6 +533,15 @@ ENTRYPOINT ["agent-runner"]
 | `ANTHROPIC_API_KEY` | Claude API key | Conditional | Required if `AGENT_TYPE=claude-code` |
 | `CURSOR_API_KEY` | Cursor API key | Conditional | Required if `AGENT_TYPE=cursor-agents` |
 | `WORKSPACE_DIR` | Working directory | No | `/workspace` (default) |
+| `RETRY_COUNT` | Current retry count | Yes | `0` for initial, `>0` for retries |
+| `S3_ENDPOINT` | S3 API endpoint | Yes | `http://minio:9000` or `https://s3.amazonaws.com` |
+| `S3_REGION` | S3 region | Yes | `us-east-1` |
+| `S3_BUCKET` | S3 bucket name | Yes | `agent-sessions` |
+| `S3_ACCESS_KEY_ID` | S3 access key | Yes | MinIO/AWS access key |
+| `S3_SECRET_ACCESS_KEY` | S3 secret key | Yes | MinIO/AWS secret key |
+| `S3_USE_PATH_STYLE` | Use path-style URLs (MinIO) | Yes | `true` for MinIO, `false` for AWS |
+| `S3_MAX_RETRIES` | Max S3 retry attempts | No | `5` (default) |
+| `S3_RETRY_INITIAL_INTERVAL` | Initial backoff interval | No | `1s` (default) |
 
 ---
 
@@ -543,6 +564,8 @@ ENTRYPOINT ["agent-runner"]
 6. **Git Push Failed**: Report with git error
 7. **PR Creation Failed**: Report with GitHub API error
 8. **Operator API Unreachable**: Retry 5 times, then exit 1
+9. **S3 Upload Failed**: Retry 5 times with exponential backoff, then exit 1
+10. **S3 Download Failed** (on retry): Retry 5 times with exponential backoff, then exit 1
 
 ---
 

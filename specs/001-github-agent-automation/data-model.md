@@ -58,6 +58,8 @@
 - retry_count: INT (default: 0, max: 50)
 - error_message: TEXT (nullable) - **NEW**: last error if state=failed
 - commit_sha: STRING (nullable) - **NEW**: Git commit SHA if succeeded
+- s3_session_key: STRING (nullable) - **NEW**: S3 key for session data (e.g., "sessions/123/session.tar.gz")
+- session_saved_at: DATETIME (nullable) - **NEW**: Timestamp when session was last saved to S3
 - started_at: DATETIME (nullable)
 - completed_at: DATETIME (nullable)
 - created_at: DATETIME
@@ -432,6 +434,8 @@ type AgentRun struct {
     RetryCount     int            `gorm:"column:retry_count;default:0"`
     ErrorMessage   *string        `gorm:"column:error_message;type:text"`
     CommitSHA      *string        `gorm:"column:commit_sha;size:191"`
+    S3SessionKey   *string        `gorm:"column:s3_session_key;size:512"`
+    SessionSavedAt *time.Time     `gorm:"column:session_saved_at"`
     StartedAt      *time.Time     `gorm:"column:started_at"`
     CompletedAt    *time.Time     `gorm:"column:completed_at"`
     CreatedAt      time.Time      `gorm:"column:created_at;autoCreateTime"`
