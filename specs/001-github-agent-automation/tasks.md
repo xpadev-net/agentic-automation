@@ -59,7 +59,7 @@
 - [x] T017 [P] Implement GitHub API client wrapper using go-github in `internal/clients/github.go`
 - [x] T018 [P] Implement Discord webhook client in `internal/clients/discord.go`
 - [x] T019 [P] Implement Kubernetes client wrapper using client-go in `internal/clients/kubernetes.go`
-- [ ] T020 Create global error handler middleware in `internal/webhooks/middleware/error_handler.go`
+- [x] T020 Create global error handler middleware in `internal/webhooks/middleware/error_handler.go`
 - [ ] T021 [P] Setup structured logging with zap in `internal/config/logger.go`
 - [ ] T022 [P] Implement retry utility with exponential backoff and jitter in `internal/utils/retry.go`
 - [ ] T023 [P] Create environment configuration loader in `internal/config/env.go`
