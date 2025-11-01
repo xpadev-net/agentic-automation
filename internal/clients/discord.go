@@ -221,6 +221,26 @@ func truncateCIError(ciError string) string {
 	return ciError + truncatedSuffix
 }
 
+// truncateErrorMessage truncates an error message to fit within Discord's embed field value limit
+// Discord limits embed field values to 1024 characters
+// If truncated, appends "... (truncated)" (15 characters)
+// Max content length when truncated: 1024 - 15 = 1009 characters
+func truncateErrorMessage(errorMsg string) string {
+	const (
+		discordFieldLimit  = 1024                                   // Discord embed field value limit
+		truncatedSuffixLen = 15                                     // "... (truncated)" (15 chars)
+		maxTruncatedLength = discordFieldLimit - truncatedSuffixLen // 1009
+		truncatedSuffix    = "... (truncated)"
+	)
+
+	if len(errorMsg) <= discordFieldLimit {
+		return errorMsg
+	}
+
+	// Truncate to maxTruncatedLength and append suffix
+	return errorMsg[:maxTruncatedLength] + truncatedSuffix
+}
+
 // SendFailureNotification sends an agent execution failure notification
 func (c *DiscordClient) SendFailureNotification(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue) error {
 	if c == nil {
@@ -249,7 +269,7 @@ func (c *DiscordClient) SendFailureNotification(ctx context.Context, agentRun *m
 			},
 			{
 				Name:   "Failure Reason",
-				Value:  sanitizeMessage(getErrorMessage(agentRun.ErrorMessage)),
+				Value:  sanitizeMessage(truncateErrorMessage(getErrorMessage(agentRun.ErrorMessage))),
 				Inline: false,
 			},
 			{
@@ -303,7 +323,7 @@ func (c *DiscordClient) SendMaxRetriesNotification(ctx context.Context, agentRun
 			},
 			{
 				Name:   "Last Error",
-				Value:  sanitizeMessage(getErrorMessage(agentRun.ErrorMessage)),
+				Value:  sanitizeMessage(truncateErrorMessage(getErrorMessage(agentRun.ErrorMessage))),
 				Inline: false,
 			},
 			{
@@ -477,7 +497,7 @@ func (c *DiscordClient) SendOperatorAPIErrorNotification(ctx context.Context, ag
 			},
 			{
 				Name:   "Error",
-				Value:  sanitizeMessage(errorMsg),
+				Value:  sanitizeMessage(truncateErrorMessage(errorMsg)),
 				Inline: false,
 			},
 			{
