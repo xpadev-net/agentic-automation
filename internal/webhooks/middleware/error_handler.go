@@ -3,6 +3,7 @@ package middleware
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
+	"fmt"
 	"net/http"
 	"runtime/debug"
 
@@ -76,7 +77,7 @@ func handleError(c *gin.Context, logger *zap.Logger) {
 		zap.Error(err.Err),
 		zap.String("path", c.Request.URL.Path),
 		zap.String("method", c.Request.Method),
-		zap.String("type", err.Type.String()),
+		zap.String("type", fmt.Sprintf("%v", err.Type)),
 	)
 
 	// Determine if this is a webhook request
