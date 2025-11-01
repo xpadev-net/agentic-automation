@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -9,6 +10,19 @@ import (
 
 	"agentic-automation/internal/models"
 )
+
+// ErrInvalidStateTransition indicates an invalid state transition
+type ErrInvalidStateTransition struct {
+	CurrentState string
+	NewState     string
+}
+
+func (e *ErrInvalidStateTransition) Error() string {
+	return fmt.Sprintf("invalid state transition: cannot transition from %s to %s", e.CurrentState, e.NewState)
+}
+
+// ErrMissingPRIDForSucceeded indicates that pr_id is required when transitioning to succeeded state
+var ErrMissingPRIDForSucceeded = errors.New("pr_id is required when transitioning to succeeded state")
 
 // AgentRunRepository defines the interface for AgentRun data access operations
 type AgentRunRepository interface {
@@ -141,23 +155,70 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 	if id == 0 {
 		return errors.New("cannot update AgentRun with zero ID")
 	}
+
+	// Get current AgentRun to check current state and validate transition
+	currentRun, err := r.GetByID(id)
+	if err != nil {
+		return err
+	}
+
+	currentState := currentRun.State
+
+	// Allow idempotent update: same state can be set again
+	if currentState == state {
+		// Perform the update (even if same value, this maintains idempotency)
+		result := r.db.Model(&models.AgentRun{}).Where("id = ?", id).Update("state", state)
+		if result.Error != nil {
+			return result.Error
+		}
+		return nil
+	}
+
+	// Validate state transition
+	// Terminal states cannot transition to other states
+	if currentState == "succeeded" || currentState == "failed" {
+		return &ErrInvalidStateTransition{
+			CurrentState: currentState,
+			NewState:     state,
+		}
+	}
+
+	// Validate allowed transitions
+	switch currentState {
+	case "queued":
+		// queued can only transition to started
+		if state != "started" {
+			return &ErrInvalidStateTransition{
+				CurrentState: currentState,
+				NewState:     state,
+			}
+		}
+	case "started":
+		// started can transition to succeeded or failed
+		if state != "succeeded" && state != "failed" {
+			return &ErrInvalidStateTransition{
+				CurrentState: currentState,
+				NewState:     state,
+			}
+		}
+		// If transitioning to succeeded, verify pr_id is set
+		if state == "succeeded" {
+			if currentRun.PRID == nil {
+				return ErrMissingPRIDForSucceeded
+			}
+		}
+	default:
+		// Unknown current state - reject transition
+		return &ErrInvalidStateTransition{
+			CurrentState: currentState,
+			NewState:     state,
+		}
+	}
+
+	// Perform the state update
 	result := r.db.Model(&models.AgentRun{}).Where("id = ?", id).Update("state", state)
 	if result.Error != nil {
 		return result.Error
-	}
-	// MySQL returns RowsAffected=0 when UPDATE writes the same value (idempotent state update)
-	// Check if record exists to distinguish between unchanged update and missing record
-	if result.RowsAffected == 0 {
-		var run models.AgentRun
-		err := r.db.Select("id").Where("id = ?", id).First(&run).Error
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return gorm.ErrRecordNotFound
-			}
-			return err
-		}
-		// Record exists, update succeeded (even if state unchanged)
-		return nil
 	}
 	return nil
 }
