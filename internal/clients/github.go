@@ -158,6 +158,7 @@ func (c *Client) GetIssue(ctx context.Context, owner, repo string, issueNumber i
 }
 
 // ListIssueComments retrieves all comments for a GitHub issue
+// Handles pagination to return all comments, not just the first page
 func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, issueNumber int) ([]*github.IssueComment, error) {
 	c.logger.Info("Listing GitHub issue comments",
 		zap.String("owner", owner),
@@ -165,13 +166,34 @@ func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, issu
 		zap.Int("issue_number", issueNumber),
 	)
 
-	comments, resp, err := c.Issues.ListComments(ctx, owner, repo, issueNumber, nil)
-	if err != nil {
-		return nil, c.handleError(err, resp, "ListIssueComments")
+	opts := &github.IssueListCommentsOptions{
+		ListOptions: github.ListOptions{
+			Page:    1,
+			PerPage: 100, // Maximum per page to minimize API calls
+		},
+	}
+
+	var allComments []*github.IssueComment
+	var resp *github.Response
+
+	for {
+		comments, pageResp, err := c.Issues.ListComments(ctx, owner, repo, issueNumber, opts)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "ListIssueComments")
+		}
+
+		allComments = append(allComments, comments...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
 	}
 
 	c.handleRateLimit(resp)
-	return comments, nil
+	return allComments, nil
 }
 
 // CreateIssueComment creates a comment on a GitHub issue
@@ -239,6 +261,7 @@ func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base
 }
 
 // ListPullRequestReviews retrieves all reviews for a GitHub pull request
+// Handles pagination to return all reviews, not just the first page
 func (c *Client) ListPullRequestReviews(ctx context.Context, owner, repo string, prNumber int) ([]*github.PullRequestReview, error) {
 	c.logger.Info("Listing GitHub pull request reviews",
 		zap.String("owner", owner),
@@ -246,16 +269,36 @@ func (c *Client) ListPullRequestReviews(ctx context.Context, owner, repo string,
 		zap.Int("pr_number", prNumber),
 	)
 
-	reviews, resp, err := c.PullRequests.ListReviews(ctx, owner, repo, prNumber, nil)
-	if err != nil {
-		return nil, c.handleError(err, resp, "ListPullRequestReviews")
+	opts := &github.ListOptions{
+		Page:    1,
+		PerPage: 100, // Maximum per page to minimize API calls
+	}
+
+	var allReviews []*github.PullRequestReview
+	var resp *github.Response
+
+	for {
+		reviews, pageResp, err := c.PullRequests.ListReviews(ctx, owner, repo, prNumber, opts)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "ListPullRequestReviews")
+		}
+
+		allReviews = append(allReviews, reviews...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
 	}
 
 	c.handleRateLimit(resp)
-	return reviews, nil
+	return allReviews, nil
 }
 
 // ListPullRequestComments retrieves all comments for a GitHub pull request review
+// Handles pagination to return all comments, not just the first page
 func (c *Client) ListPullRequestComments(ctx context.Context, owner, repo string, prNumber int) ([]*github.PullRequestComment, error) {
 	c.logger.Info("Listing GitHub pull request comments",
 		zap.String("owner", owner),
@@ -263,13 +306,34 @@ func (c *Client) ListPullRequestComments(ctx context.Context, owner, repo string
 		zap.Int("pr_number", prNumber),
 	)
 
-	comments, resp, err := c.PullRequests.ListComments(ctx, owner, repo, prNumber, nil)
-	if err != nil {
-		return nil, c.handleError(err, resp, "ListPullRequestComments")
+	opts := &github.PullRequestListCommentsOptions{
+		ListOptions: github.ListOptions{
+			Page:    1,
+			PerPage: 100, // Maximum per page to minimize API calls
+		},
+	}
+
+	var allComments []*github.PullRequestComment
+	var resp *github.Response
+
+	for {
+		comments, pageResp, err := c.PullRequests.ListComments(ctx, owner, repo, prNumber, opts)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "ListPullRequestComments")
+		}
+
+		allComments = append(allComments, comments...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
 	}
 
 	c.handleRateLimit(resp)
-	return comments, nil
+	return allComments, nil
 }
 
 // MergePullRequest merges a GitHub pull request
@@ -360,6 +424,7 @@ func (c *Client) GetCheckSuite(ctx context.Context, owner, repo string, checkSui
 }
 
 // ListCheckRunsForCheckSuite retrieves all check runs for a check suite
+// Handles pagination to return all check runs, not just the first page
 func (c *Client) ListCheckRunsForCheckSuite(ctx context.Context, owner, repo string, checkSuiteID int64) ([]*github.CheckRun, error) {
 	c.logger.Info("Listing GitHub check runs for check suite",
 		zap.String("owner", owner),
@@ -367,15 +432,34 @@ func (c *Client) ListCheckRunsForCheckSuite(ctx context.Context, owner, repo str
 		zap.Int64("check_suite_id", checkSuiteID),
 	)
 
-	opts := &github.ListCheckRunsOptions{}
+	opts := &github.ListCheckRunsOptions{
+		ListOptions: github.ListOptions{
+			Page:    1,
+			PerPage: 100, // Maximum per page to minimize API calls
+		},
+	}
 
-	checkRuns, resp, err := c.Checks.ListCheckRunsCheckSuite(ctx, owner, repo, checkSuiteID, opts)
-	if err != nil {
-		return nil, c.handleError(err, resp, "ListCheckRunsForCheckSuite")
+	var allCheckRuns []*github.CheckRun
+	var resp *github.Response
+
+	for {
+		checkRunsResult, pageResp, err := c.Checks.ListCheckRunsCheckSuite(ctx, owner, repo, checkSuiteID, opts)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "ListCheckRunsForCheckSuite")
+		}
+
+		allCheckRuns = append(allCheckRuns, checkRunsResult.CheckRuns...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
 	}
 
 	c.handleRateLimit(resp)
-	return checkRuns.CheckRuns, nil
+	return allCheckRuns, nil
 }
 
 // GetCheckRunLogs retrieves logs for a specific check run
