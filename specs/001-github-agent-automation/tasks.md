@@ -55,7 +55,7 @@
 
 ### Infrastructure & Services (Go)
 
-- [ ] T016 Setup GitHub webhook server (Gin) with signature verification in `internal/webhooks/server.go`
+- [x] T016 Setup GitHub webhook server (Gin) with signature verification in `internal/webhooks/server.go`
 - [ ] T017 [P] Implement GitHub API client wrapper using go-github in `internal/clients/github.go`
 - [ ] T018 [P] Implement Discord webhook client in `internal/clients/discord.go`
 - [ ] T019 [P] Implement Kubernetes client wrapper using client-go in `internal/clients/kubernetes.go`
