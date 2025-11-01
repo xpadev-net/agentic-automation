@@ -15,11 +15,17 @@ import (
 
 const deliveryHeader = "X-GitHub-Delivery"
 
-// webhookPayload represents a minimal structure to extract issue ID from webhook payloads
+// webhookPayload represents a minimal structure to extract issue information from webhook payloads
 type webhookPayload struct {
 	Issue struct {
-		ID int `json:"id"` // GitHub issue ID (integer)
+		ID     int    `json:"id"`     // GitHub issue ID (numeric ID)
+		Number int    `json:"number"` // Issue number
+		Title  string `json:"title"`  // Issue title
+		State  string `json:"state"`  // Issue state (open/closed)
 	} `json:"issue"`
+	Repository struct {
+		FullName string `json:"full_name"` // Repository full name, e.g., "owner/repo"
+	} `json:"repository"`
 }
 
 // IdempotencyMiddleware is a Gin middleware that prevents duplicate processing
@@ -39,8 +45,9 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 	// Get database connection
 	db := config.GetDB()
 
-	// Initialize repository
-	repository := repositories.NewAgentRunRepository(db)
+	// Initialize repositories
+	agentRunRepo := repositories.NewAgentRunRepository(db)
+	issueRepo := repositories.NewIssueRepository()
 
 	return func(c *gin.Context) {
 		// Get delivery ID from header
@@ -60,7 +67,7 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 		}
 
 		// Check if this delivery ID has already been processed
-		existingRun, err := repository.GetByIDempotencyKey(deliveryID)
+		existingRun, err := agentRunRepo.GetByIDempotencyKey(deliveryID)
 
 		if err != nil {
 			// Check if it's a "not found" error (expected case for new events)
@@ -97,11 +104,11 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					return
 				}
 
-				// Check if issue ID was found in payload
-				if payload.Issue.ID == 0 {
-					// No issue ID in payload - this is not an issue-related event
+				// Check if issue information was found in payload
+				if payload.Repository.FullName == "" || payload.Issue.Number == 0 {
+					// No repository or issue number in payload - this is not an issue-related event
 					// Continue processing without creating AgentRun
-					logger.Debug("Processing new webhook delivery (no issue ID in payload)",
+					logger.Debug("Processing new webhook delivery (no repository or issue number in payload)",
 						zap.String("delivery_id", deliveryID),
 						zap.String("path", c.Request.URL.Path),
 					)
@@ -110,21 +117,121 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					return
 				}
 
-				// Issue ID found - create AgentRun record to persist delivery ID
-				issueID := payload.Issue.ID
+				// Extract issue information from payload
+				repoFullName := payload.Repository.FullName
+				issueNumber := payload.Issue.Number
+				githubIssueID := payload.Issue.ID
+				issueTitle := payload.Issue.Title
+				issueState := payload.Issue.State
+
+				// Validate issue state
+				if issueState != "open" && issueState != "closed" {
+					issueState = "open" // Default to open if invalid state
+				}
+
+				// Look up or create Issue record using repo and number
+				// First, try to find existing issue
+				existingIssue, findErr := issueRepo.FindByRepoAndNumber(repoFullName, issueNumber)
+				var issue *models.Issue
+
+				if findErr != nil && errors.Is(findErr, gorm.ErrRecordNotFound) {
+					// Issue not found, create new one
+					issue = &models.Issue{
+						Repo:          repoFullName,
+						Number:        issueNumber,
+						GitHubIssueID: githubIssueID,
+						Title:         issueTitle,
+						State:         issueState,
+					}
+				} else if findErr != nil {
+					// Some other error occurred
+					logger.Error("Failed to find issue for idempotency",
+						zap.Error(findErr),
+						zap.String("delivery_id", deliveryID),
+						zap.String("repo", repoFullName),
+						zap.Int("issue_number", issueNumber),
+						zap.String("path", c.Request.URL.Path),
+					)
+
+					// Return 200 OK to prevent GitHub from retrying
+					c.JSON(http.StatusOK, gin.H{
+						"error":       "failed to find issue",
+						"delivery_id": deliveryID,
+					})
+					c.Abort()
+					return
+				} else {
+					// Issue exists, update it (preserve existing GitHubIssueID if not set)
+					issue = existingIssue
+					issue.Title = issueTitle
+					issue.State = issueState
+					// Only update GitHubIssueID if it's not already set (0 means not set)
+					if existingIssue.GitHubIssueID == 0 {
+						issue.GitHubIssueID = githubIssueID
+					}
+
+					// Update the issue
+					if err := issueRepo.Update(issue); err != nil {
+						logger.Error("Failed to update issue for idempotency",
+							zap.Error(err),
+							zap.String("delivery_id", deliveryID),
+							zap.String("repo", repoFullName),
+							zap.Int("issue_number", issueNumber),
+							zap.String("path", c.Request.URL.Path),
+						)
+
+						// Return 200 OK to prevent GitHub from retrying
+						c.JSON(http.StatusOK, gin.H{
+							"error":       "failed to update issue",
+							"delivery_id": deliveryID,
+						})
+						c.Abort()
+						return
+					}
+				}
+
+				// Create new issue if it doesn't exist
+				if issue.ID == 0 {
+					if err := issueRepo.Create(issue); err != nil {
+						// Failed to create issue - log error and abort
+						logger.Error("Failed to create issue for idempotency",
+							zap.Error(err),
+							zap.String("delivery_id", deliveryID),
+							zap.String("repo", repoFullName),
+							zap.Int("issue_number", issueNumber),
+							zap.Int("github_issue_id", githubIssueID),
+							zap.String("path", c.Request.URL.Path),
+						)
+
+						// Return 200 OK to prevent GitHub from retrying
+						c.JSON(http.StatusOK, gin.H{
+							"error":       "failed to create issue",
+							"delivery_id": deliveryID,
+						})
+						c.Abort()
+						return
+					}
+				}
+
+				// Use the internal database ID from the upserted issue
+				issueDBID := issue.ID
+
+				// Create AgentRun record to persist delivery ID
 				newRun := &models.AgentRun{
-					IssueID: issueID,
+					IssueID: issueDBID,
 					State:   "queued", // Initial state - will be updated by downstream handlers
 				}
 
-				createdRun, isNew, createErr := repository.CreateOrGet(deliveryID, newRun)
+				createdRun, isNew, createErr := agentRunRepo.CreateOrGet(deliveryID, newRun)
 				if createErr != nil {
 					// Failed to create/get record - log error but continue processing
 					// The downstream handler may handle this or retry
 					logger.Error("Failed to persist delivery ID for idempotency",
 						zap.Error(createErr),
 						zap.String("delivery_id", deliveryID),
-						zap.Int("issue_id", issueID),
+						zap.Int("issue_db_id", issueDBID),
+						zap.String("repo", repoFullName),
+						zap.Int("issue_number", issueNumber),
 						zap.String("path", c.Request.URL.Path),
 					)
 
@@ -159,7 +266,9 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 				logger.Debug("Created idempotency record for new webhook delivery",
 					zap.String("delivery_id", deliveryID),
 					zap.Int("agent_run_id", createdRun.ID),
-					zap.Int("issue_id", issueID),
+					zap.Int("issue_db_id", issueDBID),
+					zap.String("repo", repoFullName),
+					zap.Int("issue_number", issueNumber),
 					zap.String("path", c.Request.URL.Path),
 				)
 
