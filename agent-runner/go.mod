@@ -1,5 +1,11 @@
 module agent-runner
 
+// agent-runner: Go binary for executing AI agents in Kubernetes Pods
+// Dependencies:
+// - cobra: CLI framework for command-line interface
+// - HTTP client: Standard library net/http (no external dependency required)
+//   Reporter client (T038) will use standard library for exponential backoff retry
+
 go 1.24.0
 
 toolchain go1.24.9
