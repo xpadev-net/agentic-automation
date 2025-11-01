@@ -60,9 +60,9 @@
 - [x] T018 [P] Implement Discord webhook client in `internal/clients/discord.go`
 - [x] T019 [P] Implement Kubernetes client wrapper using client-go in `internal/clients/kubernetes.go`
 - [x] T020 Create global error handler middleware in `internal/webhooks/middleware/error_handler.go`
-- [ ] T021 [P] Setup structured logging with zap in `internal/config/logger.go`
-- [ ] T022 [P] Implement retry utility with exponential backoff and jitter in `internal/utils/retry.go`
-- [ ] T023 [P] Create environment configuration loader in `internal/config/env.go`
+- [x] T021 [P] Setup structured logging with zap in `internal/config/logger.go`
+- [x] T022 [P] Implement retry utility with exponential backoff and jitter in `internal/utils/retry.go`
+- [x] T023 [P] Create environment configuration loader in `internal/config/env.go`
 - [ ] T024 Implement idempotency middleware using X-GitHub-Delivery header in `internal/webhooks/middleware/idempotency.go`
 
 ### Operator API for Agent Report (NEW - Push型通知)
