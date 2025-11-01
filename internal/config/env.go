@@ -3,6 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -37,6 +40,73 @@ func GetEnvRequired(key string) (string, error) {
 		return "", fmt.Errorf("required environment variable %s is not set", key)
 	}
 	return value, nil
+}
+
+// GetEnvInt returns an integer environment variable value, or default if not set or invalid
+// It parses the environment variable value using strconv.Atoi()
+// If the value is empty or cannot be parsed as an integer, defaultValue is returned
+func GetEnvInt(key string, defaultValue int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	intValue, err := strconv.Atoi(value)
+	if err != nil {
+		return defaultValue
+	}
+	return intValue
+}
+
+// GetEnvBool returns a boolean environment variable value, or default if not set or invalid
+// It recognizes the following as true (case-insensitive): "true", "1", "yes", "on", "enabled"
+// It recognizes the following as false (case-insensitive): "false", "0", "no", "off", "disabled"
+// If the value is empty or does not match any of these patterns, defaultValue is returned
+func GetEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	valueLower := strings.ToLower(strings.TrimSpace(value))
+	switch valueLower {
+	case "true", "1", "yes", "on", "enabled":
+		return true
+	case "false", "0", "no", "off", "disabled":
+		return false
+	default:
+		return defaultValue
+	}
+}
+
+// GetEnvDuration returns a time.Duration environment variable value, or default if not set or invalid
+// It parses the environment variable value using time.ParseDuration()
+// Supported formats include: "30s", "5m", "1h", "24h", etc.
+// If the value is empty or cannot be parsed as a duration, defaultValue is returned
+func GetEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	durationValue, err := time.ParseDuration(value)
+	if err != nil {
+		return defaultValue
+	}
+	return durationValue
+}
+
+// GetEnvIntRequired returns an integer environment variable value, or error if not set or invalid
+// It parses the environment variable value using strconv.Atoi()
+// Returns an error if the environment variable is not set, is empty, or cannot be parsed as an integer
+// The error message includes the variable name and invalid value for debugging
+func GetEnvIntRequired(key string) (int, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return 0, fmt.Errorf("required environment variable %s is not set", key)
+	}
+	intValue, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("environment variable %s contains invalid integer value: %s", key, value)
+	}
+	return intValue, nil
 }
 
 // InitConfig initializes the configuration by loading environment variables
