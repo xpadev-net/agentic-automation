@@ -104,6 +104,18 @@ func GetDB() *gorm.DB {
 	return db
 }
 
+// SetDBForTesting sets the database instance for testing purposes only
+// This function should only be used in test files
+func SetDBForTesting(testDB *gorm.DB) {
+	db = testDB
+}
+
+// ResetDBForTesting resets the database instance to nil for testing purposes only
+// This function should only be used in test files
+func ResetDBForTesting() {
+	db = nil
+}
+
 // CloseDatabase closes the database connection gracefully
 func CloseDatabase() error {
 	if db == nil {
