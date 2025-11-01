@@ -49,10 +49,16 @@ const (
 )
 
 // getNamespaceFromKubeconfig reads the namespace from kubeconfig's current context
+// It handles both single file paths and multi-file KUBECONFIG (colon-separated paths)
 func getNamespaceFromKubeconfig(kubeConfigPath string, logger *zap.Logger) string {
-	// Use default loading rules if path is empty
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	if kubeConfigPath != "" {
+
+	// Only set ExplicitPath if:
+	// 1. kubeConfigPath is provided (not empty)
+	// 2. kubeConfigPath does not contain a colon (single file path, not multi-file list)
+	// 3. KUBECONFIG environment variable is not set (to avoid conflicts)
+	// When KUBECONFIG is set, let the default loading rules handle it (supports colon-separated paths)
+	if kubeConfigPath != "" && !strings.Contains(kubeConfigPath, ":") && os.Getenv("KUBECONFIG") == "" {
 		loadingRules.ExplicitPath = kubeConfigPath
 	}
 
@@ -71,9 +77,17 @@ func getNamespaceFromKubeconfig(kubeConfigPath string, logger *zap.Logger) strin
 	}
 
 	if ns != "" {
+		// Log the actual kubeconfig path that was used
+		actualPath := kubeConfigPath
+		if actualPath == "" {
+			actualPath = os.Getenv("KUBECONFIG")
+			if actualPath == "" {
+				actualPath = loadingRules.GetDefaultFilename()
+			}
+		}
 		logger.Info("Using namespace from kubeconfig",
 			zap.String("namespace", ns),
-			zap.String("path", kubeConfigPath),
+			zap.String("path", actualPath),
 		)
 		return ns
 	}
