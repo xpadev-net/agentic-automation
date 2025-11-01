@@ -194,6 +194,33 @@ func formatGitHubURL(repo string, number int, isPR bool) string {
 	return fmt.Sprintf("https://github.com/%s/issues/%d", repo, number)
 }
 
+// truncateCIError truncates a CI error message to fit within Discord's embed field value limit
+// Discord limits embed field values to 1024 characters
+// Code block format (```\n ... \n```) uses 9 characters, leaving 1015 characters for content
+// If truncated, appends "\n... (truncated)" (18 characters + 1 newline = 19 chars)
+// Max content length when truncated: 1015 - 19 = 996 characters
+func truncateCIError(ciError string) string {
+	const (
+		discordFieldLimit  = 1024                                  // Discord embed field value limit
+		codeBlockOverhead  = 9                                     // "```\n" (5) + "\n```" (4)
+		truncatedSuffixLen = 19                                    // "\n... (truncated)" (1 + 18)
+		maxContentLength   = discordFieldLimit - codeBlockOverhead // 1015
+		maxTruncatedLength = maxContentLength - truncatedSuffixLen // 996
+		truncatedSuffix    = "\n... (truncated)"
+	)
+
+	if len(ciError) <= maxContentLength {
+		return ciError
+	}
+
+	// Truncate to maxTruncatedLength and append suffix
+	if len(ciError) > maxTruncatedLength {
+		return ciError[:maxTruncatedLength] + truncatedSuffix
+	}
+
+	return ciError + truncatedSuffix
+}
+
 // SendFailureNotification sends an agent execution failure notification
 func (c *DiscordClient) SendFailureNotification(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue) error {
 	if c == nil {
@@ -338,7 +365,7 @@ func (c *DiscordClient) SendCIFailureNotification(ctx context.Context, pr *model
 			},
 			{
 				Name:   "CI Error",
-				Value:  sanitizeMessage(fmt.Sprintf("```\n%s\n```", ciError)),
+				Value:  sanitizeMessage(fmt.Sprintf("```\n%s\n```", truncateCIError(ciError))),
 				Inline: false,
 			},
 			{
