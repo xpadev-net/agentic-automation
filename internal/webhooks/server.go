@@ -40,8 +40,11 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 	// Apply global error handling middleware (before signature verification)
 	router.Use(middleware.ErrorHandler())
 
-	// Apply signature verification middleware to webhook endpoint
-	router.POST(webhookPath, middleware.VerifyWebhookSignature(), handleGitHubWebhook)
+	// Apply signature verification and idempotency middleware to webhook endpoint
+	router.POST(webhookPath,
+		middleware.VerifyWebhookSignature(),
+		middleware.IdempotencyMiddleware(),
+		handleGitHubWebhook)
 
 	return router
 }
