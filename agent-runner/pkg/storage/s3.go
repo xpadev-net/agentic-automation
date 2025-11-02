@@ -138,6 +138,40 @@ func NewClient(cfg *Config) (*Client, error) {
 	}, nil
 }
 
+// newClientForTesting creates a Client with an injected S3 client (for testing only).
+// This allows tests to inject a mock S3 client without needing to create real AWS SDK configuration.
+func newClientForTesting(cfg *Config, s3Client *s3.Client) (*Client, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("config cannot be nil")
+	}
+	if cfg.Bucket == "" {
+		return nil, fmt.Errorf("bucket name is required")
+	}
+	if cfg.AccessKeyID == "" || cfg.SecretAccessKey == "" {
+		return nil, fmt.Errorf("access key ID and secret access key are required")
+	}
+	if cfg.Region == "" {
+		cfg.Region = "us-east-1" // Default region
+	}
+	if cfg.MaxRetries < 0 {
+		return nil, fmt.Errorf("MaxRetries must be non-negative, got: %d", cfg.MaxRetries)
+	}
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = 5 // Default max retries
+	}
+	return &Client{
+		s3Client: s3Client,
+		bucket:   cfg.Bucket,
+		config:   cfg,
+	}, nil
+}
+
+// TestIsRetryableError is a test helper that exposes isRetryableError for testing.
+// This allows unit tests to verify retry logic without needing actual S3 operations.
+func TestIsRetryableError(err error) bool {
+	return isRetryableError(err)
+}
+
 // isRetryableError determines if an error should be retried.
 func isRetryableError(err error) bool {
 	if err == nil {
