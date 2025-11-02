@@ -24,6 +24,7 @@ import (
 // JobConfig holds configuration for creating a Kubernetes Job
 type JobConfig struct {
 	AgentRunID       int
+	RetryCount       int
 	IssueID          int
 	Repo             string
 	Prompt           string
@@ -227,6 +228,30 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 			Name:  "WORKSPACE_DIR",
 			Value: "/workspace",
 		},
+		{
+			Name:  "S3_ENDPOINT",
+			Value: appconfig.GetEnv("S3_ENDPOINT", ""),
+		},
+		{
+			Name:  "S3_REGION",
+			Value: appconfig.GetEnv("S3_REGION", ""),
+		},
+		{
+			Name:  "S3_BUCKET",
+			Value: appconfig.GetEnv("S3_BUCKET", ""),
+		},
+		{
+			Name:  "S3_USE_PATH_STYLE",
+			Value: appconfig.GetEnv("S3_USE_PATH_STYLE", "true"),
+		},
+		{
+			Name:  "S3_MAX_RETRIES",
+			Value: appconfig.GetEnv("S3_MAX_RETRIES", "5"),
+		},
+		{
+			Name:  "RETRY_COUNT",
+			Value: strconv.Itoa(config.RetryCount),
+		},
 	}
 
 	// Get Secret names from environment variables with defaults
@@ -234,6 +259,7 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 	anthropicAPIKeySecret := appconfig.GetEnv("ANTHROPIC_API_KEY_SECRET", "anthropic-api-key")
 	cursorAPIKeySecret := appconfig.GetEnv("CURSOR_API_KEY_SECRET", "cursor-api-key")
 	operatorAPITokenSecret := appconfig.GetEnv("OPERATOR_API_TOKEN_SECRET", "agent-runner-secret")
+	s3CredentialsSecret := appconfig.GetEnv("S3_CREDENTIALS_SECRET", "s3-credentials")
 
 	// Add Secret references for sensitive values
 	envVars = append(envVars, []corev1.EnvVar{
@@ -256,6 +282,28 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 						Name: operatorAPITokenSecret,
 					},
 					Key: "token",
+				},
+			},
+		},
+		{
+			Name: "S3_ACCESS_KEY_ID",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: s3CredentialsSecret,
+					},
+					Key: "access-key-id",
+				},
+			},
+		},
+		{
+			Name: "S3_SECRET_ACCESS_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: s3CredentialsSecret,
+					},
+					Key: "secret-access-key",
 				},
 			},
 		},
