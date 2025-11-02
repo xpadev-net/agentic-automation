@@ -98,7 +98,7 @@
 - [x] T048 [P] Write unit tests for hooks runner (timeout enforcement, required vs optional hooks)
 - [x] T049 [P] Write unit tests for git committer (mock git commands)
 - [x] T050 [P] Write unit tests for reporter client (mock HTTP requests, retry logic)
-- [ ] T051 Write integration test for full agent-runner execution flow with manifest (end-to-end)
+- [x] T051 Write integration test for full agent-runner execution flow with manifest (end-to-end)
 
 ### S3 Session Persistence (NEW - Session context across retries)
 
