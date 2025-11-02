@@ -8,6 +8,14 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"agent-runner/pkg/agent"
+	"agent-runner/pkg/config"
+	"agent-runner/pkg/context"
+	"agent-runner/pkg/git"
+	"agent-runner/pkg/hooks"
+	"agent-runner/pkg/reporter"
+	"agent-runner/pkg/storage"
 )
 
 func main() {
@@ -112,6 +120,20 @@ func validateEnv() (*envConfig, error) {
 	}
 
 	// Optional environment variables with defaults
+	retryCountStr := os.Getenv("RETRY_COUNT")
+	if retryCountStr == "" {
+		cfg.RetryCount = 0 // デフォルト値
+	} else {
+		retryCount, err := strconv.Atoi(retryCountStr)
+		if err != nil {
+			return nil, fmt.Errorf("RETRY_COUNT must be an integer, got: %q", retryCountStr)
+		}
+		if retryCount < 0 {
+			return nil, fmt.Errorf("RETRY_COUNT must be non-negative, got: %d", retryCount)
+		}
+		cfg.RetryCount = retryCount
+	}
+
 	cfg.WorkDir = os.Getenv("WORKSPACE_DIR")
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "/workspace"
@@ -131,6 +153,7 @@ type envConfig struct {
 	AgentRunID       int
 	AgentType        string
 	GitHubToken      string
+	RetryCount       int
 	WorkDir          string
 }
 
@@ -147,55 +170,248 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	fmt.Fprintf(os.Stderr, "  Repository: %s\n", repo)
 	fmt.Fprintf(os.Stderr, "  Agent Type: %s\n", envCfg.AgentType)
 	fmt.Fprintf(os.Stderr, "  Agent Run ID: %d\n", envCfg.AgentRunID)
+	fmt.Fprintf(os.Stderr, "  Retry Count: %d\n", envCfg.RetryCount)
 	fmt.Fprintf(os.Stderr, "  Workspace: %s\n", envCfg.WorkDir)
 
-	// 3. Prepare error handling
-	// Note: Reporter will be implemented in T038
-	// For now, we'll return errors directly
+	// 3. Initialize reporter client
+	reporterClient, err := reporter.NewClient(envCfg.OperatorAPIURL, envCfg.OperatorAPIToken, envCfg.AgentRunID)
+	if err != nil {
+		return fmt.Errorf("failed to initialize reporter client: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Initialized reporter client for AgentRun ID: %d\n", envCfg.AgentRunID)
 
-	// 4. Execution flow skeleton (to be implemented in T033-T048)
-	// TODO: Clone repository (T035)
-	// TODO: Restore session from S3 (T054_S3) - if retry_count > 0
+	// 4. Clone repository
+	fmt.Fprintf(os.Stderr, "Cloning repository %s to %s\n", repo, envCfg.WorkDir)
+	if err := git.CloneRepo(envCfg.GitHubToken, repo, envCfg.WorkDir); err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Repository clone failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("clone failed and report failed: clone=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("repository clone failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Cloned repository %s to %s\n", repo, envCfg.WorkDir)
 
-	// TODO: Create feature branch (T035)
-	// branchName := fmt.Sprintf("feature/issue-%d", issueID)
+	// 5. Restore session from S3 (if retry_count > 0)
+	if envCfg.RetryCount > 0 {
+		fmt.Fprintf(os.Stderr, "Restoring session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
+		if err := storage.RestoreSession(envCfg.AgentRunID, envCfg.RetryCount); err != nil {
+			reportErr := reporterClient.ReportFailure(
+				fmt.Sprintf("Session restore failed: %v", err),
+				"",
+				envCfg.AgentType,
+			)
+			if reportErr != nil {
+				return fmt.Errorf("session restore failed and report failed: restore=%v, report=%w", err, reportErr)
+			}
+			return fmt.Errorf("session restore failed: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Restored session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
+	} else {
+		fmt.Fprintf(os.Stderr, "Initial execution, skipping session restore\n")
+	}
 
-	// TODO: Build full prompt with previous attempts and CI logs (T037)
-	// fullPrompt := context.BuildPrompt(prompt, previousAttempts, ciLogs)
+	// 6. Load manifest
+	manifest, err := config.LoadManifest(envCfg.WorkDir)
+	if err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Manifest load failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("manifest load failed and report failed: load=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("manifest load failed: %w", err)
+	}
+	if manifest == nil {
+		fmt.Fprintf(os.Stderr, "No manifest file found, skipping hooks/validations\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "Loaded manifest: version %s\n", manifest.Version)
+	}
 
-	// TODO: Execute selected agent (T033)
-	// executor := agent.NewExecutor(envCfg.AgentType)
-	// output, err := executor.Execute(envCfg.WorkDir, fullPrompt)
+	// 7. Create feature branch
+	branchName := fmt.Sprintf("feature/issue-%d", issueID)
+	fmt.Fprintf(os.Stderr, "Creating/checking out branch: %s\n", branchName)
+	if err := git.CreateBranch(envCfg.WorkDir, branchName, envCfg.RetryCount); err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Branch creation failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("branch creation failed and report failed: create=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("branch creation failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Created/checked out branch: %s\n", branchName)
 
-	// TODO: Check for file changes (T036)
-	// hasChanges, err := git.HasChanges(envCfg.WorkDir)
+	// 8. Build prompt
+	fmt.Fprintf(os.Stderr, "Building prompt\n")
+	fullPrompt := context.BuildPrompt(prompt, previousAttempts, ciLogs)
+	fmt.Fprintf(os.Stderr, "Built prompt (length: %d characters)\n", len(fullPrompt))
 
-	// TODO: Run lint validation (T034)
-	// if err := lint.RunLint(envCfg.WorkDir); err != nil {
-	//     return reporter.ReportFailure(...)
-	// }
+	// 9. Run pre-hooks
+	if manifest != nil && len(manifest.Hooks.Pre) > 0 {
+		fmt.Fprintf(os.Stderr, "Executing %d pre-hooks\n", len(manifest.Hooks.Pre))
+		if err := hooks.RunPreHooks(manifest.Hooks.Pre, envCfg.WorkDir); err != nil {
+			reportErr := reporterClient.ReportFailure(
+				fmt.Sprintf("Pre-hook failed: %v", err),
+				"",
+				envCfg.AgentType,
+			)
+			if reportErr != nil {
+				return fmt.Errorf("pre-hook failed and report failed: hook=%v, report=%w", err, reportErr)
+			}
+			return fmt.Errorf("pre-hook failed: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Executed %d pre-hooks\n", len(manifest.Hooks.Pre))
+	} else {
+		fmt.Fprintf(os.Stderr, "No pre-hooks to execute\n")
+	}
 
-	// TODO: Run type check validation (T034)
-	// if err := lint.RunTypeCheck(envCfg.WorkDir); err != nil {
-	//     return reporter.ReportFailure(...)
-	// }
+	// 10. Execute agent
+	fmt.Fprintf(os.Stderr, "Agent execution started\n")
+	executor := agent.NewExecutor(envCfg.AgentType)
+	agentOutput, err := executor.Execute(envCfg.WorkDir, fullPrompt)
+	if err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Agent execution failed: %v", err),
+			agentOutput,
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("agent execution failed and report failed: agent=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("agent execution failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
 
-	// TODO: Commit changes (T035)
-	// commitSHA, err := git.CommitChanges(envCfg.WorkDir, fmt.Sprintf("feat: implement issue #%d", issueID))
+	// 11. Check for file changes
+	fmt.Fprintf(os.Stderr, "Checking for file changes\n")
+	hasChanges, err := git.HasChanges(envCfg.WorkDir)
+	if err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Git diff check failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("file change check failed and report failed: check=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("file change check failed: %w", err)
+	}
+	if !hasChanges {
+		reportErr := reporterClient.ReportFailure(
+			"No file changes detected after agent execution",
+			agentOutput,
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("no changes detected and report failed: report=%w", reportErr)
+		}
+		return fmt.Errorf("no file changes detected after agent execution")
+	}
+	fmt.Fprintf(os.Stderr, "File changes detected\n")
 
-	// TODO: Push branch to remote (T035)
-	// if err := git.PushBranch(envCfg.WorkDir, branchName, envCfg.GitHubToken); err != nil {
-	//     return reporter.ReportFailure(...)
-	// }
+	// 12. Run validations
+	if manifest != nil && len(manifest.Validation) > 0 {
+		fmt.Fprintf(os.Stderr, "Executing %d validations\n", len(manifest.Validation))
+		if err := hooks.RunValidations(manifest.Validation, envCfg.WorkDir); err != nil {
+			// Validation失敗時はOperator APIに報告せず、エラーをそのまま返す
+			// Operatorのretry orchestratorが処理する
+			return fmt.Errorf("validation failed: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Executed %d validations\n", len(manifest.Validation))
+	} else {
+		fmt.Fprintf(os.Stderr, "No validations to execute\n")
+	}
 
-	// TODO: Save session to S3 (T055_S3) - always before reporting
+	// 13. Commit changes
+	commitMsg := fmt.Sprintf("feat: implement issue #%d", issueID)
+	fmt.Fprintf(os.Stderr, "Committing changes\n")
+	commitSHA, err := git.CommitChanges(envCfg.WorkDir, commitMsg)
+	if err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Git commit failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("commit failed and report failed: commit=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
 
-	// TODO: Create Pull Request via GitHub API (T035)
-	// prNumber, err := git.CreatePR(envCfg.GitHubToken, repo, branchName, issueID)
+	// 14. Push branch
+	fmt.Fprintf(os.Stderr, "Pushing branch %s to remote\n", branchName)
+	if err := git.PushBranch(envCfg.WorkDir, branchName, envCfg.GitHubToken); err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Git push failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("push failed and report failed: push=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("git push failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Pushed branch %s to remote\n", branchName)
 
-	// TODO: Report success to Operator API (T038)
-	// return reporter.ReportSuccess(...)
+	// 15. Save session to S3
+	fmt.Fprintf(os.Stderr, "Saving session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
+	if err := storage.SaveSession(envCfg.AgentRunID, envCfg.AgentType); err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Session save failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("session save failed and report failed: save=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("session save failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Saved session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 
-	// Temporary: return error indicating implementation is incomplete
-	return fmt.Errorf("execution flow not yet implemented (T033-T048)")
+	// 16. Create Pull Request
+	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
+	prNumber, err := git.CreatePR(envCfg.GitHubToken, repo, branchName, issueID)
+	if err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("PR creation failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			return fmt.Errorf("PR creation failed and report failed: pr=%v, report=%w", err, reportErr)
+		}
+		return fmt.Errorf("PR creation failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
+
+	// 17. Run post-hooks
+	if manifest != nil && len(manifest.Hooks.Post) > 0 {
+		fmt.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
+		if err := hooks.RunPostHooks(manifest.Hooks.Post, envCfg.WorkDir); err != nil {
+			// Post-hookの失敗は警告ログのみで処理を続行
+			fmt.Fprintf(os.Stderr, "WARNING: Post-hook execution failed: %v (continuing)\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "Executed %d post-hooks\n", len(manifest.Hooks.Post))
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "No post-hooks to execute\n")
+	}
+
+	// 18. Report success to Operator API
+	fmt.Fprintf(os.Stderr, "Reporting success to Operator API\n")
+	if err := reporterClient.ReportSuccess(prNumber, branchName, commitSHA, envCfg.AgentType); err != nil {
+		return fmt.Errorf("failed to report success: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Successfully reported to Operator API\n")
+
+	return nil
 }
