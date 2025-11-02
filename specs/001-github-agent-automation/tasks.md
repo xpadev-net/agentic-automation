@@ -102,7 +102,7 @@
 
 ### S3 Session Persistence (NEW - Session context across retries)
 
-- [ ] T052_S3 Add AWS SDK Go v2 and backoff dependencies to agent-runner/go.mod
+- [x] T052_S3 Add AWS SDK Go v2 and backoff dependencies to agent-runner/go.mod
 - [ ] T053_S3 [P] Implement pkg/storage/config.go (S3 configuration struct, env var loading)
 - [ ] T054_S3 [P] Implement pkg/storage/s3.go (S3 client with UsePathStyle support, Upload/Download with exponential backoff)
 - [ ] T055_S3 [P] Implement pkg/storage/session.go (SaveSession, RestoreSession, tar.gz compression/extraction)
