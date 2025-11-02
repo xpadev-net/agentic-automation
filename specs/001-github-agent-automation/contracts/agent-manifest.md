@@ -19,7 +19,7 @@ Current version: `1.0`
 ```yaml
 version: "1.0"
 
-# Pre-execution hooks (before AI agent runs)
+# Pre-execution and post-execution hooks
 hooks:
   pre:
     - name: string              # Hook identifier (e.g., "install-dependencies")
@@ -27,6 +27,12 @@ hooks:
       description: string       # Human-readable description (optional)
       timeout: duration         # Maximum execution time (e.g., "5m", "30s")
       required: boolean         # If true, failure aborts the workflow
+  post:
+    - name: string              # Hook identifier (e.g., "notify-slack")
+      command: string           # Shell command to execute
+      description: string       # Human-readable description (optional)
+      timeout: duration         # Maximum execution time
+      required: boolean         # If true, failure logs warning but does not abort
 
 # Validation commands (after AI agent, before git commit)
 validation:
@@ -35,15 +41,6 @@ validation:
     description: string       # Human-readable description (optional)
     timeout: duration         # Maximum execution time
     required: boolean         # If true, failure triggers agent retry with error feedback
-
-# Post-execution hooks (after successful PR creation)
-hooks:
-  post:
-    - name: string              # Hook identifier (e.g., "notify-slack")
-      command: string           # Shell command to execute
-      description: string       # Human-readable description (optional)
-      timeout: duration         # Maximum execution time
-      required: boolean         # If true, failure logs warning but does not abort
 ```
 
 ## Field Definitions
@@ -87,8 +84,10 @@ hooks:
 **Execution order**: Sequential, in the order defined in the manifest.
 
 **Failure behavior**:
-- If `required: true` and validation fails → Retry the AI agent with validation error output as feedback (up to max retry limit)
+- If `required: true` and validation fails → agent-runner exits with error; Operator's retry orchestrator re-invokes agent-runner with validation error appended to prompt (up to max retry limit)
 - If `required: false` and validation fails → Log warning, continue to next validation
+
+**Important**: Validation failures do NOT report to Operator API. The agent-runner simply returns an error, which causes the Pod to exit with non-zero status. The Operator detects this failure and handles retry orchestration.
 
 **Example use cases**:
 - `npm run lint`
@@ -445,14 +444,29 @@ func main() {
 
 ## Error Reporting
 
-When a hook or validation fails, the agent-runner should:
+When a hook or validation fails, the agent-runner handles errors differently based on the failure type:
+
+### Pre-hook Failure
 
 1. **Capture output**: Store stdout and stderr from the failed command
-2. **Report to Operator API**: Send error details to `/api/agent-runs/{id}/report`
-3. **Retry logic**:
-   - Pre-hook failure: Abort, no retry
-   - Validation failure: Retry agent (up to max retry limit)
-   - Post-hook failure: Log warning, no retry
+2. **Report to Operator API**: Send error details to `/api/agent-runs/{id}/report` with status `failed`
+3. **Abort workflow**: Exit immediately, no retry
+
+### Validation Failure
+
+1. **Capture output**: Store stdout and stderr from the failed validation
+2. **Do NOT report to Operator API**: Validation failures do not terminate the workflow
+3. **Return error to retry loop**: Error message is appended to the agent's input prompt
+4. **Retry agent execution**: The Operator's retry orchestrator handles retry logic (up to max retry limit)
+5. **Flow**: `validation error → return to main() → exit agent-runner → Operator detects failure → re-invoke agent-runner with error feedback`
+
+**Important**: Validation failures are handled by the Operator's retry mechanism, not by agent-runner directly. The agent-runner simply returns an error, which triggers the Operator to retry the entire agent-runner Pod execution with the validation error included in the prompt.
+
+### Post-hook Failure
+
+1. **Capture output**: Log stdout and stderr from the failed command
+2. **Do NOT report to Operator API**: Post-hooks run after PR creation (workflow already succeeded)
+3. **Log warning**: Continue execution, do not abort
 
 ## Future Extensions
 

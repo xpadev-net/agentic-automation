@@ -210,8 +210,10 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	// 10. Execute validations
 	if manifest != nil {
 		if err := hooks.RunValidations(manifest.Validation, workDir); err != nil {
-			// Validation failure triggers agent retry with error feedback
-			return reporter.ReportValidationFailure(cfg, err.Error())
+			// Validation failure: return error to trigger retry loop
+			// Error message will be appended to agent prompt for next attempt
+			// No Operator API report - let retry orchestrator handle it
+			return fmt.Errorf("validation failed: %w", err)
 		}
 	}
 
