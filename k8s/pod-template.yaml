@@ -214,15 +214,15 @@ spec:
       - --prompt=<prompt>
     env:
       # [Same environment variables as Version 1]
-      # See Version 1 above for complete env list:
-      # - OPERATOR_API_URL, OPERATOR_API_TOKEN
-      # - AGENT_RUN_ID, AGENT_TYPE, WORKSPACE_DIR
-      # - GITHUB_TOKEN
-      # - ANTHROPIC_API_KEY or CURSOR_API_KEY
-      # - RETRY_COUNT
-      # - S3_ENDPOINT, S3_REGION, S3_BUCKET
-      # - S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
-      # - S3_USE_PATH_STYLE, S3_MAX_RETRIES
+      # See Version 1 above (lines 92-155) for complete env list:
+      # - OPERATOR_API_URL, OPERATOR_API_TOKEN (Operator API configuration)
+      # - AGENT_RUN_ID, AGENT_TYPE, WORKSPACE_DIR (Agent execution configuration)
+      # - GITHUB_TOKEN (GitHub authentication)
+      # - ANTHROPIC_API_KEY or CURSOR_API_KEY (Agent-specific API keys)
+      # - RETRY_COUNT (T059_S3: Retry configuration, "0" for initial run, "1", "2", etc. for retries)
+      # - S3_ENDPOINT, S3_REGION, S3_BUCKET (T060_S3: S3 Session Persistence configuration)
+      # - S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY (from s3-credentials Secret)
+      # - S3_USE_PATH_STYLE, S3_MAX_RETRIES (S3 Session Persistence configuration)
     resources:
       requests:
         cpu: "500m"
