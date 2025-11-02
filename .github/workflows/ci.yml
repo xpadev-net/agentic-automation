@@ -217,21 +217,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set owner and image metadata
+        id: meta
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          echo "OWNER=$OWNER" >> $GITHUB_OUTPUT
+          echo "tags=ghcr.io/$OWNER/agent-runner:latest,ghcr.io/$OWNER/agent-runner:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
+          username: ${{ steps.meta.outputs.OWNER }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract short SHA
-        id: sha
-        run: echo "SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
-
-      - name: Set image metadata
-        id: meta
-        run: |
-          echo "tags=ghcr.io/${{ github.repository_owner }}/agent-runner:latest,ghcr.io/${{ github.repository_owner }}/agent-runner:sha-${{ steps.sha.outputs.SHORT_SHA }}" >> $GITHUB_OUTPUT
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5

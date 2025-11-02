@@ -11,7 +11,7 @@ MIGRATIONS_DIR := migrations
 
 # Docker variables
 DOCKER_REGISTRY ?= ghcr.io
-DOCKER_OWNER ?= $(shell git config user.name)
+DOCKER_OWNER ?= $(shell echo '$(shell git config user.name)' | tr '[:upper:]' '[:lower:]')
 IMAGE_NAME ?= agent-runner
 GIT_SHA ?= $(shell git rev-parse --short HEAD)
 FULL_IMAGE_LATEST ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(IMAGE_NAME):latest
