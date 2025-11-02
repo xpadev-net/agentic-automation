@@ -194,6 +194,15 @@ func isRetryableError(err error) bool {
 		}
 	}
 
+	// Check for net.OpError (connection reset, connection refused, etc.)
+	// These errors (ECONNRESET, ECONNREFUSED) often have Timeout() and Temporary() both false,
+	// but are transient network failures that should be retried
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		// All network operations are considered retryable for transient failures
+		return true
+	}
+
 	// Check for DNS errors (network-related)
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
