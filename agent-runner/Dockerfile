@@ -37,7 +37,7 @@ RUN apk add --no-cache git curl bash
 
 # Install Claude Code CLI globally
 # Command: claude-code --workspace /workspace --task "..." --non-interactive
-RUN npm install -g @anthropic/claude-code
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Install Cursor CLI using official installation script
 # Command: cursor agent --cwd /workspace --prompt "..." --headless --no-confirm
