@@ -337,7 +337,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		fmt.Fprintf(os.Stderr, "No validations to execute\n")
 	}
 
-	// 13. Commit changes
+	// 11. Commit changes
 	commitMsg := fmt.Sprintf("feat: implement issue #%d", issueID)
 	fmt.Fprintf(os.Stderr, "Committing changes\n")
 	commitSHA, err := git.CommitChanges(envCfg.WorkDir, commitMsg)
@@ -354,7 +354,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
 
-	// 14. Push branch
+	// 12. Push branch
 	fmt.Fprintf(os.Stderr, "Pushing branch %s to remote\n", branchName)
 	if err := git.PushBranch(envCfg.WorkDir, branchName, envCfg.GitHubToken); err != nil {
 		reportErr := reporterClient.ReportFailure(
@@ -369,7 +369,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Pushed branch %s to remote\n", branchName)
 
-	// 15. Save session to S3
+	// 13. Save session to S3
 	fmt.Fprintf(os.Stderr, "Saving session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 	if err := storage.SaveSession(envCfg.AgentRunID, envCfg.AgentType); err != nil {
 		reportErr := reporterClient.ReportFailure(
@@ -384,7 +384,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Saved session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 
-	// 16. Create Pull Request
+	// 14. Create Pull Request
 	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
 	prNumber, err := git.CreatePR(envCfg.GitHubToken, repo, branchName, issueID)
 	if err != nil {
@@ -400,7 +400,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	}
 	fmt.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
 
-	// 17. Run post-hooks
+	// 15. Run post-hooks
 	if manifest != nil && len(manifest.Hooks.Post) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
 		if err := hooks.RunPostHooks(manifest.Hooks.Post, envCfg.WorkDir); err != nil {
@@ -413,7 +413,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		fmt.Fprintf(os.Stderr, "No post-hooks to execute\n")
 	}
 
-	// 18. Report success to Operator API
+	// 16. Report success to Operator API
 	fmt.Fprintf(os.Stderr, "Reporting success to Operator API\n")
 	if err := reporterClient.ReportSuccess(prNumber, branchName, commitSHA, envCfg.AgentType); err != nil {
 		return fmt.Errorf("failed to report success: %w", err)
