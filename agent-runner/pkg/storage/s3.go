@@ -378,7 +378,18 @@ func (c *Client) Download(ctx context.Context, key string, filePath string) erro
 		// Copy response body to local file
 		_, err = io.Copy(localFile, getObjectOutput.Body)
 		if err != nil {
-			return backoff.Permanent(fmt.Errorf("failed to write to local file: %w", err))
+			// Check if error is retryable (network errors during streaming)
+			if isRetryableError(err) {
+				// Close and remove partial file before retry
+				localFile.Close()
+				os.Remove(filePath) // Ignore error if file doesn't exist
+				fmt.Fprintf(os.Stderr, "S3 download copy failed (attempt %d/%d): %v, retrying...\n", retryCount, c.config.MaxRetries, err)
+				return err // Trigger retry
+			} else {
+				// Non-retryable error (disk full, permission error, etc.)
+				fmt.Fprintf(os.Stderr, "S3 download copy failed with non-retryable error: %v\n", err)
+				return backoff.Permanent(fmt.Errorf("failed to write to local file: %w", err))
+			}
 		}
 
 		if retryCount > 1 {
