@@ -178,6 +178,14 @@ func createTarGz(srcDir, destPath string) error {
 			return nil
 		}
 
+		// Check if file/directory should be excluded
+		if ShouldExclude(filePath) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil // Skip file
+		}
+
 		// Create tar header
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
@@ -373,6 +381,14 @@ func copyDir(src, dest string) error {
 	return filepath.Walk(src, func(srcPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		// Check if file/directory should be excluded
+		if ShouldExclude(srcPath) {
+			if info.IsDir() {
+				return filepath.SkipDir // Skip entire directory
+			}
+			return nil // Skip file
 		}
 
 		// Get relative path from source
