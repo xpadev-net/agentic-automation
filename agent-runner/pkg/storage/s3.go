@@ -166,11 +166,12 @@ func isRetryableError(err error) bool {
 	}
 
 	// Check for HTTP status codes in error context
+	// AWS SDK Go v2 uses HTTPStatusCode() method (via smithyhttp.HTTPStatusError interface)
 	var httpErr interface {
-		StatusCode() int
+		HTTPStatusCode() int
 	}
 	if errors.As(err, &httpErr) {
-		statusCode := httpErr.StatusCode()
+		statusCode := httpErr.HTTPStatusCode()
 		if statusCode == 429 || (statusCode >= 500 && statusCode < 600) {
 			return true
 		}
