@@ -580,6 +580,8 @@ func TestPushBranch_NoRemoteConfigured(t *testing.T) {
 }
 
 // TestPushBranch_InvalidRemoteURL tests PushBranch with an invalid remote URL.
+// With the new implementation, non-canonical URLs are handled gracefully:
+// if token is not in URL and repo path cannot be extracted, push is attempted with existing URL.
 func TestPushBranch_InvalidRemoteURL(t *testing.T) {
 	repoDir, cleanup := setupTestRepoWithRemote(t, "https://invalid-url")
 	defer cleanup()
@@ -594,13 +596,18 @@ func TestPushBranch_InvalidRemoteURL(t *testing.T) {
 	}
 
 	// Try to push with invalid URL
+	// New behavior: URL update is skipped, push is attempted (will fail, but not with "failed to extract repo path")
 	err = PushBranch(repoDir, "test-branch", "token")
 	if err == nil {
 		t.Error("Expected error for invalid remote URL, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "failed to extract repo path") {
-		t.Errorf("Expected 'failed to extract repo path' in error message, got: %v", err)
+	// Should fail on git push, not on URL extraction
+	if strings.Contains(err.Error(), "failed to extract repo path") {
+		t.Errorf("Unexpected 'failed to extract repo path' error - should skip URL update and fail on push, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "git push failed") {
+		t.Errorf("Expected 'git push failed' in error message, got: %v", err)
 	}
 }
 
@@ -680,6 +687,120 @@ func TestPushBranch_RemoteURLWithDots(t *testing.T) {
 		expectedURL := "https://test-token-123@github.com/owner/docs.v2.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
+		}
+	}
+}
+
+// TestPushBranch_RemoteURLWithPort tests PushBranch with remote URL containing port number.
+func TestPushBranch_RemoteURLWithPort(t *testing.T) {
+	repoDir, cleanup := setupTestRepoWithRemote(t, "https://existing-token@github.com:443/owner/repo.git")
+	defer cleanup()
+
+	// Create a branch and make a commit
+	createBranch(t, repoDir, "test-branch")
+	createTestFile(t, repoDir, "test.txt", "content\n")
+
+	_, err := CommitChanges(repoDir, "Test commit")
+	if err != nil {
+		t.Fatalf("CommitChanges() error = %v", err)
+	}
+
+	// Call PushBranch with the same token (should skip update, URL contains token)
+	token := "existing-token"
+	err = PushBranch(repoDir, "test-branch", token)
+	// Should not error on URL extraction - token is already in URL
+	if err == nil {
+		// URL should remain unchanged (still has port)
+		remoteURL := getRemoteURL(t, repoDir)
+		if remoteURL != "https://existing-token@github.com:443/owner/repo.git" {
+			t.Errorf("Remote URL should remain unchanged with port, got: %q", remoteURL)
+		}
+	} else {
+		// Even if push fails, URL should remain unchanged
+		remoteURL := getRemoteURL(t, repoDir)
+		if remoteURL != "https://existing-token@github.com:443/owner/repo.git" {
+			t.Errorf("Remote URL should remain unchanged with port, got: %q", remoteURL)
+		}
+		// Error should be from push, not URL extraction
+		if strings.Contains(err.Error(), "failed to extract repo path") {
+			t.Errorf("Unexpected 'failed to extract repo path' error - token is already in URL, got: %v", err)
+		}
+	}
+}
+
+// TestPushBranch_RemoteURLWithEnterpriseHost tests PushBranch with enterprise GitHub hostname.
+func TestPushBranch_RemoteURLWithEnterpriseHost(t *testing.T) {
+	repoDir, cleanup := setupTestRepoWithRemote(t, "https://token@github.example.com/owner/repo.git")
+	defer cleanup()
+
+	// Create a branch and make a commit
+	createBranch(t, repoDir, "test-branch")
+	createTestFile(t, repoDir, "test.txt", "content\n")
+
+	_, err := CommitChanges(repoDir, "Test commit")
+	if err != nil {
+		t.Fatalf("CommitChanges() error = %v", err)
+	}
+
+	// Call PushBranch with the same token (should skip update, URL contains token)
+	token := "token"
+	err = PushBranch(repoDir, "test-branch", token)
+	// Should not error on URL extraction - token is already in URL
+	if err == nil {
+		// URL should remain unchanged (still has enterprise host)
+		remoteURL := getRemoteURL(t, repoDir)
+		if remoteURL != "https://token@github.example.com/owner/repo.git" {
+			t.Errorf("Remote URL should remain unchanged with enterprise host, got: %q", remoteURL)
+		}
+	} else {
+		// Even if push fails, URL should remain unchanged
+		remoteURL := getRemoteURL(t, repoDir)
+		if remoteURL != "https://token@github.example.com/owner/repo.git" {
+			t.Errorf("Remote URL should remain unchanged with enterprise host, got: %q", remoteURL)
+		}
+		// Error should be from push, not URL extraction
+		if strings.Contains(err.Error(), "failed to extract repo path") {
+			t.Errorf("Unexpected 'failed to extract repo path' error - token is already in URL, got: %v", err)
+		}
+	}
+}
+
+// TestPushBranch_RemoteURLWithPortDifferentToken tests that URL with port is not updated when token differs
+// but repo path cannot be extracted (should skip update gracefully).
+func TestPushBranch_RemoteURLWithPortDifferentToken(t *testing.T) {
+	repoDir, cleanup := setupTestRepoWithRemote(t, "https://old-token@github.com:443/owner/repo.git")
+	defer cleanup()
+
+	// Create a branch and make a commit
+	createBranch(t, repoDir, "test-branch")
+	createTestFile(t, repoDir, "test.txt", "content\n")
+
+	_, err := CommitChanges(repoDir, "Test commit")
+	if err != nil {
+		t.Fatalf("CommitChanges() error = %v", err)
+	}
+
+	// Call PushBranch with different token
+	// Since URL has port, extractRepoPath will return empty string
+	// Should skip URL update gracefully and attempt push with existing URL
+	token := "new-token"
+	err = PushBranch(repoDir, "test-branch", token)
+	// Should not error on URL extraction - should skip update and attempt push
+	if err == nil {
+		// URL should remain unchanged (cannot rebuild with port)
+		remoteURL := getRemoteURL(t, repoDir)
+		if remoteURL != "https://old-token@github.com:443/owner/repo.git" {
+			t.Errorf("Remote URL should remain unchanged (cannot rebuild with port), got: %q", remoteURL)
+		}
+	} else {
+		// Error should be from push, not URL extraction
+		if strings.Contains(err.Error(), "failed to extract repo path") {
+			t.Errorf("Unexpected 'failed to extract repo path' error - should skip update gracefully, got: %v", err)
+		}
+		// URL should remain unchanged
+		remoteURL := getRemoteURL(t, repoDir)
+		if remoteURL != "https://old-token@github.com:443/owner/repo.git" {
+			t.Errorf("Remote URL should remain unchanged (cannot rebuild with port), got: %q", remoteURL)
 		}
 	}
 }
