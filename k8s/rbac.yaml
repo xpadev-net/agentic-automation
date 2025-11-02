@@ -1,0 +1,53 @@
+---
+# ServiceAccount for agent-runner Pods
+# Used by Pods created by the Operator to execute AI agents
+# Referenced in: internal/clients/kubernetes.go:297
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-automation
+  namespace: default
+  labels:
+    app: agent-runner
+    component: agent-runner
+---
+# Role for agent-runner Pods
+# Currently empty as Pods don't require Kubernetes API access
+# Pods only perform external operations:
+# - Git operations (via GitHub API)
+# - S3 operations (session persistence)
+# - HTTP requests to Operator API
+#
+# Future permissions may be added if needed:
+# - pods/status (read own Pod status for self-reporting)
+# - configmaps (read ConfigMaps for dynamic configuration)
+# - secrets (read Secrets for credentials, if not using env vars)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-automation-role
+  namespace: default
+  labels:
+    app: agent-runner
+    component: agent-runner
+rules: []
+---
+# RoleBinding for agent-runner Pods
+# Binds the ServiceAccount to the Role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-automation-rolebinding
+  namespace: default
+  labels:
+    app: agent-runner
+    component: agent-runner
+subjects:
+  - kind: ServiceAccount
+    name: agent-automation
+    namespace: default
+roleRef:
+  kind: Role
+  name: agent-automation-role
+  apiGroup: rbac.authorization.k8s.io
+
