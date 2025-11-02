@@ -92,7 +92,7 @@
 - [x] T042 Create Dockerfile for agent-runner (multi-stage: Go build → Node.js runtime with agents)
 - [x] T043 Create k8s/rbac.yaml (ServiceAccount, Role, RoleBinding for Pod permissions)
 - [x] T044 Create k8s/pod-template.yaml using agent-runner image
-- [ ] T045 Build and push Docker image to container registry (ghcr.io or Docker Hub)
+- [x] T045 Build and push Docker image to container registry (ghcr.io or Docker Hub)
 - [ ] T046 [P] Write unit tests for agent executor (mock agent commands)
 - [ ] T047 [P] Write unit tests for manifest config loader (YAML parsing, version validation)
 - [ ] T048 [P] Write unit tests for hooks runner (timeout enforcement, required vs optional hooks)
