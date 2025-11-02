@@ -162,20 +162,20 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		return reporter.ReportFailure(cfg, fmt.Sprintf("Git clone failed: %v", err))
 	}
 
-	// 3. Load manifest (.agent-config.yaml)
-	manifest, err := config.LoadManifest(workDir)
-	if err != nil {
-		return reporter.ReportFailure(cfg, fmt.Sprintf("Failed to load manifest: %v", err))
-	}
-
-	// 4. Restore session from S3 (if retry) - MUST run before pre-hooks
+	// 3. Restore session from S3 (if retry) - MUST run before loading manifest
 	if cfg.RetryCount > 0 {
 		if err := storage.RestoreSession(cfg.AgentRunID, cfg.RetryCount); err != nil {
 			return reporter.ReportFailure(cfg, fmt.Sprintf("Session restore failed: %v", err))
 		}
 	}
 
-	// 5. Execute pre-hooks (after session restore to apply to correct workspace)
+	// 4. Load manifest (.agent-config.yaml) - AFTER session restore to use updated manifest
+	manifest, err := config.LoadManifest(workDir)
+	if err != nil {
+		return reporter.ReportFailure(cfg, fmt.Sprintf("Failed to load manifest: %v", err))
+	}
+
+	// 5. Execute pre-hooks (uses manifest from restored session if retry)
 	if manifest != nil {
 		if err := hooks.RunPreHooks(manifest.Hooks.Pre, workDir); err != nil {
 			return reporter.ReportFailure(cfg, fmt.Sprintf("Pre-hook failed: %v", err))
