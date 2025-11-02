@@ -1,4 +1,4 @@
-.PHONY: build test vet migrate-up migrate-down migrate-status run clean deps help
+.PHONY: build test vet migrate-up migrate-down migrate-status run clean deps help docker-build docker-push docker-build-push
 
 # Default target
 .DEFAULT_GOAL := help
@@ -8,6 +8,14 @@ BIN_DIR := bin
 OPERATOR_BIN := $(BIN_DIR)/operator
 AGENT_RUNNER_BIN := $(BIN_DIR)/agent-runner
 MIGRATIONS_DIR := migrations
+
+# Docker variables
+DOCKER_REGISTRY ?= ghcr.io
+DOCKER_OWNER ?= $(shell echo '$(shell git config user.name)' | tr '[:upper:]' '[:lower:]')
+IMAGE_NAME ?= agent-runner
+GIT_SHA ?= $(shell git rev-parse --short HEAD)
+FULL_IMAGE_LATEST ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(IMAGE_NAME):latest
+FULL_IMAGE_SHA ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(IMAGE_NAME):sha-$(GIT_SHA)
 
 # Load environment variables from .env if it exists
 ifneq (,$(wildcard ./.env))
@@ -84,4 +92,19 @@ clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
 	rm -rf $(BIN_DIR)
 	go clean
+
+docker-build: ## Build Docker image for agent-runner
+	@echo "Building Docker image..."
+	@echo "Image: $(FULL_IMAGE_LATEST)"
+	@echo "Image: $(FULL_IMAGE_SHA)"
+	cd agent-runner && docker build -t $(FULL_IMAGE_LATEST) -t $(FULL_IMAGE_SHA) .
+
+docker-push: ## Push Docker image to registry
+	@echo "Pushing Docker images..."
+	@echo "Pushing: $(FULL_IMAGE_LATEST)"
+	docker push $(FULL_IMAGE_LATEST)
+	@echo "Pushing: $(FULL_IMAGE_SHA)"
+	docker push $(FULL_IMAGE_SHA)
+
+docker-build-push: docker-build docker-push ## Build and push Docker image
 

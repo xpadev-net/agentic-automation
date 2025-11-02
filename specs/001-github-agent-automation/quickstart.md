@@ -540,6 +540,72 @@ Run with:
 docker-compose up -d
 ```
 
+### Agent Runner Docker Image
+
+The `agent-runner` component runs as a Kubernetes Pod and requires a Docker image to be built and pushed to a container registry.
+
+#### Automatic Build and Push (GitHub Actions)
+
+When code is pushed to the `master` branch, GitHub Actions automatically builds and pushes the Docker image to GitHub Container Registry (ghcr.io):
+
+- Image: `ghcr.io/<OWNER>/agent-runner:latest`
+- Image (with SHA): `ghcr.io/<OWNER>/agent-runner:sha-<SHORT_SHA>`
+
+The build job runs automatically on every push to master. No manual action required.
+
+#### Manual Build and Push
+
+To manually build and push the agent-runner Docker image:
+
+```bash
+# Build the image (creates both latest and sha-<SHA> tags)
+make docker-build
+
+# Push to registry (requires authentication)
+make docker-push
+
+# Or do both at once
+make docker-build-push
+```
+
+**Authentication for ghcr.io:**
+
+```bash
+# Login to GitHub Container Registry
+docker login ghcr.io -u <YOUR_GITHUB_USERNAME> -p <GITHUB_TOKEN>
+```
+
+To get a GitHub token:
+1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Generate a new token with `write:packages` permission
+3. Use the token as the password when logging in
+
+**Customizing the image location:**
+
+You can override the default registry and owner using environment variables:
+
+```bash
+# Use custom registry and owner
+DOCKER_REGISTRY=ghcr.io DOCKER_OWNER=myorg make docker-build-push
+
+# Or set in your environment
+export DOCKER_REGISTRY=ghcr.io
+export DOCKER_OWNER=myorg
+make docker-build-push
+```
+
+**Using the image in Kubernetes:**
+
+Update your Kubernetes Pod template or Job to reference the image:
+
+```yaml
+containers:
+  - name: agent-runner
+    image: ghcr.io/<OWNER>/agent-runner:latest
+    # Or use a specific SHA tag:
+    # image: ghcr.io/<OWNER>/agent-runner:sha-abc1234
+```
+
 ### Production Checklist
 
 - [ ] Set `ENV=production` in `.env`
