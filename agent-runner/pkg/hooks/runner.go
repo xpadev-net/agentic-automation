@@ -12,9 +12,17 @@ import (
 
 // runCommand executes a single command with timeout and error handling.
 // It returns a HookError if the command fails, or nil on success.
+// If cmd.Timeout is zero or negative, the command runs without timeout.
 func runCommand(cmd config.Command, workDir string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cmd.Timeout)
-	defer cancel()
+	var ctx context.Context
+	var cancel context.CancelFunc
+
+	if cmd.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), cmd.Timeout)
+		defer cancel()
+	} else {
+		ctx = context.Background()
+	}
 
 	execCmd := exec.CommandContext(ctx, "sh", "-c", cmd.Command)
 	execCmd.Dir = workDir
