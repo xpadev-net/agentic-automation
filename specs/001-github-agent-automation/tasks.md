@@ -75,10 +75,10 @@
 
 ### Agent Runner Setup (NEW - Go binary in Pod)
 
-- [ ] T030 Create agent-runner Go project structure (agent-runner/main.go, pkg/, Dockerfile)
-- [ ] T031 Initialize go.mod with dependencies (cobra CLI framework, HTTP client)
-- [ ] T032 [P] Implement main.go CLI entry point with cobra command structure
-- [ ] T033 [P] Implement pkg/agent/executor.go (claude-code/cursor-agents execution)
+- [x] T030 Create agent-runner Go project structure (agent-runner/main.go, pkg/, Dockerfile)
+- [x] T031 Initialize go.mod with dependencies (cobra CLI framework, HTTP client)
+- [x] T032 [P] Implement main.go CLI entry point with cobra command structure
+- [x] T033 [P] Implement pkg/agent/executor.go (claude-code/cursor-agents execution)
 - [ ] T034 [P] Implement pkg/lint/runner.go (npm run lint, npm run type-check)
 - [ ] T035 [P] Implement pkg/git/committer.go (git commit/push operations, return branch+SHA)
 - [ ] T036 [P] Implement pkg/git/diff.go (git diff detection for file changes)
