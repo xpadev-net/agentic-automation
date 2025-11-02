@@ -88,7 +88,7 @@
 - [x] T038 [P] Implement pkg/context/issue.go (Issue context parsing from args)
 - [x] T039 [P] Implement pkg/reporter/client.go (Operator API client with exponential backoff retry)
 - [x] T040 Update main.go execution flow: Clone → Restore session → Load manifest → Pre-hooks → Agent → Validation → Commit → Post-hooks
-- [ ] T041 Integrate reporter into main.go (call on success/failure, validation failures return error without API report)
+- [x] T041 Integrate reporter into main.go (call on success/failure, validation failures return error without API report)
 - [ ] T042 Create Dockerfile for agent-runner (multi-stage: Go build → Node.js runtime with agents)
 - [ ] T043 Create k8s/rbac.yaml (ServiceAccount, Role, RoleBinding for Pod permissions)
 - [ ] T044 Create k8s/pod-template.yaml using agent-runner image
