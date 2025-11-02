@@ -25,17 +25,7 @@ func HasChanges(workDir string) (bool, error) {
 	return false, fmt.Errorf("not implemented: T036")
 }
 
-// CommitChanges commits all changes with the given message.
-// Implementation will be added in T035.
-func CommitChanges(workDir, message string) (string, error) {
-	return "", fmt.Errorf("not implemented: T035")
-}
-
-// PushBranch pushes the branch to the remote repository.
-// Implementation will be added in T035.
-func PushBranch(workDir, branchName, token string) error {
-	return fmt.Errorf("not implemented: T035")
-}
+// CommitChanges and PushBranch are implemented in committer.go (T036).
 
 // CreatePR creates a Pull Request via GitHub API.
 // If PR already exists for this branch, returns existing PR number.
