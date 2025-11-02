@@ -47,25 +47,27 @@ func PushBranch(workDir, branchName, token string) error {
 
 	remoteUrl := strings.TrimSpace(string(remoteUrlOutput))
 
-	// If URL doesn't contain a token, update it to include token for authentication
-	// CloneRepo sets up URL with token, but we ensure it's set here as well
-	// Check if URL already has a token: HTTPS URLs with token contain "://token@github.com"
-	// SSH URLs (git@github.com) don't have tokens, so we should update them
-	hasToken := strings.Contains(remoteUrl, "://") && strings.Contains(remoteUrl, "@github.com") && !strings.HasPrefix(remoteUrl, "git@")
-	if token != "" && !hasToken {
-		// Extract repo path from URL (e.g., owner/repo from https://github.com/owner/repo.git)
-		// Support both https://github.com/owner/repo.git and https://token@github.com/owner/repo.git formats
-		repoPath := extractRepoPath(remoteUrl)
-		if repoPath == "" {
-			return fmt.Errorf("failed to extract repo path from remote URL: %s", remoteUrl)
-		}
+	// If token is provided, check if URL needs to be updated
+	// Update if:
+	// 1. No token in URL (SSH URL or HTTPS without credentials)
+	// 2. Different token in URL than the one provided
+	if token != "" {
+		existingToken := extractTokenFromURL(remoteUrl)
+		if existingToken != token {
+			// Extract repo path from URL (e.g., owner/repo from https://github.com/owner/repo.git)
+			// Support both https://github.com/owner/repo.git and https://token@github.com/owner/repo.git formats
+			repoPath := extractRepoPath(remoteUrl)
+			if repoPath == "" {
+				return fmt.Errorf("failed to extract repo path from remote URL: %s", remoteUrl)
+			}
 
-		// Update remote URL to include token
-		newUrl := fmt.Sprintf("https://%s@github.com/%s.git", token, repoPath)
-		setUrlCmd := exec.Command("git", "remote", "set-url", "origin", newUrl)
-		setUrlCmd.Dir = workDir
-		if err := setUrlCmd.Run(); err != nil {
-			return fmt.Errorf("failed to update remote URL: %w", err)
+			// Update remote URL to include token
+			newUrl := fmt.Sprintf("https://%s@github.com/%s.git", token, repoPath)
+			setUrlCmd := exec.Command("git", "remote", "set-url", "origin", newUrl)
+			setUrlCmd.Dir = workDir
+			if err := setUrlCmd.Run(); err != nil {
+				return fmt.Errorf("failed to update remote URL: %w", err)
+			}
 		}
 	}
 
@@ -77,6 +79,18 @@ func PushBranch(workDir, branchName, token string) error {
 	}
 
 	return nil
+}
+
+// extractTokenFromURL extracts the token (or username) from a GitHub HTTPS URL.
+// Returns empty string if no token/username is present or URL is not HTTPS format.
+// Supports format: https://token@github.com/owner/repo.git
+func extractTokenFromURL(url string) string {
+	// Pattern for HTTPS URLs with token: https://token@github.com/...
+	httpsPattern := regexp.MustCompile(`^https://([^@]+)@github\.com/`)
+	if matches := httpsPattern.FindStringSubmatch(url); len(matches) == 2 {
+		return matches[1]
+	}
+	return ""
 }
 
 // extractRepoPath extracts the repository path (owner/repo) from a GitHub URL.

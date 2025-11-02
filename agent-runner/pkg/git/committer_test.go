@@ -419,7 +419,7 @@ func TestPushBranch_UpdateRemoteURLWithoutToken(t *testing.T) {
 	}
 }
 
-// TestPushBranch_RemoteURLAlreadyHasToken tests that URL is not updated when it already has a token.
+// TestPushBranch_RemoteURLAlreadyHasToken tests that URL is not updated when it already has the same token.
 func TestPushBranch_RemoteURLAlreadyHasToken(t *testing.T) {
 	repoDir, cleanup := setupTestRepoWithRemote(t, "https://existing-token@github.com/owner/repo.git")
 	defer cleanup()
@@ -433,8 +433,8 @@ func TestPushBranch_RemoteURLAlreadyHasToken(t *testing.T) {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
 
-	// Call PushBranch with a different token
-	token := "new-token-456"
+	// Call PushBranch with the same token (should not update)
+	token := "existing-token"
 	err = PushBranch(repoDir, "test-branch", token)
 	if err == nil {
 		// Check if URL was NOT updated (should still have existing-token)
@@ -442,14 +442,82 @@ func TestPushBranch_RemoteURLAlreadyHasToken(t *testing.T) {
 		if !strings.Contains(remoteURL, "existing-token") {
 			t.Errorf("Remote URL should not be updated, but got: %q", remoteURL)
 		}
-		if strings.Contains(remoteURL, "new-token-456") {
-			t.Errorf("Remote URL should not contain new token, got: %q", remoteURL)
-		}
 	} else {
 		// Even if push fails, URL should NOT be updated
 		remoteURL := getRemoteURL(t, repoDir)
 		if !strings.Contains(remoteURL, "existing-token") {
 			t.Errorf("Remote URL should not be updated, but got: %q", remoteURL)
+		}
+	}
+}
+
+// TestPushBranch_RemoteURLWithDifferentToken tests that URL is updated when a different token is provided.
+func TestPushBranch_RemoteURLWithDifferentToken(t *testing.T) {
+	repoDir, cleanup := setupTestRepoWithRemote(t, "https://old-token@github.com/owner/repo.git")
+	defer cleanup()
+
+	// Create a branch and make a commit
+	createBranch(t, repoDir, "test-branch")
+	createTestFile(t, repoDir, "test.txt", "content\n")
+
+	_, err := CommitChanges(repoDir, "Test commit")
+	if err != nil {
+		t.Fatalf("CommitChanges() error = %v", err)
+	}
+
+	// Call PushBranch with a different token (should update)
+	token := "new-token-456"
+	err = PushBranch(repoDir, "test-branch", token)
+	if err == nil {
+		// Check if URL was updated with new token
+		remoteURL := getRemoteURL(t, repoDir)
+		expectedURL := "https://new-token-456@github.com/owner/repo.git"
+		if remoteURL != expectedURL {
+			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
+		}
+	} else {
+		// Even if push fails, URL should be updated with new token
+		remoteURL := getRemoteURL(t, repoDir)
+		expectedURL := "https://new-token-456@github.com/owner/repo.git"
+		if remoteURL != expectedURL {
+			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
+		}
+	}
+}
+
+// TestPushBranch_RemoteURLWithUsername tests that URL is updated when username (not token) is in URL.
+func TestPushBranch_RemoteURLWithUsername(t *testing.T) {
+	repoDir, cleanup := setupTestRepoWithRemote(t, "https://username@github.com/owner/repo.git")
+	defer cleanup()
+
+	// Create a branch and make a commit
+	createBranch(t, repoDir, "test-branch")
+	createTestFile(t, repoDir, "test.txt", "content\n")
+
+	_, err := CommitChanges(repoDir, "Test commit")
+	if err != nil {
+		t.Fatalf("CommitChanges() error = %v", err)
+	}
+
+	// Call PushBranch with a token (should update, replacing username)
+	token := "new-token-789"
+	err = PushBranch(repoDir, "test-branch", token)
+	if err == nil {
+		// Check if URL was updated with token
+		remoteURL := getRemoteURL(t, repoDir)
+		expectedURL := "https://new-token-789@github.com/owner/repo.git"
+		if remoteURL != expectedURL {
+			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
+		}
+		if strings.Contains(remoteURL, "username") {
+			t.Errorf("Remote URL should not contain username, got: %q", remoteURL)
+		}
+	} else {
+		// Even if push fails, URL should be updated with token
+		remoteURL := getRemoteURL(t, repoDir)
+		expectedURL := "https://new-token-789@github.com/owner/repo.git"
+		if remoteURL != expectedURL {
+			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
 		}
 	}
 }
