@@ -93,11 +93,11 @@
 - [x] T043 Create k8s/rbac.yaml (ServiceAccount, Role, RoleBinding for Pod permissions)
 - [x] T044 Create k8s/pod-template.yaml using agent-runner image
 - [x] T045 Build and push Docker image to container registry (ghcr.io or Docker Hub)
-- [ ] T046 [P] Write unit tests for agent executor (mock agent commands)
-- [ ] T047 [P] Write unit tests for manifest config loader (YAML parsing, version validation)
-- [ ] T048 [P] Write unit tests for hooks runner (timeout enforcement, required vs optional hooks)
-- [ ] T049 [P] Write unit tests for git committer (mock git commands)
-- [ ] T050 [P] Write unit tests for reporter client (mock HTTP requests, retry logic)
+- [x] T046 [P] Write unit tests for agent executor (mock agent commands)
+- [x] T047 [P] Write unit tests for manifest config loader (YAML parsing, version validation)
+- [x] T048 [P] Write unit tests for hooks runner (timeout enforcement, required vs optional hooks)
+- [x] T049 [P] Write unit tests for git committer (mock git commands)
+- [x] T050 [P] Write unit tests for reporter client (mock HTTP requests, retry logic)
 - [ ] T051 Write integration test for full agent-runner execution flow with manifest (end-to-end)
 
 ### S3 Session Persistence (NEW - Session context across retries)
