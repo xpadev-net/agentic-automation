@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // SaveSession saves agent session data to S3.
@@ -212,6 +213,41 @@ func createTarGz(srcDir, destPath string) error {
 	})
 }
 
+// validateTarPath validates and sanitizes a tar entry path to prevent path traversal attacks.
+// It rejects absolute paths and paths containing ".." components that would escape destDir.
+func validateTarPath(entryName, destDir string) (string, error) {
+	// 1. Reject absolute paths
+	if filepath.IsAbs(entryName) {
+		return "", fmt.Errorf("absolute path not allowed: %s", entryName)
+	}
+
+	// 2. Clean the path (normalizes separators and resolves . components)
+	cleanPath := filepath.Clean(entryName)
+
+	// 3. Check for remaining .. components (path traversal prevention)
+	// filepath.Clean resolves .., but we need to check the original path
+	// to catch cases like "a/../../b" where Clean would normalize but still be dangerous
+	if strings.Contains(cleanPath, "..") {
+		return "", fmt.Errorf("path traversal not allowed: %s", entryName)
+	}
+
+	// 4. Verify the final path stays within destDir
+	finalPath := filepath.Join(destDir, cleanPath)
+
+	// Get the relative path from destDir to finalPath
+	relPath, err := filepath.Rel(destDir, finalPath)
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %s: %w", entryName, err)
+	}
+
+	// 5. If the relative path starts with "..", it escapes destDir (path traversal)
+	if strings.HasPrefix(relPath, "..") || relPath == ".." {
+		return "", fmt.Errorf("path traversal detected: %s", entryName)
+	}
+
+	return finalPath, nil
+}
+
 // extractTarGz extracts a tar.gz archive to the destination directory.
 func extractTarGz(srcPath, destDir string) error {
 	// Open the tar.gz file
@@ -241,8 +277,11 @@ func extractTarGz(srcPath, destDir string) error {
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
 
-		// Construct destination path
-		destPath := filepath.Join(destDir, header.Name)
+		// Validate and construct destination path (prevents path traversal attacks)
+		destPath, err := validateTarPath(header.Name, destDir)
+		if err != nil {
+			return fmt.Errorf("invalid tar entry path: %w", err)
+		}
 
 		// Get file info from header
 		info := header.FileInfo()
