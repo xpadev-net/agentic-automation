@@ -118,16 +118,18 @@ func RestoreSession(agentRunID int, retryCount int) error {
 		return fmt.Errorf("failed to download session from S3: %w", err)
 	}
 
-	// 6. Extract tar.gz archive to root filesystem
-	if err := extractTarGz(tarPath, "/"); err != nil {
+	// 6. Get home directory for extraction
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	// 7. Extract tar.gz archive to home directory
+	if err := extractTarGz(tarPath, homeDir); err != nil {
 		return fmt.Errorf("failed to extract session archive: %w", err)
 	}
 
-	// 7. Verify restored files exist
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("failed to get home directory for verification: %w", err)
-	}
+	// 8. Verify restored files exist
 
 	claudeDir := filepath.Join(homeDir, ".claude")
 	cursorDir := filepath.Join(homeDir, ".cursor")
