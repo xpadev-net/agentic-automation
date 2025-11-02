@@ -86,18 +86,21 @@ func PushBranch(workDir, branchName, token string) error {
 // - git@github.com:owner/repo.git
 func extractRepoPath(url string) string {
 	// Pattern for https:// URLs (with optional token)
-	// Capture group matches owner/repo (without .git extension)
-	// Use non-greedy match to stop before .git
-	httpsPattern := regexp.MustCompile(`^https://(?:[^@]+@)?github\.com/([^/.]+/[^/.]+)(?:\.git)?$`)
+	// Capture group matches owner/repo (may include .git extension)
+	httpsPattern := regexp.MustCompile(`^https://(?:[^@]+@)?github\.com/([^/]+/[^/]+)(?:\.git)?$`)
 	if matches := httpsPattern.FindStringSubmatch(url); len(matches) == 2 {
-		return matches[1]
+		repoPath := matches[1]
+		// Remove .git extension if present
+		return strings.TrimSuffix(repoPath, ".git")
 	}
 
 	// Pattern for SSH URLs (git@github.com:owner/repo.git)
-	// Capture group matches owner/repo (without .git extension)
-	sshPattern := regexp.MustCompile(`^git@github\.com:([^/.]+/[^/.]+)(?:\.git)?$`)
+	// Capture group matches owner/repo (may include .git extension)
+	sshPattern := regexp.MustCompile(`^git@github\.com:([^/]+/[^/]+)(?:\.git)?$`)
 	if matches := sshPattern.FindStringSubmatch(url); len(matches) == 2 {
-		return matches[1]
+		repoPath := matches[1]
+		// Remove .git extension if present
+		return strings.TrimSuffix(repoPath, ".git")
 	}
 
 	return ""

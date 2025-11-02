@@ -104,6 +104,31 @@ func TestExtractRepoPath(t *testing.T) {
 			url:      "https://github.com/owner/repo/path",
 			expected: "",
 		},
+		{
+			name:     "HTTPS with dots in repo name",
+			url:      "https://github.com/owner/docs.v2.git",
+			expected: "owner/docs.v2",
+		},
+		{
+			name:     "HTTPS with dots in repo name without .git",
+			url:      "https://github.com/owner/docs.v2",
+			expected: "owner/docs.v2",
+		},
+		{
+			name:     "SSH with dots in repo name",
+			url:      "git@github.com:owner/docs.v2.git",
+			expected: "owner/docs.v2",
+		},
+		{
+			name:     "SSH with dots in repo name without .git",
+			url:      "git@github.com:owner/docs.v2",
+			expected: "owner/docs.v2",
+		},
+		{
+			name:     "HTTPS with dots in owner and repo name",
+			url:      "https://github.com/org.name/repo.v2.git",
+			expected: "org.name/repo.v2",
+		},
 	}
 
 	for _, tt := range tests {
@@ -551,6 +576,40 @@ func TestPushBranch_SSHRemoteURL(t *testing.T) {
 		// Even if push fails, URL should be updated
 		remoteURL := getRemoteURL(t, repoDir)
 		expectedURL := "https://test-token-789@github.com/owner/repo.git"
+		if remoteURL != expectedURL {
+			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
+		}
+	}
+}
+
+// TestPushBranch_RemoteURLWithDots tests PushBranch with remote URL containing dots in repo name.
+func TestPushBranch_RemoteURLWithDots(t *testing.T) {
+	repoDir, cleanup := setupTestRepoWithRemote(t, "https://github.com/owner/docs.v2.git")
+	defer cleanup()
+
+	// Create a branch and make a commit
+	createBranch(t, repoDir, "test-branch")
+	createTestFile(t, repoDir, "test.txt", "content\n")
+
+	_, err := CommitChanges(repoDir, "Test commit")
+	if err != nil {
+		t.Fatalf("CommitChanges() error = %v", err)
+	}
+
+	// Call PushBranch with a token
+	token := "test-token-123"
+	err = PushBranch(repoDir, "test-branch", token)
+	if err == nil {
+		// Check if URL was updated correctly (should preserve dots in repo name)
+		remoteURL := getRemoteURL(t, repoDir)
+		expectedURL := "https://test-token-123@github.com/owner/docs.v2.git"
+		if remoteURL != expectedURL {
+			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
+		}
+	} else {
+		// Even if push fails, URL should be updated correctly
+		remoteURL := getRemoteURL(t, repoDir)
+		expectedURL := "https://test-token-123@github.com/owner/docs.v2.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
 		}
