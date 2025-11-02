@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -189,7 +190,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("clone failed and report failed: clone=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("repository clone failed: %w", err)
 	}
@@ -205,7 +206,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				return fmt.Errorf("session restore failed and report failed: restore=%v, report=%w", err, reportErr)
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("session restore failed: %w", err)
 		}
@@ -223,7 +224,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("manifest load failed and report failed: load=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("manifest load failed: %w", err)
 	}
@@ -243,7 +244,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("branch creation failed and report failed: create=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("branch creation failed: %w", err)
 	}
@@ -258,13 +259,19 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	if manifest != nil && len(manifest.Hooks.Pre) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d pre-hooks\n", len(manifest.Hooks.Pre))
 		if err := hooks.RunPreHooks(manifest.Hooks.Pre, envCfg.WorkDir); err != nil {
+			// Extract hook output if it's a HookError
+			var hookErr *hooks.HookError
+			logs := ""
+			if errors.As(err, &hookErr) {
+				logs = hookErr.Output
+			}
 			reportErr := reporterClient.ReportFailure(
 				fmt.Sprintf("Pre-hook failed: %v", err),
-				"",
+				logs,
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				return fmt.Errorf("pre-hook failed and report failed: hook=%v, report=%w", err, reportErr)
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("pre-hook failed: %w", err)
 		}
@@ -284,7 +291,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("agent execution failed and report failed: agent=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("agent execution failed: %w", err)
 	}
@@ -300,7 +307,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("file change check failed and report failed: check=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("file change check failed: %w", err)
 	}
@@ -311,7 +318,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("no changes detected and report failed: report=%w", reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("no file changes detected after agent execution")
 	}
@@ -321,8 +328,8 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	if manifest != nil && len(manifest.Validation) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d validations\n", len(manifest.Validation))
 		if err := hooks.RunValidations(manifest.Validation, envCfg.WorkDir); err != nil {
-			// Validation失敗時はOperator APIに報告せず、エラーをそのまま返す
-			// Operatorのretry orchestratorが処理する
+			// Validation failures should NOT report to Operator API
+			// The retry orchestrator will handle retries based on Pod exit code
 			return fmt.Errorf("validation failed: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Executed %d validations\n", len(manifest.Validation))
@@ -341,7 +348,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("commit failed and report failed: commit=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("git commit failed: %w", err)
 	}
@@ -356,7 +363,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("push failed and report failed: push=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("git push failed: %w", err)
 	}
@@ -371,7 +378,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("session save failed and report failed: save=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("session save failed: %w", err)
 	}
@@ -387,7 +394,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			return fmt.Errorf("PR creation failed and report failed: pr=%v, report=%w", err, reportErr)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("PR creation failed: %w", err)
 	}
@@ -397,7 +404,7 @@ func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	if manifest != nil && len(manifest.Hooks.Post) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
 		if err := hooks.RunPostHooks(manifest.Hooks.Post, envCfg.WorkDir); err != nil {
-			// Post-hookの失敗は警告ログのみで処理を続行
+			// Post-hook failures are logged as warnings and do not abort execution (PR already created)
 			fmt.Fprintf(os.Stderr, "WARNING: Post-hook execution failed: %v (continuing)\n", err)
 		} else {
 			fmt.Fprintf(os.Stderr, "Executed %d post-hooks\n", len(manifest.Hooks.Post))
