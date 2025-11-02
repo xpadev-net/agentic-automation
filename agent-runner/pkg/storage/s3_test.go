@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -823,7 +824,10 @@ func TestClient_Download_DirectoryCreationFailure(t *testing.T) {
 	// with invalid characters (would fail on Windows) or in a read-only location
 	// For simplicity, we'll test with a path that would fail
 	// Note: This is platform-dependent, so we'll skip on certain platforms
-	if os.Getuid() == 0 {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping test on Windows (uses Unix-specific paths and os.Getuid)")
+	}
+	if runtime.GOOS != "windows" && os.Getuid() == 0 {
 		t.Skip("Skipping test when running as root (may have write access to read-only paths)")
 	}
 
