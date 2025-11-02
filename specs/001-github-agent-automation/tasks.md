@@ -103,8 +103,8 @@
 ### S3 Session Persistence (NEW - Session context across retries)
 
 - [x] T052_S3 Add AWS SDK Go v2 and backoff dependencies to agent-runner/go.mod
-- [ ] T053_S3 [P] Implement pkg/storage/config.go (S3 configuration struct, env var loading)
-- [ ] T054_S3 [P] Implement pkg/storage/s3.go (S3 client with UsePathStyle support, Upload/Download with exponential backoff)
+- [x] T053_S3 [P] Implement pkg/storage/config.go (S3 configuration struct, env var loading)
+- [x] T054_S3 [P] Implement pkg/storage/s3.go (S3 client with UsePathStyle support, Upload/Download with exponential backoff)
 - [ ] T055_S3 [P] Implement pkg/storage/session.go (SaveSession, RestoreSession, tar.gz compression/extraction)
 - [ ] T056_S3 [P] Implement pkg/storage/exclusion.go (credential file filtering, .env/.pem/.key exclusion)
 - [ ] T057_S3 Integrate session restore into main.go (step 3: call RestoreSession if retry_count > 0, BEFORE loading manifest)
