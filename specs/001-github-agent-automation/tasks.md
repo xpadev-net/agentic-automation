@@ -105,12 +105,12 @@
 - [x] T052_S3 Add AWS SDK Go v2 and backoff dependencies to agent-runner/go.mod
 - [x] T053_S3 [P] Implement pkg/storage/config.go (S3 configuration struct, env var loading)
 - [x] T054_S3 [P] Implement pkg/storage/s3.go (S3 client with UsePathStyle support, Upload/Download with exponential backoff)
-- [ ] T055_S3 [P] Implement pkg/storage/session.go (SaveSession, RestoreSession, tar.gz compression/extraction)
-- [ ] T056_S3 [P] Implement pkg/storage/exclusion.go (credential file filtering, .env/.pem/.key exclusion)
-- [ ] T057_S3 Integrate session restore into main.go (step 3: call RestoreSession if retry_count > 0, BEFORE loading manifest)
-- [ ] T058_S3 Integrate session save into main.go (step 13: call SaveSession before reporting)
-- [ ] T059_S3 Add RETRY_COUNT environment variable to Kubernetes Pod template (k8s/pod-template.yaml)
-- [ ] T060_S3 Add S3 environment variables to Kubernetes Pod template (S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_USE_PATH_STYLE, S3_MAX_RETRIES)
+- [x] T055_S3 [P] Implement pkg/storage/session.go (SaveSession, RestoreSession, tar.gz compression/extraction)
+- [x] T056_S3 [P] Implement pkg/storage/exclusion.go (credential file filtering, .env/.pem/.key exclusion)
+- [x] T057_S3 Integrate session restore into main.go (step 3: call RestoreSession if retry_count > 0, BEFORE loading manifest)
+- [x] T058_S3 Integrate session save into main.go (step 13: call SaveSession before reporting)
+- [x] T059_S3 Add RETRY_COUNT environment variable to Kubernetes Pod template (k8s/pod-template.yaml)
+- [x] T060_S3 Add S3 environment variables to Kubernetes Pod template (S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_USE_PATH_STYLE, S3_MAX_RETRIES)
 - [ ] T061_S3 Update internal/clients/kubernetes.go to inject S3 config and RETRY_COUNT into Job creation
 - [ ] T062_S3 [P] Create scripts/setup-minio.sh for MinIO bucket initialization (create agent-sessions bucket)
 - [ ] T063_S3 [P] Write unit tests for S3 client (mock S3 API, test retry logic, path-style URLs)
