@@ -1,0 +1,183 @@
+package context
+
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+// Issue represents the GitHub Issue context passed to the agent
+type Issue struct {
+	ID               int
+	Title            string // promptから抽出（後続タスクで実装）
+	Body             string // promptから抽出（後続タスクで実装）
+	Repo             string // owner/repo format
+	Labels           []string
+	PreviousAttempts []PreviousAttempt
+	CILogs           string
+}
+
+// PreviousAttempt represents a previous retry attempt
+type PreviousAttempt struct {
+	RetryCount int    `json:"retry_count"`
+	Error      string `json:"error"`
+	CILogs     string `json:"ci_logs,omitempty"`
+}
+
+// ParseError represents a parsing error with field context
+type ParseError struct {
+	Field   string
+	Message string
+	Err     error // wrapped error for Unwrap()
+}
+
+// Error implements the error interface
+func (e *ParseError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("invalid %s: %s: %v", e.Field, e.Message, e.Err)
+	}
+	return fmt.Sprintf("invalid %s: %s", e.Field, e.Message)
+}
+
+// Unwrap returns the underlying error if any
+func (e *ParseError) Unwrap() error {
+	return e.Err
+}
+
+// repoPattern matches owner/repo format
+var repoPattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$`)
+
+// validateIssueID validates that issueID is a positive integer
+func validateIssueID(issueID int) error {
+	if issueID <= 0 {
+		return &ParseError{
+			Field:   "issue-id",
+			Message: fmt.Sprintf("must be positive integer, got: %d", issueID),
+		}
+	}
+	return nil
+}
+
+// validateRepo validates that repo is in owner/repo format
+func validateRepo(repo string) error {
+	if !repoPattern.MatchString(repo) {
+		return &ParseError{
+			Field:   "repo",
+			Message: fmt.Sprintf("must be in format owner/repo, got: %q", repo),
+		}
+	}
+	return nil
+}
+
+// validatePrompt validates that prompt is not empty
+func validatePrompt(prompt string) error {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return &ParseError{
+			Field:   "prompt",
+			Message: "must not be empty",
+		}
+	}
+	return nil
+}
+
+// parsePreviousAttempts parses JSON string into []PreviousAttempt
+// Returns nil slice and nil error if jsonStr is empty
+func parsePreviousAttempts(jsonStr string) ([]PreviousAttempt, error) {
+	if jsonStr == "" {
+		return nil, nil
+	}
+
+	// First check if it's null
+	var rawValue interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &rawValue); err != nil {
+		return nil, &ParseError{
+			Field:   "previous-attempts",
+			Message: "invalid JSON",
+			Err:     err,
+		}
+	}
+
+	// Check if it's null
+	if rawValue == nil {
+		return nil, &ParseError{
+			Field:   "previous-attempts",
+			Message: "must be an array, got null",
+		}
+	}
+
+	// Check if it's an array
+	if _, ok := rawValue.([]interface{}); !ok {
+		return nil, &ParseError{
+			Field:   "previous-attempts",
+			Message: fmt.Sprintf("must be an array, got %T", rawValue),
+		}
+	}
+
+	// Now parse into []PreviousAttempt
+	var attempts []PreviousAttempt
+	if err := json.Unmarshal([]byte(jsonStr), &attempts); err != nil {
+		return nil, &ParseError{
+			Field:   "previous-attempts",
+			Message: "invalid JSON",
+			Err:     err,
+		}
+	}
+
+	// Validate each attempt
+	for i, attempt := range attempts {
+		if attempt.RetryCount < 0 {
+			return nil, &ParseError{
+				Field:   "previous-attempts",
+				Message: fmt.Sprintf("attempt[%d].retry_count must be non-negative, got: %d", i, attempt.RetryCount),
+			}
+		}
+		// Require at least retry_count or error to be set (not both zero/empty)
+		if attempt.RetryCount == 0 && attempt.Error == "" {
+			return nil, &ParseError{
+				Field:   "previous-attempts",
+				Message: fmt.Sprintf("attempt[%d] must have at least retry_count or error field", i),
+			}
+		}
+	}
+
+	return attempts, nil
+}
+
+// ParseIssueContext parses Issue context from command-line arguments
+func ParseIssueContext(issueID int, repo, prompt, previousAttemptsJSON, ciLogs string) (*Issue, error) {
+	// Validate issueID
+	if err := validateIssueID(issueID); err != nil {
+		return nil, err
+	}
+
+	// Validate repo
+	if err := validateRepo(repo); err != nil {
+		return nil, err
+	}
+
+	// Validate prompt
+	if err := validatePrompt(prompt); err != nil {
+		return nil, err
+	}
+
+	// Parse previous attempts
+	previousAttempts, err := parsePreviousAttempts(previousAttemptsJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build Issue struct
+	issue := &Issue{
+		ID:               issueID,
+		Title:            "", // TODO: extract from prompt in future task
+		Body:             prompt,
+		Repo:             repo,
+		Labels:           []string{}, // TODO: populate in future task
+		PreviousAttempts: previousAttempts,
+		CILogs:           ciLogs,
+	}
+
+	return issue, nil
+}
