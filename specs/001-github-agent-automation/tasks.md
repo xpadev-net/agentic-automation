@@ -90,7 +90,7 @@
 - [x] T040 Update main.go execution flow: Clone → Restore session → Load manifest → Pre-hooks → Agent → Validation → Commit → Post-hooks
 - [x] T041 Integrate reporter into main.go (call on success/failure, validation failures return error without API report)
 - [x] T042 Create Dockerfile for agent-runner (multi-stage: Go build → Node.js runtime with agents)
-- [ ] T043 Create k8s/rbac.yaml (ServiceAccount, Role, RoleBinding for Pod permissions)
+- [x] T043 Create k8s/rbac.yaml (ServiceAccount, Role, RoleBinding for Pod permissions)
 - [ ] T044 Create k8s/pod-template.yaml using agent-runner image
 - [ ] T045 Build and push Docker image to container registry (ghcr.io or Docker Hub)
 - [ ] T046 [P] Write unit tests for agent executor (mock agent commands)
