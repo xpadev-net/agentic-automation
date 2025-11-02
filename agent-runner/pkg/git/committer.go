@@ -47,9 +47,12 @@ func PushBranch(workDir, branchName, token string) error {
 
 	remoteUrl := strings.TrimSpace(string(remoteUrlOutput))
 
-	// If URL doesn't contain token, update it to include token for authentication
+	// If URL doesn't contain a token, update it to include token for authentication
 	// CloneRepo sets up URL with token, but we ensure it's set here as well
-	if token != "" && !strings.Contains(remoteUrl, token) {
+	// Check if URL already has a token: HTTPS URLs with token contain "://token@github.com"
+	// SSH URLs (git@github.com) don't have tokens, so we should update them
+	hasToken := strings.Contains(remoteUrl, "://") && strings.Contains(remoteUrl, "@github.com") && !strings.HasPrefix(remoteUrl, "git@")
+	if token != "" && !hasToken {
 		// Extract repo path from URL (e.g., owner/repo from https://github.com/owner/repo.git)
 		// Support both https://github.com/owner/repo.git and https://token@github.com/owner/repo.git formats
 		repoPath := extractRepoPath(remoteUrl)
@@ -83,13 +86,16 @@ func PushBranch(workDir, branchName, token string) error {
 // - git@github.com:owner/repo.git
 func extractRepoPath(url string) string {
 	// Pattern for https:// URLs (with optional token)
-	httpsPattern := regexp.MustCompile(`^https://(?:[^@]+@)?github\.com/([^/]+/[^/]+)(?:\.git)?$`)
+	// Capture group matches owner/repo (without .git extension)
+	// Use non-greedy match to stop before .git
+	httpsPattern := regexp.MustCompile(`^https://(?:[^@]+@)?github\.com/([^/.]+/[^/.]+)(?:\.git)?$`)
 	if matches := httpsPattern.FindStringSubmatch(url); len(matches) == 2 {
 		return matches[1]
 	}
 
 	// Pattern for SSH URLs (git@github.com:owner/repo.git)
-	sshPattern := regexp.MustCompile(`^git@github\.com:([^/]+/[^/]+)(?:\.git)?$`)
+	// Capture group matches owner/repo (without .git extension)
+	sshPattern := regexp.MustCompile(`^git@github\.com:([^/.]+/[^/.]+)(?:\.git)?$`)
 	if matches := sshPattern.FindStringSubmatch(url); len(matches) == 2 {
 		return matches[1]
 	}
