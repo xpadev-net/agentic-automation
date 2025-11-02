@@ -90,6 +90,9 @@ func NewClient(cfg *Config) (*Client, error) {
 	if cfg.Region == "" {
 		cfg.Region = "us-east-1" // Default region
 	}
+	if cfg.MaxRetries < 0 {
+		return nil, fmt.Errorf("MaxRetries must be non-negative, got: %d", cfg.MaxRetries)
+	}
 	if cfg.MaxRetries == 0 {
 		cfg.MaxRetries = 5 // Default max retries
 	}
@@ -183,10 +186,9 @@ func isRetryableError(err error) bool {
 		if netErr.Timeout() {
 			return true
 		}
-		// Check Temporary() for compatibility
-		if tempErr, ok := err.(interface {
-			Temporary() bool
-		}); ok && tempErr.Temporary() {
+		// Check Temporary() on the extracted net.Error
+		// Note: netErr is already net.Error interface, so Temporary() method is available
+		if netErr.Temporary() {
 			return true
 		}
 	}
