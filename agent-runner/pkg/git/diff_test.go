@@ -302,6 +302,78 @@ func TestGetDiff_NewlineHandling(t *testing.T) {
 	}
 }
 
+func TestGetDiff_TrailingNewline(t *testing.T) {
+	repoDir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create file with trailing newline (common case)
+	content := "line1\nline2\n"
+	createTestFile(t, repoDir, "with_newline.txt", content)
+
+	diff, err := GetDiff(repoDir)
+	if err != nil {
+		t.Fatalf("GetDiff returned error: %v", err)
+	}
+
+	// Count the number of content lines with "+" prefix (excluding hunk header and file paths)
+	// Should be exactly 2 (line1 and line2), not 3 (no phantom blank line)
+	lines := strings.Split(diff, "\n")
+	var plusLineCount int
+	for _, line := range lines {
+		// Count lines that start with "+" and are actual content lines
+		// Exclude: "@@ -0,0 +1,2 @@" (hunk header), "+++ b/file.txt" (file path)
+		if strings.HasPrefix(line, "+") && len(line) > 1 {
+			// Check if it's a content line (starts with "+" followed by non-special char)
+			secondChar := line[1]
+			if secondChar != '+' && secondChar != '@' {
+				plusLineCount++
+			}
+		}
+	}
+	if plusLineCount != 2 {
+		t.Errorf("Expected 2 content lines with + prefix, got %d. Diff:\n%s", plusLineCount, diff)
+	}
+
+	// Check hunk header - should report 2 lines (not 3, avoiding phantom blank line)
+	if !strings.Contains(diff, "@@ -0,0 +1,2 @@") {
+		t.Errorf("Expected hunk header to show 2 lines, got:\n%s", diff)
+	}
+}
+
+func TestGetDiff_WithoutTrailingNewline(t *testing.T) {
+	repoDir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create file without trailing newline
+	content := "line1\nline2"
+	createTestFile(t, repoDir, "no_newline.txt", content)
+
+	diff, err := GetDiff(repoDir)
+	if err != nil {
+		t.Fatalf("GetDiff returned error: %v", err)
+	}
+
+	// Should have exactly 2 lines
+	lines := strings.Split(diff, "\n")
+	var plusLineCount int
+	for _, line := range lines {
+		if strings.HasPrefix(line, "+") && len(line) > 1 {
+			secondChar := line[1]
+			if secondChar != '+' && secondChar != '@' {
+				plusLineCount++
+			}
+		}
+	}
+	if plusLineCount != 2 {
+		t.Errorf("Expected 2 content lines with + prefix, got %d. Diff:\n%s", plusLineCount, diff)
+	}
+
+	// Check hunk header
+	if !strings.Contains(diff, "@@ -0,0 +1,2 @@") {
+		t.Errorf("Expected hunk header to show 2 lines, got:\n%s", diff)
+	}
+}
+
 func TestGetStagedDiff_NoStagedChanges(t *testing.T) {
 	repoDir, cleanup := setupTestRepo(t)
 	defer cleanup()
@@ -464,6 +536,40 @@ func TestGetUnstagedDiff_NoChanges(t *testing.T) {
 
 	if diff != "" {
 		t.Errorf("Expected empty diff, got: %q", diff)
+	}
+}
+
+func TestGetUnstagedDiff_TrailingNewline(t *testing.T) {
+	repoDir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create file with trailing newline
+	content := "unstaged line1\nunstaged line2\n"
+	createTestFile(t, repoDir, "unstaged_newline.txt", content)
+
+	diff, err := GetUnstagedDiff(repoDir)
+	if err != nil {
+		t.Fatalf("GetUnstagedDiff returned error: %v", err)
+	}
+
+	// Should have exactly 2 lines, not 3
+	lines := strings.Split(diff, "\n")
+	var plusLineCount int
+	for _, line := range lines {
+		if strings.HasPrefix(line, "+") && len(line) > 1 {
+			secondChar := line[1]
+			if secondChar != '+' && secondChar != '@' {
+				plusLineCount++
+			}
+		}
+	}
+	if plusLineCount != 2 {
+		t.Errorf("Expected 2 content lines with + prefix, got %d. Diff:\n%s", plusLineCount, diff)
+	}
+
+	// Check hunk header
+	if !strings.Contains(diff, "@@ -0,0 +1,2 @@") {
+		t.Errorf("Expected hunk header to show 2 lines, got:\n%s", diff)
 	}
 }
 

@@ -92,13 +92,9 @@ func GetDiff(workDir string) (string, error) {
 		result.WriteString(fmt.Sprintf("index 0000000..%s\n", "0000000"))
 		result.WriteString(fmt.Sprintf("--- /dev/null\n"))
 		result.WriteString(fmt.Sprintf("+++ b/%s\n", file))
-		result.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", strings.Count(string(content), "\n")+1))
 
-		// Add content with + prefix
-		lines := strings.Split(string(content), "\n")
-		for _, line := range lines {
-			result.WriteString(fmt.Sprintf("+%s\n", line))
-		}
+		// Format file content for diff, handling trailing newline correctly
+		writeUntrackedFileDiff(&result, content, file)
 	}
 
 	return result.String(), nil
@@ -157,16 +153,60 @@ func GetUnstagedDiff(workDir string) (string, error) {
 		result.WriteString(fmt.Sprintf("index 0000000..0000000\n"))
 		result.WriteString(fmt.Sprintf("--- /dev/null\n"))
 		result.WriteString(fmt.Sprintf("+++ b/%s\n", file))
-		result.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", strings.Count(string(content), "\n")+1))
 
-		// Add content with + prefix
-		lines := strings.Split(string(content), "\n")
-		for _, line := range lines {
-			result.WriteString(fmt.Sprintf("+%s\n", line))
-		}
+		// Format file content for diff, handling trailing newline correctly
+		writeUntrackedFileDiff(&result, content, file)
 	}
 
 	return result.String(), nil
+}
+
+// writeUntrackedFileDiff formats untracked file content as a diff hunk.
+// It correctly handles trailing newlines to match git diff's behavior.
+// When a file ends with a trailing newline, strings.Split returns an extra empty
+// element. We handle this by not emitting that empty element, which prevents
+// adding a phantom blank line that would be recreated when applying the patch.
+func writeUntrackedFileDiff(result *strings.Builder, content []byte, file string) {
+	contentStr := string(content)
+
+	// Handle empty file
+	if len(contentStr) == 0 {
+		result.WriteString("@@ -0,0 +1,0 @@\n")
+		return
+	}
+
+	// Split on newlines - this will include an extra empty element if file ends with newline
+	lines := strings.Split(contentStr, "\n")
+
+	// Calculate line count: git diff counts trailing newline as part of the content
+	// For "line1\nline2\n", git diff shows 2 lines (not 3 with a blank line)
+	// We need to match this behavior to avoid phantom blank lines
+	var lineCount int
+	hasTrailingNewline := strings.HasSuffix(contentStr, "\n")
+
+	if hasTrailingNewline {
+		// File ends with newline - count is number of newlines (not len(lines) which includes empty element)
+		lineCount = strings.Count(contentStr, "\n")
+	} else {
+		// File doesn't end with newline - count is number of newlines + 1
+		lineCount = strings.Count(contentStr, "\n")
+		if len(contentStr) > 0 {
+			lineCount++
+		}
+	}
+
+	// Write hunk header
+	result.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))
+
+	// Write lines with + prefix, but skip the last empty element if it exists
+	// This prevents the phantom blank line that would be added when applying the patch
+	for i, line := range lines {
+		// Skip the last empty element that results from trailing newline
+		if i == len(lines)-1 && line == "" && hasTrailingNewline {
+			break
+		}
+		result.WriteString(fmt.Sprintf("+%s\n", line))
+	}
 }
 
 // getUntrackedFiles returns a list of untracked files in the repository.
