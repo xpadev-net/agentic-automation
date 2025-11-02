@@ -86,7 +86,7 @@
 - [x] T036 [P] Implement pkg/git/committer.go (git commit/push operations, return branch+SHA)
 - [x] T037 [P] Implement pkg/git/diff.go (git diff detection for file changes)
 - [x] T038 [P] Implement pkg/context/issue.go (Issue context parsing from args)
-- [ ] T039 [P] Implement pkg/reporter/client.go (Operator API client with exponential backoff retry)
+- [x] T039 [P] Implement pkg/reporter/client.go (Operator API client with exponential backoff retry)
 - [ ] T040 Update main.go execution flow: Clone → Restore session → Load manifest → Pre-hooks → Agent → Validation → Commit → Post-hooks
 - [ ] T041 Integrate reporter into main.go (call on success/failure, validation failures return error without API report)
 - [ ] T042 Create Dockerfile for agent-runner (multi-stage: Go build → Node.js runtime with agents)
