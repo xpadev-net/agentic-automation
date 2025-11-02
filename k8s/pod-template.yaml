@@ -29,7 +29,7 @@
 # Placeholders to replace:
 #   - <agent-run-id>: AgentRun database record ID (integer)
 #   - <issue-id>: GitHub Issue ID (integer)
-#   - <agent-runner-image>: Container image tag (e.g., ghcr.io/owner/agent-runner:v1.0.0)
+#   - <agent-runner-image>: Container image tag (e.g., ghcr.io/owner/agent-runner:latest or ghcr.io/owner/agent-runner:sha-abc1234)
 #   - <operator-api-url>: Operator API base URL (e.g., http://agent-operator.default.svc.cluster.local:3000)
 #   - <repo>: Repository in format owner/name (e.g., octocat/Hello-World)
 #   - <prompt>: Issue context prompt (string)
