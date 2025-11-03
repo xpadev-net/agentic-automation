@@ -68,21 +68,6 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
-	// Validate required fields for succeeded status
-	if req.Status == "succeeded" {
-		if req.PRNumber == nil || *req.PRNumber <= 0 {
-			logger.Warn("Missing or invalid PR number for succeeded status",
-				zap.Int("agent_run_id", agentRunID),
-				zap.String("path", c.Request.URL.Path),
-			)
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":   "INVALID_REQUEST",
-				"message": "pr_number is required and must be > 0 when status is succeeded",
-			})
-			return
-		}
-	}
-
 	// Get database connection and repository
 	db := config.GetDB()
 	agentRunRepo := repositories.NewAgentRunRepository(db)
@@ -192,6 +177,21 @@ func HandleAgentReport(c *gin.Context) {
 		// Link PR to AgentRun and build PR URL
 		agentRun.PRID = &savedPR.ID
 		prURL = fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repo, savedPR.Number)
+	}
+
+	// Validate required fields for succeeded status (after ensuring AgentRun exists)
+	if req.Status == "succeeded" {
+		if req.PRNumber == nil || *req.PRNumber <= 0 {
+			logger.Warn("Missing or invalid PR number for succeeded status",
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("path", c.Request.URL.Path),
+			)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "INVALID_REQUEST",
+				"message": "pr_number is required and must be > 0 when status is succeeded",
+			})
+			return
+		}
 	}
 
 	// Update commit SHA if provided
