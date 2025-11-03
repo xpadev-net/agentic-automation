@@ -18,7 +18,7 @@ const deliveryHeader = "X-GitHub-Delivery"
 // webhookPayload represents a minimal structure to extract issue information from webhook payloads
 type webhookPayload struct {
 	Issue struct {
-		ID     int    `json:"id"`     // GitHub issue ID (numeric ID)
+		ID     uint64 `json:"id"`     // GitHub issue ID (numeric ID)
 		Number int    `json:"number"` // Issue number
 		Title  string `json:"title"`  // Issue title
 		State  string `json:"state"`  // Issue state (open/closed)
@@ -199,7 +199,7 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 							zap.String("delivery_id", deliveryID),
 							zap.String("repo", repoFullName),
 							zap.Int("issue_number", issueNumber),
-							zap.Int("github_issue_id", githubIssueID),
+							zap.Uint64("github_issue_id", githubIssueID),
 							zap.String("path", c.Request.URL.Path),
 						)
 

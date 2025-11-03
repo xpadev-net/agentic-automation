@@ -92,7 +92,7 @@ func createTestIssue(t *testing.T, db *gorm.DB, repo string, number int) *models
 	issue := &models.Issue{
 		Repo:          repo,
 		Number:        number,
-		GitHubIssueID: 100 + number,
+		GitHubIssueID: uint64(100 + number),
 		Title:         fmt.Sprintf("Test Issue #%d", number),
 		State:         "open",
 	}
