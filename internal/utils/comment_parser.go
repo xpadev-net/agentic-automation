@@ -41,4 +41,3 @@ func ContainsCodexReviewTrigger(commentBody string) bool {
 	// Stub implementation - returns false until T092
 	return false
 }
-
