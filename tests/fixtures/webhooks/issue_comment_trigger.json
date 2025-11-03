@@ -1,0 +1,25 @@
+{
+  "action": "created",
+  "issue": {
+    "id": 123456,
+    "number": 42,
+    "title": "Add new feature",
+    "body": "Description of the feature...",
+    "state": "open",
+    "labels": [ { "name": "enhancement" } ],
+    "user": { "login": "octocat" }
+  },
+  "comment": {
+    "id": 789012,
+    "body": "/run-agent",
+    "user": { "login": "octocat" },
+    "created_at": "2025-10-31T12:00:00Z"
+  },
+  "repository": {
+    "full_name": "octocat/hello-world",
+    "owner": { "login": "octocat" },
+    "name": "hello-world"
+  }
+}
+
+
