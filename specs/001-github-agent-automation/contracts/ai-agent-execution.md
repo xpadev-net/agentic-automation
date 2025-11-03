@@ -40,12 +40,16 @@ agent-runner \
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `OPERATOR_API_URL` | Operator API base URL | `http://agent-operator.default.svc.cluster.local:3000` |
+| `KUBERNETES_NAMESPACE` | Kubernetes namespace (auto-injected via Downward API) | `default` |
+| `OPERATOR_SERVICE_NAME` | Operator service name | `agent-operator` |
+| `OPERATOR_SERVICE_PORT` | Operator service port | `3000` |
 | `OPERATOR_API_TOKEN` | Bearer token for API authentication | `sk-secret-token-abc123` |
 | `AGENT_RUN_ID` | AgentRun database record ID | `456` |
 | `AGENT_TYPE` | Agent to execute | `claude-code` or `cursor-agents` |
 | `GITHUB_TOKEN` | GitHub Personal Access Token | `ghp_xxxxx` |
 | `WORKSPACE_DIR` | Working directory | `/workspace` (default) |
+
+**Note**: The Operator API URL is automatically constructed from `KUBERNETES_NAMESPACE`, `OPERATOR_SERVICE_NAME`, and `OPERATOR_SERVICE_PORT` as: `http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}`
 
 ### Execution Flow
 
@@ -319,8 +323,15 @@ spec:
       - "--prompt={{ .Prompt }}"
       - "--previous-attempts={{ .PreviousAttempts }}"
     env:
-    - name: OPERATOR_API_URL
-      value: "http://agent-operator.default.svc.cluster.local:3000"
+    # Operator API URL construction (auto-generated from Kubernetes service info)
+    - name: KUBERNETES_NAMESPACE
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.namespace
+    - name: OPERATOR_SERVICE_NAME
+      value: "agent-operator"
+    - name: OPERATOR_SERVICE_PORT
+      value: "3000"
     - name: OPERATOR_API_TOKEN
       valueFrom:
         secretKeyRef:

@@ -30,7 +30,8 @@
 #   - <agent-run-id>: AgentRun database record ID (integer)
 #   - <issue-id>: GitHub Issue ID (integer)
 #   - <agent-runner-image>: Container image tag (e.g., ghcr.io/owner/agentic-automation-runner:latest or ghcr.io/owner/agentic-automation-runner:sha-abc1234)
-#   - <operator-api-url>: Operator API base URL (e.g., http://agent-operator.default.svc.cluster.local:3000)
+#   - <operator-service-name>: Operator service name (e.g., agent-operator)
+#   - <operator-service-port>: Operator service port (e.g., 3000)
 #   - <repo>: Repository in format owner/name (e.g., octocat/Hello-World)
 #   - <prompt>: Issue context prompt (string)
 #   - <retry-count>: Current retry count, 0 for initial run (integer)
@@ -90,9 +91,17 @@ spec:
         
         # Environment variables
         env:
-          # Operator API configuration
-          - name: OPERATOR_API_URL
-            value: "<operator-api-url>"
+          # Operator API configuration (auto-constructed from Kubernetes service info)
+          # The agent-runner constructs the URL as:
+          # http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}
+          - name: KUBERNETES_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OPERATOR_SERVICE_NAME
+            value: "<operator-service-name>"  # e.g., "agent-operator"
+          - name: OPERATOR_SERVICE_PORT
+            value: "<operator-service-port>"  # e.g., "3000"
           - name: OPERATOR_API_TOKEN
             valueFrom:
               secretKeyRef:
@@ -214,8 +223,9 @@ spec:
       - --prompt=<prompt>
     env:
       # [Same environment variables as Version 1]
-      # See Version 1 above (lines 92-155) for complete env list:
-      # - OPERATOR_API_URL, OPERATOR_API_TOKEN (Operator API configuration)
+      # See Version 1 above (lines 93-165) for complete env list:
+      # - KUBERNETES_NAMESPACE (from Downward API), OPERATOR_SERVICE_NAME, OPERATOR_SERVICE_PORT (Operator API URL construction)
+      # - OPERATOR_API_TOKEN (Operator API authentication)
       # - AGENT_RUN_ID, AGENT_TYPE, WORKSPACE_DIR (Agent execution configuration)
       # - GITHUB_TOKEN (GitHub authentication)
       # - ANTHROPIC_API_KEY or CURSOR_API_KEY (Agent-specific API keys)

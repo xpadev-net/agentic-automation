@@ -81,6 +81,33 @@ func validateArgs(issueID int, repo, prompt string) error {
 	return nil
 }
 
+// constructOperatorURL constructs the Operator API URL from Kubernetes service components
+func constructOperatorURL() (string, error) {
+	namespace := os.Getenv("KUBERNETES_NAMESPACE")
+	serviceName := os.Getenv("OPERATOR_SERVICE_NAME")
+	port := os.Getenv("OPERATOR_SERVICE_PORT")
+
+	var missing []string
+	if namespace == "" {
+		missing = append(missing, "KUBERNETES_NAMESPACE")
+	}
+	if serviceName == "" {
+		missing = append(missing, "OPERATOR_SERVICE_NAME")
+	}
+	if port == "" {
+		missing = append(missing, "OPERATOR_SERVICE_PORT")
+	}
+
+	if len(missing) > 0 {
+		return "", fmt.Errorf("missing required environment variables for Operator URL construction: %s", strings.Join(missing, ", "))
+	}
+
+	// Construct Kubernetes internal service URL
+	// Format: http://{service}.{namespace}.svc.cluster.local:{port}
+	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", serviceName, namespace, port)
+	return url, nil
+}
+
 // validateEnv validates required environment variables
 func validateEnv() (*envConfig, error) {
 	cfg := &envConfig{}
@@ -88,8 +115,11 @@ func validateEnv() (*envConfig, error) {
 	// Required environment variables
 	var missing []string
 
-	if cfg.OperatorAPIURL = os.Getenv("OPERATOR_API_URL"); cfg.OperatorAPIURL == "" {
-		missing = append(missing, "OPERATOR_API_URL")
+	// Construct Operator API URL from Kubernetes service components
+	var err error
+	cfg.OperatorAPIURL, err = constructOperatorURL()
+	if err != nil {
+		return nil, err
 	}
 
 	if cfg.OperatorAPIToken = os.Getenv("OPERATOR_API_TOKEN"); cfg.OperatorAPIToken == "" {
@@ -175,6 +205,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	fmt.Fprintf(os.Stderr, "  Agent Run ID: %d\n", envCfg.AgentRunID)
 	fmt.Fprintf(os.Stderr, "  Retry Count: %d\n", envCfg.RetryCount)
 	fmt.Fprintf(os.Stderr, "  Workspace: %s\n", envCfg.WorkDir)
+	fmt.Fprintf(os.Stderr, "  Operator API URL: %s\n", envCfg.OperatorAPIURL)
 
 	// 3. Initialize reporter client
 	reporterClient, err := reporter.NewClient(envCfg.OperatorAPIURL, envCfg.OperatorAPIToken, envCfg.AgentRunID)

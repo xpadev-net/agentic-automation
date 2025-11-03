@@ -676,7 +676,9 @@ ENTRYPOINT ["agent-runner"]
 
 | Variable | Description | Required | Example |
 |----------|-------------|----------|---------|
-| `OPERATOR_API_URL` | Operator REST API base URL | Yes | `http://agent-operator.default.svc.cluster.local:3000` |
+| `KUBERNETES_NAMESPACE` | Kubernetes namespace (auto-injected) | Yes | `default` (via Downward API) |
+| `OPERATOR_SERVICE_NAME` | Operator service name | Yes | `agent-operator` |
+| `OPERATOR_SERVICE_PORT` | Operator service port | Yes | `3000` |
 | `OPERATOR_API_TOKEN` | Bearer token for API auth | Yes | `sk-secret-token-abc123` |
 | `AGENT_RUN_ID` | AgentRun database record ID | Yes | `456` |
 | `AGENT_TYPE` | Agent to execute | Yes | `claude-code` or `cursor-agents` |
@@ -693,6 +695,8 @@ ENTRYPOINT ["agent-runner"]
 | `S3_USE_PATH_STYLE` | Use path-style URLs (MinIO) | Yes | `true` for MinIO, `false` for AWS |
 | `S3_MAX_RETRIES` | Max S3 retry attempts | No | `5` (default) |
 | `S3_RETRY_INITIAL_INTERVAL` | Initial backoff interval | No | `1s` (default) |
+
+**Note**: The Operator API URL is automatically constructed at runtime from `KUBERNETES_NAMESPACE`, `OPERATOR_SERVICE_NAME`, and `OPERATOR_SERVICE_PORT` as: `http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}`
 
 ---
 

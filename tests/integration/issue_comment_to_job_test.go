@@ -101,12 +101,14 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	// Env & logger
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
 	os.Setenv("AGENT_RUNNER_IMAGE", "example/agent-runner:latest")
-	os.Setenv("OPERATOR_API_URL", "http://operator/api")
+	os.Setenv("OPERATOR_SERVICE_NAME", "agent-operator")
+	os.Setenv("OPERATOR_SERVICE_PORT", "3000")
 	os.Setenv("AGENT_RUNNER_TIMEOUT_MINUTES", "30")
 	t.Cleanup(func() {
 		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
 		os.Unsetenv("AGENT_RUNNER_IMAGE")
-		os.Unsetenv("OPERATOR_API_URL")
+		os.Unsetenv("OPERATOR_SERVICE_NAME")
+		os.Unsetenv("OPERATOR_SERVICE_PORT")
 		os.Unsetenv("AGENT_RUNNER_TIMEOUT_MINUTES")
 	})
 
@@ -220,7 +222,9 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	for _, e := range ctn.Env {
 		gotEnv[e.Name] = true
 	}
-	assert.True(t, gotEnv["OPERATOR_API_URL"])
+	assert.True(t, gotEnv["KUBERNETES_NAMESPACE"])
+	assert.True(t, gotEnv["OPERATOR_SERVICE_NAME"])
+	assert.True(t, gotEnv["OPERATOR_SERVICE_PORT"])
 	assert.True(t, gotEnv["AGENT_RUN_ID"])
 	assert.True(t, gotEnv["AGENT_TYPE"])
 
@@ -374,8 +378,13 @@ func Test_IssueComment_K8sFailure_RollbackQueued(t *testing.T) {
 	// Missing AGENT_RUNNER_IMAGE to force job creation error
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
 	os.Unsetenv("AGENT_RUNNER_IMAGE")
-	os.Setenv("OPERATOR_API_URL", "http://operator/api")
-	t.Cleanup(func() { os.Unsetenv("GITHUB_WEBHOOK_SECRET"); os.Unsetenv("OPERATOR_API_URL") })
+	os.Setenv("OPERATOR_SERVICE_NAME", "agent-operator")
+	os.Setenv("OPERATOR_SERVICE_PORT", "3000")
+	t.Cleanup(func() {
+		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+		os.Unsetenv("OPERATOR_SERVICE_NAME")
+		os.Unsetenv("OPERATOR_SERVICE_PORT")
+	})
 	logger, _ := zap.NewDevelopment()
 	config.SetLoggerForTesting(logger)
 	db := setupDB(t)
@@ -421,11 +430,13 @@ func Test_IssueComment_K8sFailure_RollbackQueued(t *testing.T) {
 func Test_IssueComment_Idempotency_SecondIsNoop(t *testing.T) {
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
 	os.Setenv("AGENT_RUNNER_IMAGE", "example/agent-runner:latest")
-	os.Setenv("OPERATOR_API_URL", "http://operator/api")
+	os.Setenv("OPERATOR_SERVICE_NAME", "agent-operator")
+	os.Setenv("OPERATOR_SERVICE_PORT", "3000")
 	t.Cleanup(func() {
 		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
 		os.Unsetenv("AGENT_RUNNER_IMAGE")
-		os.Unsetenv("OPERATOR_API_URL")
+		os.Unsetenv("OPERATOR_SERVICE_NAME")
+		os.Unsetenv("OPERATOR_SERVICE_PORT")
 	})
 	logger, _ := zap.NewDevelopment()
 	config.SetLoggerForTesting(logger)

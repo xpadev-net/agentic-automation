@@ -68,7 +68,6 @@ ENTRYPOINT ["operator"]
 # - GITHUB_WEBHOOK_SECRET: Webhook signature verification secret
 # - OPERATOR_API_TOKEN: Bearer token for agent-runner authentication
 # - AGENT_RUNNER_IMAGE: Docker image for agent-runner pods
-# - OPERATOR_API_URL: Operator REST API URL for agent-runner callbacks
 # - S3_ENDPOINT: S3 API endpoint
 # - S3_REGION: S3 region
 # - S3_BUCKET: S3 bucket name
@@ -84,6 +83,8 @@ ENTRYPOINT ["operator"]
 # - AI_AGENT_TIMEOUT_MINUTES: Pod execution timeout (default: 30)
 # - AI_AGENT_MAX_CONCURRENT_PODS: Max concurrent executions (default: 10)
 # - AI_AGENT_DEFAULT_TYPE: Default agent type (claude-code/cursor-agents)
+# - OPERATOR_SERVICE_NAME: Operator service name (default: agent-operator)
+# - OPERATOR_SERVICE_PORT: Operator service port (default: 3000)
 # - S3_USE_PATH_STYLE: Use path-style URLs (true for MinIO, false for AWS S3)
 # - S3_MAX_RETRIES: Retry attempts (default: 5)
 # - S3_RETRY_INITIAL_INTERVAL: Initial backoff interval (default: 1s)

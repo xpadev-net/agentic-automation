@@ -33,7 +33,6 @@ type JobConfig struct {
 	AgentType        string
 	AgentRunnerImage string
 	TimeoutMinutes   int
-	OperatorAPIURL   string
 }
 
 // KubernetesClient wraps Kubernetes API client functionality
@@ -211,9 +210,24 @@ func (c *KubernetesClient) GenerateJobName(agentRunID int) string {
 // buildEnvVars builds environment variables for the Job container
 func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{
+		// Kubernetes namespace - injected via Downward API
 		{
-			Name:  "OPERATOR_API_URL",
-			Value: config.OperatorAPIURL,
+			Name: "KUBERNETES_NAMESPACE",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.namespace",
+				},
+			},
+		},
+		// Operator service name - configured via environment
+		{
+			Name:  "OPERATOR_SERVICE_NAME",
+			Value: appconfig.GetEnv("OPERATOR_SERVICE_NAME", "agent-operator"),
+		},
+		// Operator service port - configured via environment
+		{
+			Name:  "OPERATOR_SERVICE_PORT",
+			Value: appconfig.GetEnv("OPERATOR_SERVICE_PORT", "3000"),
 		},
 		{
 			Name:  "AGENT_RUN_ID",
