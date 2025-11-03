@@ -75,7 +75,7 @@ Agentic Automation は、GitHub の Issue と Pull Request を AI エージェ�
 - GitHub App ID
 - GitHub App Private Key (PEM フォーマット)
 - GitHub Webhook Secret
-- GitHub Personal Access Token (agent-runner 用)
+- GitHub Personal Access Token (AI エージェント実行用)
 - Anthropic API Key (Claude Code 用)
 - Cursor API Key (Cursor Agents 用、オプション)
 - Discord Webhook URL (通知用、オプション)
@@ -450,12 +450,12 @@ make docker-build-push
 
 # または手動で
 cd agent-runner
-docker build -t ghcr.io/your-org/agent-runner:latest .
-docker push ghcr.io/your-org/agent-runner:latest
+docker build -t ghcr.io/your-org/agentic-automation-runner:latest .
+docker push ghcr.io/your-org/agentic-automation-runner:latest
 cd ..
 ```
 
-**注意**: GitHub Actions を使用している場合、`master` ブランチへの push で agent-runner イメージが自動的にビルドされます。
+**注意**: GitHub Actions を使用している場合、`master` ブランチへの push で両方のイメージ（operator と runner）が自動的にビルドされます。
 
 #### 4.4 イメージ名の更新
 
@@ -468,12 +468,12 @@ spec:
     spec:
       containers:
         - name: operator
-          image: ghcr.io/your-org/operator:latest  # 変更
+          image: ghcr.io/your-org/agentic-automation-operator:latest  # 変更
 
 # 環境変数 AGENT_RUNNER_IMAGE を更新
 env:
   - name: AGENT_RUNNER_IMAGE
-    value: "ghcr.io/your-org/agent-runner:latest"  # 変更
+    value: "ghcr.io/your-org/agentic-automation-runner:latest"  # 変更
 ```
 
 ---

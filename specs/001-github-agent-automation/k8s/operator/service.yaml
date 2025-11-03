@@ -41,7 +41,7 @@ spec:
       serviceAccountName: agent-operator
       containers:
         - name: operator
-          image: ghcr.io/your-org/agent-operator:latest
+          image: ghcr.io/your-org/agentic-automation-operator:latest
           imagePullPolicy: Always
           ports:
             - name: http
@@ -85,7 +85,7 @@ spec:
                   name: operator-secrets
                   key: operator-api-token
             - name: AGENT_RUNNER_IMAGE
-              value: "ghcr.io/your-org/agent-runner:latest"
+              value: "ghcr.io/your-org/agentic-automation-runner:latest"
             - name: AI_AGENT_TIMEOUT_MINUTES
               value: "30"
             - name: AI_AGENT_MAX_CONCURRENT_PODS
