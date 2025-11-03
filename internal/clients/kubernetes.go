@@ -34,7 +34,6 @@ type JobConfig struct {
 	AgentRunnerImage string
 	TimeoutMinutes   int
 	OperatorAPIURL   string
-	OperatorAPIToken string
 }
 
 // KubernetesClient wraps Kubernetes API client functionality

@@ -180,11 +180,6 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		return nil, err
 	}
 
-	operatorAPIToken, err := getRequiredEnv("OPERATOR_API_TOKEN", s.logger)
-	if err != nil {
-		return nil, err
-	}
-
 	// Get optional environment variables with defaults
 	timeoutMinutes := getOptionalEnvInt("AGENT_RUNNER_TIMEOUT_MINUTES", 60, s.logger)
 
@@ -212,7 +207,6 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		AgentRunnerImage: agentRunnerImage,
 		TimeoutMinutes:   timeoutMinutes,
 		OperatorAPIURL:   operatorAPIURL,
-		OperatorAPIToken: operatorAPIToken,
 	}
 
 	// Generate job name
