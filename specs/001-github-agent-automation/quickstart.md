@@ -87,12 +87,17 @@ CODEX_BOT_USERNAME=codex-bot  # GitHub username of Codex bot for comment detecti
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/123456/your_webhook_token
 
 # Agent Runner (Kubernetes Pod)
-OPERATOR_API_URL=http://agent-operator.default.svc.cluster.local:3000  # Operator REST API URL for Pod → Operator communication
 OPERATOR_API_TOKEN=your-secret-api-token  # Bearer token for agent-runner authentication
 AGENT_RUNNER_IMAGE=ghcr.io/your-org/agent-runner:latest  # Docker image for agent-runner Pod
 AI_AGENT_TIMEOUT_MINUTES=30  # Pod execution timeout
 AI_AGENT_MAX_CONCURRENT_PODS=10  # Max concurrent Pod executions
 AI_AGENT_DEFAULT_TYPE=claude-code  # claude-code | cursor-agents
+
+# Operator API URL auto-construction (replaces OPERATOR_API_URL)
+# http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}
+KUBERNETES_NAMESPACE=default
+OPERATOR_SERVICE_NAME=agent-operator
+OPERATOR_SERVICE_PORT=3000
 
 # Kubernetes (optional, defaults to in-cluster config)
 KUBE_CONFIG_PATH=/path/to/.kube/config
