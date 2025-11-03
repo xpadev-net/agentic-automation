@@ -117,8 +117,8 @@
 - [x] T064_S3 [P] Write unit tests for session archive/restore (tar.gz operations, file exclusion)
 - [x] T065_S3 [P] Write unit tests for exponential backoff retry (mock failures, verify backoff intervals)
 - [ ] T066_S3 Write integration test for session save/restore flow (MinIO test server, full lifecycle)
-- [ ] T067_S3 Write integration test for S3 failure scenarios (unavailable S3, Pod exit 1 verification)
-- [ ] T068_S3 Add migration for AgentRun.s3_session_key and session_saved_at columns (goose migration)
+- [x] T067_S3 Write integration test for S3 failure scenarios (unavailable S3, Pod exit 1 verification)
+- [x] T068_S3 Add migration for AgentRun.s3_session_key and session_saved_at columns (goose migration)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
