@@ -66,8 +66,14 @@ func (r *PullRequestRepository) UpdateMergeable(id int, mergeable bool) error {
 	return r.db.Model(&models.PullRequest{}).Where("id = ?", id).Update("mergeable", mergeable).Error
 }
 
-// Upsert inserts or updates a PullRequest based on repo+number uniqueness
-// If a PR with the same repo and number exists, it will be updated; otherwise, a new record will be created
+// Upsert inserts or updates a PullRequest based on repo+number uniqueness.
+// If a PR with the same repo and number exists, it updates the specified fields;
+// otherwise, a new record is created.
+//
+// Fields updated on conflict: issue_id, branch, base_branch, status, mergeable, updated_at
+// Fields preserved on update: id, repo, number, created_at
+//
+// Returns error if database operation fails (e.g., unique constraint violation, connection error)
 func (r *PullRequestRepository) Upsert(pr *models.PullRequest) error {
 	// Use GORM's clause.OnConflict to handle upsert based on unique constraint (repo, number)
 	return r.db.Clauses(clause.OnConflict{
