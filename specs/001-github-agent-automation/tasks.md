@@ -176,7 +176,7 @@
 - [x] T086 [P] [US2] Write unit tests for PullRequest upsert logic
 - [x] T087 [P] [US2] Write unit tests for GitHub notification service (PR created message)
 - [ ] T088 [US2] Write integration test for agent-runner success report → PR record creation
-- [ ] T089 [US2] Write integration test for agent-runner failure report → retry trigger
+- [ ] T089 [US2] Write integration test for agent-runner failure report → retry trigger (US2では失敗レポートの「記録と要約抽出」までを検証し、自動リトライ実行は含めない。リトライの実行はUS3のT096/T098で検証)
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently - full automation from comment to PR (via Pod)
 
