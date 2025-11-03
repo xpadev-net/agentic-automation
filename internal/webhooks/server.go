@@ -8,6 +8,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -21,9 +22,10 @@ const (
 
 // Server represents the webhook server
 type Server struct {
-	router *gin.Engine
-	logger *zap.Logger
-	server *http.Server
+	router    *gin.Engine
+	logger    *zap.Logger
+	server    *http.Server
+	startTime time.Time
 }
 
 // setupRouter creates and configures the Gin router
@@ -42,6 +44,9 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 	// Apply global error handling middleware (before signature verification)
 	router.Use(middleware.ErrorHandler())
 
+	// Health check endpoint (no authentication required)
+	router.GET("/health", handleHealth)
+
 	// Apply signature verification and idempotency middleware to webhook endpoint
 	router.POST(webhookPath,
 		middleware.VerifyWebhookSignature(),
@@ -54,6 +59,54 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 		handlers.HandleAgentReport)
 
 	return router
+}
+
+// handleHealth handles GET /health requests
+// Returns server health status, database connectivity, uptime, and version
+func handleHealth(c *gin.Context) {
+	logger := config.GetLogger()
+
+	// Check database connectivity
+	dbStatus := "connected"
+	db := config.GetDB()
+	sqlDB, err := db.DB()
+	if err != nil {
+		logger.Error("Failed to get database connection for health check", zap.Error(err))
+		dbStatus = "disconnected"
+	} else if err := sqlDB.Ping(); err != nil {
+		logger.Error("Database ping failed during health check", zap.Error(err))
+		dbStatus = "disconnected"
+	}
+
+	// Calculate uptime from server start time
+	var uptime int64
+	if server, exists := c.Get("server"); exists {
+		if srv, ok := server.(*Server); ok {
+			uptime = int64(time.Since(srv.startTime).Seconds())
+		}
+	}
+
+	// Get version from environment or use git hash
+	version := config.GetEnv("VERSION", "dev")
+
+	// Determine overall status
+	status := "ok"
+	if dbStatus == "disconnected" {
+		status = "degraded"
+	}
+
+	// Return appropriate status code
+	statusCode := http.StatusOK
+	if status == "degraded" {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	c.JSON(statusCode, gin.H{
+		"status":   status,
+		"database": dbStatus,
+		"uptime":   uptime,
+		"version":  version,
+	})
 }
 
 // handleGitHubWebhook is the handler for GitHub webhook events
@@ -116,11 +169,20 @@ func NewServer() (*Server, error) {
 		Handler: router,
 	}
 
-	return &Server{
-		router: router,
-		logger: logger,
-		server: httpServer,
-	}, nil
+	server := &Server{
+		router:    router,
+		logger:    logger,
+		server:    httpServer,
+		startTime: time.Now(),
+	}
+
+	// Store server instance in router context for health checks
+	router.Use(func(c *gin.Context) {
+		c.Set("server", server)
+		c.Next()
+	})
+
+	return server, nil
 }
 
 // Start starts the webhook server

@@ -1,0 +1,123 @@
+# Ingress configuration for agent-operator service
+# Exposes the operator webhook endpoint to receive GitHub webhook events
+#
+# Prerequisites:
+# 1. Ingress controller installed (nginx, traefik, etc.)
+# 2. TLS certificate configured (GitHub webhooks require HTTPS)
+# 3. DNS record pointing to ingress external IP
+#
+# Configuration Steps:
+# 1. Update spec.rules[0].host with your domain
+# 2. Update spec.tls[0].hosts with your domain
+# 3. Update spec.tls[0].secretName with your TLS certificate secret
+# 4. Apply: kubectl apply -f k8s/ingress.yaml
+# 5. Configure GitHub App webhook URL: https://<your-domain>/webhooks/github
+#
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agent-operator-ingress
+  namespace: default
+  annotations:
+    # Nginx ingress controller annotations
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+
+    # Increase body size limit for large webhook payloads
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+
+    # Connection and timeout settings
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+
+    # Rate limiting (optional - uncomment to enable)
+    # nginx.ingress.kubernetes.io/limit-rps: "10"
+
+    # For cert-manager automatic TLS certificate provisioning (optional)
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+
+    # For Traefik ingress controller (alternative to nginx - uncomment if using Traefik)
+    # traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  # Ingress class name (adjust based on your ingress controller)
+  # Common values: nginx, traefik, alb, gce
+  ingressClassName: nginx
+
+  # TLS configuration
+  # REQUIRED: GitHub webhooks only work over HTTPS
+  tls:
+    - hosts:
+        - agent-automation.example.com  # CHANGE THIS to your domain
+      secretName: agent-operator-tls    # TLS certificate secret name
+      #
+      # To create TLS secret manually:
+      # kubectl create secret tls agent-operator-tls \
+      #   --cert=path/to/tls.crt \
+      #   --key=path/to/tls.key
+      #
+      # Or use cert-manager for automatic certificate provisioning
+
+  # Routing rules
+  rules:
+    - host: agent-automation.example.com  # CHANGE THIS to your domain
+      http:
+        paths:
+          # GitHub webhook endpoint
+          - path: /webhooks/github
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-operator
+                port:
+                  number: 3000
+
+          # Health check endpoint (optional - for monitoring)
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: agent-operator
+                port:
+                  number: 3000
+
+          # Agent run report endpoint (used by agent-runner pods)
+          # This should ideally be ClusterIP-only, not exposed externally
+          # Consider removing this path or adding authentication
+          # - path: /api/agent-runs
+          #   pathType: Prefix
+          #   backend:
+          #     service:
+          #       name: agent-operator
+          #       port:
+          #         number: 3000
+
+---
+# Alternative: LoadBalancer Service (for cloud providers)
+# Use this if you prefer LoadBalancer over Ingress
+# Uncomment to use LoadBalancer instead of Ingress
+#
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: agent-operator-lb
+#   namespace: default
+#   annotations:
+#     # AWS ELB annotations (if using AWS)
+#     service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+#     service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:..."
+#     service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+#
+#     # GCP annotations (if using GCP)
+#     cloud.google.com/load-balancer-type: "External"
+# spec:
+#   type: LoadBalancer
+#   selector:
+#     app: agent-operator
+#   ports:
+#     - name: https
+#       port: 443
+#       targetPort: 3000
+#       protocol: TCP

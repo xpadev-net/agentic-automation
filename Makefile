@@ -1,4 +1,4 @@
-.PHONY: build test vet migrate-up migrate-down migrate-status run clean deps help docker-build docker-push docker-build-push
+.PHONY: build test vet migrate-up migrate-down migrate-status run clean deps help docker-build docker-push docker-build-push docker-build-operator docker-push-operator docker-build-push-operator deploy-infra deploy-operator deploy-all k8s-secrets
 
 # Default target
 .DEFAULT_GOAL := help
@@ -13,9 +13,15 @@ MIGRATIONS_DIR := migrations
 DOCKER_REGISTRY ?= ghcr.io
 DOCKER_OWNER ?= $(shell echo '$(shell git config user.name)' | tr '[:upper:]' '[:lower:]')
 IMAGE_NAME ?= agent-runner
+OPERATOR_IMAGE_NAME ?= operator
 GIT_SHA ?= $(shell git rev-parse --short HEAD)
 FULL_IMAGE_LATEST ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(IMAGE_NAME):latest
 FULL_IMAGE_SHA ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(IMAGE_NAME):sha-$(GIT_SHA)
+OPERATOR_IMAGE_LATEST ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(OPERATOR_IMAGE_NAME):latest
+OPERATOR_IMAGE_SHA ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(OPERATOR_IMAGE_NAME):sha-$(GIT_SHA)
+
+# Kubernetes namespace
+K8S_NAMESPACE ?= default
 
 # Load environment variables from .env if it exists
 ifneq (,$(wildcard ./.env))
@@ -107,4 +113,95 @@ docker-push: ## Push Docker image to registry
 	docker push $(FULL_IMAGE_SHA)
 
 docker-build-push: docker-build docker-push ## Build and push Docker image
+
+docker-build-operator: ## Build Docker image for operator
+	@echo "Building operator Docker image..."
+	@echo "Image: $(OPERATOR_IMAGE_LATEST)"
+	@echo "Image: $(OPERATOR_IMAGE_SHA)"
+	docker build -t $(OPERATOR_IMAGE_LATEST) -t $(OPERATOR_IMAGE_SHA) .
+
+docker-push-operator: ## Push operator Docker image to registry
+	@echo "Pushing operator Docker images..."
+	@echo "Pushing: $(OPERATOR_IMAGE_LATEST)"
+	docker push $(OPERATOR_IMAGE_LATEST)
+	@echo "Pushing: $(OPERATOR_IMAGE_SHA)"
+	docker push $(OPERATOR_IMAGE_SHA)
+
+docker-build-push-operator: docker-build-operator docker-push-operator ## Build and push operator Docker image
+
+k8s-secrets: ## Display commands to create Kubernetes secrets (does not execute)
+	@echo "=========================================="
+	@echo "Kubernetes Secrets Creation Commands"
+	@echo "=========================================="
+	@echo ""
+	@echo "1. Create operator-secrets:"
+	@echo "kubectl create secret generic operator-secrets \\"
+	@echo "  --namespace=$(K8S_NAMESPACE) \\"
+	@echo "  --from-literal=database-url=\"\$$DATABASE_URL\" \\"
+	@echo "  --from-literal=github-app-id=\"\$$GITHUB_APP_ID\" \\"
+	@echo "  --from-file=github-private-key=./github-app.pem \\"
+	@echo "  --from-literal=github-webhook-secret=\"\$$GITHUB_WEBHOOK_SECRET\" \\"
+	@echo "  --from-literal=discord-webhook-url=\"\$$DISCORD_WEBHOOK_URL\" \\"
+	@echo "  --from-literal=operator-api-token=\"\$$OPERATOR_API_TOKEN\""
+	@echo ""
+	@echo "2. Create github-token:"
+	@echo "kubectl create secret generic github-token \\"
+	@echo "  --namespace=$(K8S_NAMESPACE) \\"
+	@echo "  --from-literal=token=\"\$$GITHUB_TOKEN\""
+	@echo ""
+	@echo "3. Create anthropic-api-key:"
+	@echo "kubectl create secret generic anthropic-api-key \\"
+	@echo "  --namespace=$(K8S_NAMESPACE) \\"
+	@echo "  --from-literal=api-key=\"\$$ANTHROPIC_API_KEY\""
+	@echo ""
+	@echo "4. Create cursor-api-key:"
+	@echo "kubectl create secret generic cursor-api-key \\"
+	@echo "  --namespace=$(K8S_NAMESPACE) \\"
+	@echo "  --from-literal=api-key=\"\$$CURSOR_API_KEY\""
+	@echo ""
+	@echo "5. Create s3-credentials:"
+	@echo "kubectl create secret generic s3-credentials \\"
+	@echo "  --namespace=$(K8S_NAMESPACE) \\"
+	@echo "  --from-literal=access-key-id=\"\$$S3_ACCESS_KEY_ID\" \\"
+	@echo "  --from-literal=secret-access-key=\"\$$S3_SECRET_ACCESS_KEY\""
+	@echo ""
+	@echo "=========================================="
+
+deploy-infra: ## Deploy MySQL and MinIO for development/testing
+	@echo "Deploying infrastructure (MySQL + MinIO)..."
+	kubectl apply -f k8s/mysql-deployment.yaml --namespace=$(K8S_NAMESPACE)
+	kubectl apply -f k8s/minio-deployment.yaml --namespace=$(K8S_NAMESPACE)
+	@echo ""
+	@echo "Waiting for MySQL to be ready..."
+	kubectl wait --for=condition=ready pod -l app=mysql --timeout=120s --namespace=$(K8S_NAMESPACE) || true
+	@echo ""
+	@echo "Waiting for MinIO to be ready..."
+	kubectl wait --for=condition=ready pod -l app=minio --timeout=120s --namespace=$(K8S_NAMESPACE) || true
+	@echo ""
+	@echo "Infrastructure deployed successfully!"
+	@echo ""
+	@echo "Next steps:"
+	@echo "1. Port-forward MinIO: kubectl port-forward svc/minio 9000:9000 --namespace=$(K8S_NAMESPACE)"
+	@echo "2. Create S3 bucket: ./scripts/setup-minio.sh"
+	@echo "3. Run migrations: make migrate-up"
+
+deploy-operator: ## Deploy operator service to Kubernetes
+	@echo "Deploying operator service..."
+	kubectl apply -f k8s/rbac.yaml --namespace=$(K8S_NAMESPACE)
+	kubectl apply -f specs/001-github-agent-automation/k8s/operator/service.yaml --namespace=$(K8S_NAMESPACE)
+	@echo ""
+	@echo "Waiting for operator to be ready..."
+	kubectl wait --for=condition=ready pod -l app=agent-operator --timeout=120s --namespace=$(K8S_NAMESPACE) || true
+	@echo ""
+	@echo "Operator deployed successfully!"
+	@echo ""
+	@echo "Check status:"
+	@echo "  kubectl get pods -l app=agent-operator --namespace=$(K8S_NAMESPACE)"
+	@echo "  kubectl logs -l app=agent-operator --namespace=$(K8S_NAMESPACE)"
+
+deploy-all: deploy-infra deploy-operator ## Deploy all components (infra + operator)
+	@echo ""
+	@echo "=========================================="
+	@echo "All components deployed successfully!"
+	@echo "=========================================="
 
