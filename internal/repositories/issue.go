@@ -57,12 +57,18 @@ func (r *IssueRepository) FindByIDWithRelations(id int) (*models.Issue, error) {
 // Create inserts a new Issue record
 // Returns error if duplicate (repo, number) violation occurs
 func (r *IssueRepository) Create(issue *models.Issue) error {
+	if issue.Labels == "" {
+		issue.Labels = "[]"
+	}
 	return r.db.Create(issue).Error
 }
 
 // Update updates an existing Issue record by ID
 // Uses GORM's Save method which updates all fields
 func (r *IssueRepository) Update(issue *models.Issue) error {
+	if issue.Labels == "" {
+		issue.Labels = "[]"
+	}
 	return r.db.Save(issue).Error
 }
 

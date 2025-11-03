@@ -142,6 +142,7 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 						GitHubIssueID: githubIssueID,
 						Title:         issueTitle,
 						State:         issueState,
+						Labels:        "[]",
 					}
 				} else if findErr != nil {
 					// Some other error occurred
