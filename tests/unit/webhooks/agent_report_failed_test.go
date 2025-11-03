@@ -24,6 +24,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
+	// Pre-create minimal issues table to satisfy GORM's relation discovery on AgentRun without MySQL enums
+	if err := db.Exec("CREATE TABLE IF NOT EXISTS issues (id integer PRIMARY KEY AUTOINCREMENT)").Error; err != nil {
+		t.Fatalf("failed to create stub issues table: %v", err)
+	}
 	if err := db.AutoMigrate(&models.AgentRun{}, &models.AuditLog{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
