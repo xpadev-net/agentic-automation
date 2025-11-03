@@ -179,4 +179,3 @@ func TestDetectRunAgentTrigger(t *testing.T) {
 		})
 	}
 }
-

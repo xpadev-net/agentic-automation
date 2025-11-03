@@ -48,4 +48,3 @@ func (s *TriggerDetectionService) DetectRunAgentTrigger(commentBody string) bool
 
 	return detected
 }
-
