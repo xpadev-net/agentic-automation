@@ -187,7 +187,7 @@ type agentRunRow struct {
 	IssueID        int
 }
 
-func createIssue(t *testing.T, db *gorm.DB) *issueRow {
+func createIssueUS2(t *testing.T, db *gorm.DB) *issueRow {
 	row := &issueRow{Repo: "test-org/us2-pr-repo", Number: 2001, GitHubIssueID: 987654321}
 	require.NoError(t, db.Exec(`INSERT INTO issues (repo, number, github_issue_id, title, body, labels, state, created_at, updated_at)
 		VALUES (?, ?, ?, 't', 'b', '[]', 'open', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, row.Repo, row.Number, row.GitHubIssueID).Error)
@@ -217,7 +217,7 @@ func TestUS2_PRCreation_Success(t *testing.T) {
 
 	router := setupRouter()
 
-	iss := createIssue(t, db)
+	iss := createIssueUS2(t, db)
 	run := createAgentRun(t, db, iss.ID)
 
 	reqBody := handlers.ReportRequest{
