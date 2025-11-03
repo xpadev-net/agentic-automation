@@ -44,10 +44,18 @@ func NewAuthorizationService(githubClient *clients.Client, logger *zap.Logger) *
 }
 
 // CheckPermission checks if a GitHub user has Collaborator+ permission on a repository.
-// It calls the GitHub API to verify the user's permission level.
+// This includes repository owners, explicit collaborators, and organization team members
+// with write/admin access. It uses the GitHub API GetPermissionLevel endpoint to accurately
+// determine the user's permission level (admin, write, read, none).
 //
-// Returns true if the user is a collaborator or has higher permissions (owner/admin),
-// false if the user does not have collaborator permissions.
+// This method implements FR-018 requirement: "認可は「リポジトリのCollaborator以上」のユーザーのみに限定する".
+// It returns true for users with admin or write permission, which includes:
+//   - Repository owners
+//   - Explicit collaborators with write/admin access
+//   - Organization team members with write/admin access
+//
+// Returns true if the user has admin or write permission, false if the user has read
+// permission, no permission, or the user/repository does not exist.
 // Returns an error if the GitHub API call fails (network error, rate limit, etc.).
 //
 // Note: 404 responses from GitHub API are treated as "no permission" (false, nil),
@@ -60,7 +68,7 @@ func NewAuthorizationService(githubClient *clients.Client, logger *zap.Logger) *
 //   - username: GitHub username to check (e.g., "octocat")
 //
 // Returns:
-//   - bool: true if user has Collaborator+ permission, false otherwise
+//   - bool: true if user has Collaborator+ permission (admin/write), false otherwise
 //   - error: GitHub API error (network error, rate limit, authentication error, etc.)
 func (s *AuthorizationService) CheckPermission(ctx context.Context, owner, repo, username string) (bool, error) {
 	s.logger.Info("Checking GitHub user permission",
@@ -69,7 +77,7 @@ func (s *AuthorizationService) CheckPermission(ctx context.Context, owner, repo,
 		zap.String("username", username),
 	)
 
-	hasPermission, err := s.githubClient.CheckCollaboratorPermission(ctx, owner, repo, username)
+	hasPermission, err := s.githubClient.CheckWritePermission(ctx, owner, repo, username)
 	if err != nil {
 		s.logger.Error("GitHub user permission check failed",
 			zap.String("owner", owner),
