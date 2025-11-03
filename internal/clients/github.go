@@ -411,12 +411,15 @@ func (c *Client) CheckCollaboratorPermission(ctx context.Context, owner, repo, u
 	return isCollaborator, nil
 }
 
-// CheckWritePermission checks if a user has write or admin permission on a repository.
+// CheckWritePermission checks if a user has write, maintain, or admin permission on a repository.
 // This includes repository owners, explicit collaborators, and organization team members
-// with write/admin access. This is the recommended method for checking FR-018 requirements
-// (Collaborator+ permission) as it accurately includes all users with write/admin rights.
+// with write/maintain/admin access. This is the recommended method for checking FR-018 requirements
+// (Collaborator+ permission) as it accurately includes all users with write-equivalent rights.
 //
-// Returns true if the user has admin or write permission, false if the user has read
+// The maintain role grants all write capabilities plus additional management rights and should
+// be considered equivalent to write/admin for authorization purposes.
+//
+// Returns true if the user has admin, maintain, or write permission, false if the user has read
 // permission, no permission, or the user/repository does not exist.
 // Returns an error if the GitHub API call fails (network error, rate limit, etc.).
 //
@@ -427,7 +430,7 @@ func (c *Client) CheckCollaboratorPermission(ctx context.Context, owner, repo, u
 //   - username: GitHub username to check (e.g., "octocat")
 //
 // Returns:
-//   - bool: true if user has write/admin permission, false otherwise
+//   - bool: true if user has write/maintain/admin permission, false otherwise
 //   - error: GitHub API error (network error, rate limit, authentication error, etc.)
 func (c *Client) CheckWritePermission(ctx context.Context, owner, repo, username string) (bool, error) {
 	c.logger.Info("Checking GitHub user write permission",
@@ -453,11 +456,11 @@ func (c *Client) CheckWritePermission(ctx context.Context, owner, repo, username
 
 	c.handleRateLimit(resp)
 
-	// Check if permission level is admin or write
+	// Check if permission level is admin, maintain, or write
 	hasPermission := false
 	if permissionLevel != nil && permissionLevel.Permission != nil {
 		permission := *permissionLevel.Permission
-		hasPermission = permission == "admin" || permission == "write"
+		hasPermission = permission == "admin" || permission == "maintain" || permission == "write"
 		c.logger.Info("GitHub user permission check completed",
 			zap.String("owner", owner),
 			zap.String("repo", repo),

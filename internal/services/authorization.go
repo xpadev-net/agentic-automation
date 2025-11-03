@@ -45,16 +45,19 @@ func NewAuthorizationService(githubClient *clients.Client, logger *zap.Logger) *
 
 // CheckPermission checks if a GitHub user has Collaborator+ permission on a repository.
 // This includes repository owners, explicit collaborators, and organization team members
-// with write/admin access. It uses the GitHub API GetPermissionLevel endpoint to accurately
-// determine the user's permission level (admin, write, read, none).
+// with write/maintain/admin access. It uses the GitHub API GetPermissionLevel endpoint to accurately
+// determine the user's permission level (admin, maintain, write, read, none).
 //
 // This method implements FR-018 requirement: "認可は「リポジトリのCollaborator以上」のユーザーのみに限定する".
-// It returns true for users with admin or write permission, which includes:
+// It returns true for users with admin, maintain, or write permission, which includes:
 //   - Repository owners
-//   - Explicit collaborators with write/admin access
-//   - Organization team members with write/admin access
+//   - Explicit collaborators with write/maintain/admin access
+//   - Organization team members with write/maintain/admin access
 //
-// Returns true if the user has admin or write permission, false if the user has read
+// The maintain role grants all write capabilities plus additional management rights and is
+// considered equivalent to write/admin for authorization purposes.
+//
+// Returns true if the user has admin, maintain, or write permission, false if the user has read
 // permission, no permission, or the user/repository does not exist.
 // Returns an error if the GitHub API call fails (network error, rate limit, etc.).
 //
@@ -68,7 +71,7 @@ func NewAuthorizationService(githubClient *clients.Client, logger *zap.Logger) *
 //   - username: GitHub username to check (e.g., "octocat")
 //
 // Returns:
-//   - bool: true if user has Collaborator+ permission (admin/write), false otherwise
+//   - bool: true if user has Collaborator+ permission (admin/maintain/write), false otherwise
 //   - error: GitHub API error (network error, rate limit, authentication error, etc.)
 func (s *AuthorizationService) CheckPermission(ctx context.Context, owner, repo, username string) (bool, error) {
 	s.logger.Info("Checking GitHub user permission",
