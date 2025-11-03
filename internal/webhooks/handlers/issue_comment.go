@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -538,7 +539,35 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 	// Step 12: Update AgentRun
 	agentRun.AgentType = agentType
-	agentRun.Input = prompt
+
+	// Build structured input JSON (schema v1)
+	inputPayload := map[string]any{
+		"schema_version": "1",
+		"prompt":         prompt,
+		"agent_type":     agentType,
+		"issue": map[string]any{
+			"repo":           payload.Repository.FullName,
+			"number":         payload.Issue.Number,
+			"has_body":       issueContext.Body != "",
+			"labels":         issueContext.Labels,
+			"comments_count": len(issueContext.Comments),
+		},
+	}
+	inputBytes, marshalErr := json.Marshal(inputPayload)
+	if marshalErr != nil {
+		logger.Warn("Failed to marshal structured input payload", zap.Error(marshalErr))
+		// Fallback to minimal JSON with prompt only
+		inputBytes, _ = json.Marshal(map[string]any{
+			"schema_version": "1",
+			"prompt":         prompt,
+			"agent_type":     agentType,
+		})
+	}
+
+	// Assign JSON to AgentRun.Input
+	// Use datatypes.JSON to match MySQL JSON column type
+	// Note: import added if not present
+	agentRun.Input = datatypes.JSON(inputBytes)
 	if err := agentRunRepo.Update(agentRun); err != nil {
 		logger.Error("Failed to update AgentRun",
 			zap.Error(err),
