@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,9 +45,11 @@ func setupMinIOServer(t *testing.T) (endpoint string, bucket string, cleanup fun
 		originalEnv: make(map[string]string),
 	}
 
-	// Step 1: Download or use existing MinIO binary
+	// Step 1: Get MinIO binary (skip test if not available)
 	minioBinary, err := getMinIOBinary(t)
-	require.NoError(t, err, "Failed to get MinIO binary")
+	if err != nil {
+		t.Skipf("Skipping MinIO integration test: %v", err)
+	}
 
 	// Step 2: Create temporary data directory
 	info.dataDir = t.TempDir()
@@ -189,49 +190,8 @@ func getMinIOBinary(t *testing.T) (string, error) {
 		return binaryPath, nil
 	}
 
-	// Download MinIO binary
-	// Use latest stable release (without version tag for latest)
-	url := fmt.Sprintf("https://dl.min.io/server/minio/release/%s-%s/minio",
-		osName, archName)
-	if goos == "windows" {
-		url = fmt.Sprintf("https://dl.min.io/server/minio/release/%s-%s/minio.exe",
-			osName, archName)
-	}
-
-	t.Logf("Downloading MinIO binary from %s to %s", url, binaryPath)
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return "", fmt.Errorf("failed to download MinIO: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download MinIO: HTTP %d", resp.StatusCode)
-	}
-
-	// Create the binary file
-	outFile, err := os.Create(binaryPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to create binary file: %w", err)
-	}
-	defer outFile.Close()
-
-	// Copy response body to file
-	_, err = io.Copy(outFile, resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to write binary file: %w", err)
-	}
-
-	// Make binary executable (Unix-like systems)
-	if goos != "windows" {
-		err = os.Chmod(binaryPath, 0755)
-		if err != nil {
-			return "", fmt.Errorf("failed to make binary executable: %w", err)
-		}
-	}
-
-	return binaryPath, nil
+	// Binary not found - return error instead of downloading
+	return "", fmt.Errorf("MinIO binary not found at %s. Set MINIO_SERVER_PATH environment variable or ensure MinIO binary is cached at ~/.cache/minio-test/", binaryPath)
 }
 
 // waitForMinIOServer waits for the MinIO server to become ready by polling the health endpoint.
