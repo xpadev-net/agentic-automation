@@ -177,6 +177,7 @@ func HandleIssueComment(c *gin.Context) {
 	issueContextService := services.NewIssueContextService(githubClient, logger)
 	agentTypeDetectorService := services.NewAgentTypeDetectorService(logger)
 	stateMachine := services.NewAgentRunStateMachine(agentRunRepo, logger)
+	githubNotificationService := services.NewGitHubNotificationService(githubClient, logger)
 
 	// Initialize Kubernetes client
 	kubernetesClient, err := clients.NewKubernetesClient(logger)
@@ -458,6 +459,32 @@ func HandleIssueComment(c *gin.Context) {
 		zap.String("namespace", job.Namespace),
 		zap.String("delivery_id", deliveryID),
 	)
+
+	// Post GitHub status comment
+	if err := githubNotificationService.PostExecutionStartComment(
+		ctx,
+		owner,
+		repo,
+		payload.Issue.Number,
+		agentRun.AgentType,
+		agentRun.ID,
+	); err != nil {
+		// Non-blocking: log error but don't fail the webhook processing
+		logger.Warn("Failed to post GitHub execution start comment",
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("issue_number", payload.Issue.Number),
+			zap.String("repo", payload.Repository.FullName),
+			zap.String("delivery_id", deliveryID),
+		)
+	} else {
+		logger.Info("GitHub execution start comment posted successfully",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("issue_number", payload.Issue.Number),
+			zap.String("repo", payload.Repository.FullName),
+			zap.String("delivery_id", deliveryID),
+		)
+	}
 
 	// Step 15: Return success response
 	c.JSON(http.StatusOK, gin.H{
