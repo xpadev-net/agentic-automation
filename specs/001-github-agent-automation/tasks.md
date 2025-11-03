@@ -141,8 +141,8 @@
 - [x] T072 [US1] Implement Kubernetes Job creation service in internal/services/kubernetes_job.go
 - [x] T073 [US1] Implement Issue context collector (body, comments, labels) in internal/services/issue_context.go
 - [x] T074 [US1] Implement agent type detector from Issue labels in internal/services/agent_type_detector.go
-- [ ] T075 [US1] Add logging for trigger detection and authorization failures in internal/webhooks/handlers/issue_comment.go
-- [ ] T076 [US1] Implement GitHub status comment poster for execution start in internal/services/github_notification.go
+- [x] T075 [US1] Add logging for trigger detection and authorization failures in internal/webhooks/handlers/issue_comment.go
+- [x] T076 [US1] Implement GitHub status comment poster for execution start in internal/services/github_notification.go
 
 ### Tests for User Story 1 (Test-First Development)
 
