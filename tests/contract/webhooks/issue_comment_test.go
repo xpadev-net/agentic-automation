@@ -17,7 +17,8 @@ import (
 // loadFixture reads a JSON fixture from tests/fixtures/webhooks/
 func loadFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	base := filepath.Join("tests", "fixtures", "webhooks")
+	// From tests/contract/webhooks → tests/fixtures/webhooks
+	base := filepath.Join("..", "..", "fixtures", "webhooks")
 	data, err := os.ReadFile(filepath.Join(base, name))
 	if err != nil {
 		t.Fatalf("failed to read fixture %s: %v", name, err)
