@@ -98,7 +98,10 @@ git checkout -b feature/issue-123 master
 ## 主要環境変数
 
 共通:
-- `OPERATOR_API_URL`: Operator API ベースURL
+- `KUBERNETES_NAMESPACE`: Kubernetes namespace（Downward API から自動注入）
+- `OPERATOR_SERVICE_NAME`: Operator サービス名（例: `agent-operator`）
+- `OPERATOR_SERVICE_PORT`: Operator サービスポート（例: `3000`）
+  - これら3つから Operator API URL を自動構築: `http://{service}.{namespace}.svc.cluster.local:{port}`
 - `OPERATOR_API_TOKEN`: API 認証トークン
 - `AGENT_RUN_ID`: AgentRun レコードID
 - `AGENT_TYPE`: `claude-code` または `cursor-agents`
@@ -108,6 +111,8 @@ git checkout -b feature/issue-123 master
 エージェント別:
 - `ANTHROPIC_API_KEY`（`claude-code` 用）
 - `CURSOR_API_KEY`（`cursor-agents` 用）
+
+**注**: 以前は `OPERATOR_API_URL` を直接設定していましたが、現在は Kubernetes Downward API を利用して自動的に URL を構築します。
 
 Kubernetes での注入例は `k8s/pod-template.yaml` および `internal/clients/kubernetes.go` を参照してください。
 

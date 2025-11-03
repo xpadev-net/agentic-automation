@@ -56,7 +56,10 @@ WORKDIR /workspace
 ENTRYPOINT ["agent-runner"]
 
 # Required Environment Variables (set by Kubernetes Pod):
-# - OPERATOR_API_URL: Operator REST API base URL
+# - KUBERNETES_NAMESPACE: Kubernetes namespace (auto-injected via Downward API)
+# - OPERATOR_SERVICE_NAME: Operator service name
+# - OPERATOR_SERVICE_PORT: Operator service port
+#   Note: Operator API URL is auto-constructed from these three values
 # - OPERATOR_API_TOKEN: Bearer token for API authentication
 # - AGENT_RUN_ID: AgentRun database record ID
 # - AGENT_TYPE: Agent to execute ("claude-code" or "cursor-agents")

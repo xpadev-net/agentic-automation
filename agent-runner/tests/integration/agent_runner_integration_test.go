@@ -330,7 +330,12 @@ func setupTestEnv(t *testing.T, operatorAPIURL, operatorToken, githubToken, agen
 
 	// Store original values
 	envVars := map[string]string{
-		"OPERATOR_API_URL":   operatorAPIURL,
+		// New Operator URL construction variables
+		"KUBERNETES_NAMESPACE":  "default",
+		"OPERATOR_SERVICE_NAME": "agent-operator",
+		"OPERATOR_SERVICE_PORT": "3000",
+
+		// Other required variables for tests
 		"OPERATOR_API_TOKEN": operatorToken,
 		"AGENT_RUN_ID":       strconv.Itoa(testAgentRunID),
 		"AGENT_TYPE":         agentType,
@@ -341,6 +346,13 @@ func setupTestEnv(t *testing.T, operatorAPIURL, operatorToken, githubToken, agen
 	}
 
 	originalValues := make(map[string]string)
+	// Track legacy OPERATOR_API_URL to restore/unset on cleanup
+	if original, exists := os.LookupEnv("OPERATOR_API_URL"); exists {
+		originalValues["OPERATOR_API_URL"] = original
+	}
+	// Explicitly remove legacy variable to avoid conflicts with new construction
+	os.Unsetenv("OPERATOR_API_URL")
+
 	for key, value := range envVars {
 		if original, exists := os.LookupEnv(key); exists {
 			originalValues[key] = original
@@ -356,6 +368,12 @@ func setupTestEnv(t *testing.T, operatorAPIURL, operatorToken, githubToken, agen
 			} else {
 				os.Unsetenv(key)
 			}
+		}
+		// Restore or unset legacy OPERATOR_API_URL
+		if original, exists := originalValues["OPERATOR_API_URL"]; exists {
+			os.Setenv("OPERATOR_API_URL", original)
+		} else {
+			os.Unsetenv("OPERATOR_API_URL")
 		}
 	}
 

@@ -1270,7 +1270,8 @@ env:
 | `GITHUB_WEBHOOK_SECRET` | はい | - | Webhook 署名検証用シークレット |
 | `OPERATOR_API_TOKEN` | はい | - | Agent Runner 認証用トークン |
 | `AGENT_RUNNER_IMAGE` | はい | - | Agent Runner Docker イメージ |
-| `OPERATOR_API_URL` | はい | - | Operator REST API URL |
+| `OPERATOR_SERVICE_NAME` | いいえ | `agent-operator` | Operator サービス名 |
+| `OPERATOR_SERVICE_PORT` | いいえ | `3000` | Operator サービスポート |
 | `S3_ENDPOINT` | はい | - | S3 API エンドポイント |
 | `S3_REGION` | はい | - | S3 リージョン |
 | `S3_BUCKET` | はい | - | S3 バケット名 |
@@ -1292,7 +1293,9 @@ env:
 
 | 環境変数 | 必須 | デフォルト | 説明 |
 |---------|------|-----------|------|
-| `OPERATOR_API_URL` | はい | - | Operator REST API URL |
+| `KUBERNETES_NAMESPACE` | はい | - | Kubernetes namespace（Downward API 経由で自動注入） |
+| `OPERATOR_SERVICE_NAME` | はい | - | Operator サービス名 |
+| `OPERATOR_SERVICE_PORT` | はい | - | Operator サービスポート |
 | `OPERATOR_API_TOKEN` | はい | - | Bearer トークン |
 | `AGENT_RUN_ID` | はい | - | AgentRun レコード ID |
 | `AGENT_TYPE` | はい | - | エージェント種別（claude-code/cursor-agents） |
@@ -1301,6 +1304,8 @@ env:
 | `CURSOR_API_KEY` | 条件付き | - | Cursor API キー（AGENT_TYPE=cursor-agents の場合） |
 | `RETRY_COUNT` | いいえ | `0` | 現在のリトライ回数 |
 | `WORKSPACE_DIR` | いいえ | `/workspace` | 作業ディレクトリ |
+
+**注**: Operator API URL は、`KUBERNETES_NAMESPACE`、`OPERATOR_SERVICE_NAME`、`OPERATOR_SERVICE_PORT` から自動構築されます：`http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}`
 
 ### B. Makefile コマンド一覧
 
