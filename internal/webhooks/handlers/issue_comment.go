@@ -402,11 +402,24 @@ func HandleIssueComment(c *gin.Context) {
 	// Step 14: Create Kubernetes Job
 	job, err := jobService.CreateJobForAgentRun(ctx, agentRun, issue, prompt)
 	if err != nil {
-		logger.Error("Failed to create Kubernetes Job",
+		logger.Error("Failed to create Kubernetes Job, rolling back state",
 			zap.Error(err),
 			zap.Int("agent_run_id", agentRun.ID),
 			zap.String("delivery_id", deliveryID),
 		)
+		// Rollback state to queued for retry
+		if rollbackErr := stateMachine.TransitionToQueued(agentRun.ID); rollbackErr != nil {
+			logger.Error("Failed to rollback AgentRun state",
+				zap.Error(rollbackErr),
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else {
+			logger.Info("AgentRun state rolled back to queued for retry",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+		}
 		c.Error(err)
 		return
 	}
