@@ -474,6 +474,80 @@ func (c *DiscordClient) SendPRMergedNotification(ctx context.Context, pr *models
 	return c.send(ctx, payload)
 }
 
+// SendPRCreatedNotification sends a PR created success notification
+func (c *DiscordClient) SendPRCreatedNotification(ctx context.Context, pr *models.PullRequest, issue *models.Issue, agentType string) error {
+	if c == nil {
+		return nil // Client is disabled
+	}
+
+	var issueDescription string
+	if issue != nil {
+		issueDescription = sanitizeMessage(fmt.Sprintf("**Issue #%d**: %s", issue.Number, issue.Title))
+	} else {
+		issueDescription = sanitizeMessage(fmt.Sprintf("**PR #%d**: %s", pr.Number, pr.Branch))
+	}
+
+	// Build embed fields
+	fields := []DiscordEmbedField{
+		{
+			Name:   "Repository",
+			Value:  sanitizeMessage(pr.Repo),
+			Inline: true,
+		},
+		{
+			Name:   "PR Number",
+			Value:  fmt.Sprintf("#%d", pr.Number),
+			Inline: true,
+		},
+		{
+			Name:   "Agent Type",
+			Value:  sanitizeMessage(agentType),
+			Inline: true,
+		},
+		{
+			Name:   "Branch",
+			Value:  sanitizeMessage(pr.Branch),
+			Inline: true,
+		},
+	}
+
+	// Add Issue URL if issue is provided
+	if issue != nil {
+		fields = append(fields, DiscordEmbedField{
+			Name:   "Issue URL",
+			Value:  fmt.Sprintf("[View Issue](%s)", formatGitHubURL(issue.Repo, issue.Number, false)),
+			Inline: false,
+		})
+	}
+
+	// Add PR URL
+	fields = append(fields, DiscordEmbedField{
+		Name:   "PR URL",
+		Value:  fmt.Sprintf("[View PR](%s)", formatGitHubURL(pr.Repo, pr.Number, true)),
+		Inline: false,
+	})
+
+	embed := DiscordEmbed{
+		Title:       sanitizeMessage("✅ PR Created"),
+		Description: issueDescription,
+		Color:       ColorSuccess,
+		Fields:      fields,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+		Footer: &DiscordEmbedFooter{
+			Text: "GitHub Agent Automation",
+		},
+	}
+
+	payload := DiscordPayload{
+		Embeds: []DiscordEmbed{embed},
+	}
+
+	c.logger.Info("Sending Discord PR created notification",
+		zap.Int("pr_number", pr.Number))
+
+	return c.send(ctx, payload)
+}
+
 // SendOperatorAPIErrorNotification sends an operator API error notification
 func (c *DiscordClient) SendOperatorAPIErrorNotification(ctx context.Context, agentRunID int, podName, errorMsg string) error {
 	if c == nil {
