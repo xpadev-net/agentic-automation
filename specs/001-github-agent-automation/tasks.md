@@ -116,7 +116,7 @@
 - [x] T063_S3 [P] Write unit tests for S3 client (mock S3 API, test retry logic, path-style URLs)
 - [x] T064_S3 [P] Write unit tests for session archive/restore (tar.gz operations, file exclusion)
 - [x] T065_S3 [P] Write unit tests for exponential backoff retry (mock failures, verify backoff intervals)
-- [ ] T066_S3 Write integration test for session save/restore flow (MinIO test server, full lifecycle)
+- [x] T066_S3 Write integration test for session save/restore flow (MinIO test server, full lifecycle)
 - [x] T067_S3 Write integration test for S3 failure scenarios (unavailable S3, Pod exit 1 verification)
 - [x] T068_S3 Add migration for AgentRun.s3_session_key and session_saved_at columns (goose migration)
 
