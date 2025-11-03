@@ -132,7 +132,7 @@
 
 ### Implementation for User Story 1
 
-- [ ] T066 [P] [US1] Create webhook event types definition in internal/models/webhook_events.go
+- [x] T066 [P] [US1] Create webhook event types definition in internal/models/webhook_events.go
 - [ ] T067 [P] [US1] Implement trigger detection service in internal/services/trigger_detection.go
 - [ ] T068 [US1] Implement comment parser to detect "/run-agent" in internal/utils/comment_parser.go
 - [ ] T069 [US1] Implement GitHub user permission checker (Collaborator+) in internal/services/authorization.go
