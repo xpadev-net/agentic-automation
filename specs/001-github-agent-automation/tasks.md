@@ -147,7 +147,7 @@
 ### Tests for User Story 1 (Test-First Development)
 
 - [ ] T077 [P] [US1] Write contract tests for issue_comment webhook payload validation
-- [ ] T078 [P] [US1] Write unit tests for TriggerDetectionService ("/run-agent" detection)
+- [x] T078 [P] [US1] Write unit tests for TriggerDetectionService ("/run-agent" detection)
 - [ ] T079 [P] [US1] Write unit tests for AuthorizationService (Collaborator+ check)
 - [ ] T080 [US1] Write integration test for webhook → K8s Job creation flow
 
