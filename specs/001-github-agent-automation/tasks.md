@@ -43,7 +43,7 @@
 
 - [x] T008 Create GORM models in `internal/models/` (Issue, PullRequest, AgentRun, ReviewFeedback, CIStatus, BlockerGraphEdges, AuditLog, OperationLog)
 - [x] T009 Implement GORM database connection in `internal/config/database.go`
-- [x] T010 Create initial goose SQL migration `migrations/000001_init.up.sql` and `down.sql`
+- [x] T010 Create initial goose SQL migration `migrations/000001_init.sql` (single file with `-- +goose Up/Down`)
 
 ### Repository Layer (GORM-based)
 

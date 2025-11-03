@@ -110,6 +110,8 @@ LOG_LEVEL=info
 
 ### 4. Run Database Migrations
 
+Note: このリポジトリでは goose の単一ファイル形式を採用しています（例: `migrations/000001_init.sql`）。各ファイルは `-- +goose Up` / `-- +goose Down` セクションで構成します。
+
 ```bash
 # Install goose migration tool (if not already installed)
 go install github.com/pressly/goose/v3/cmd/goose@latest

@@ -33,9 +33,6 @@ go.work
 # Kubernetes secrets
 k8s/secrets/
 
-# Database migration SQL files (generated)
-migrations/*.sql
-
 # IDE
 .idea/
 .vscode/
