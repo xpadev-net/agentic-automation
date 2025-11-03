@@ -23,6 +23,11 @@ type AgentRunStateMachine interface {
 	// TransitionToFailed transitions an AgentRun from "started" to "failed" state,
 	// sets the CompletedAt timestamp, and optionally sets an error message.
 	TransitionToFailed(id int, errorMessage *string) error
+
+	// TransitionToQueued rolls back an AgentRun from "started" to "queued" state
+	// and clears the StartedAt timestamp. This is used for retry scenarios when
+	// job creation fails after transitioning to started.
+	TransitionToQueued(id int) error
 }
 
 // agentRunStateMachine implements AgentRunStateMachine interface
@@ -375,6 +380,64 @@ func (s *agentRunStateMachine) TransitionToFailed(id int, errorMessage *string) 
 			zap.Bool("has_error_message", errorMessage != nil),
 		)
 	}
+
+	return nil
+}
+
+// TransitionToQueued rolls back an AgentRun from "started" to "queued" state
+// and clears the StartedAt timestamp. This is used for retry scenarios when
+// job creation fails after transitioning to started.
+// It directly updates the state using Update() instead of UpdateState() to
+// bypass normal state transition validation.
+func (s *agentRunStateMachine) TransitionToQueued(id int) error {
+	s.logger.Info("Rolling back AgentRun to queued state",
+		zap.Int("agent_run_id", id),
+		zap.String("current_state", "started"),
+	)
+
+	// Get current AgentRun to verify it exists
+	run, err := s.repo.GetByID(id)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			s.logger.Warn("AgentRun not found for rollback",
+				zap.Int("agent_run_id", id),
+				zap.String("target_state", "queued"),
+			)
+			return err
+		}
+		s.logger.Error("Failed to retrieve AgentRun for rollback",
+			zap.Int("agent_run_id", id),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	// Only allow rollback from "started" state
+	if run.State != "started" {
+		s.logger.Warn("Cannot rollback AgentRun - not in started state",
+			zap.Int("agent_run_id", id),
+			zap.String("current_state", run.State),
+			zap.String("target_state", "queued"),
+		)
+		return errors.New("cannot rollback AgentRun: not in started state")
+	}
+
+	// Update state to queued and clear StartedAt
+	run.State = "queued"
+	run.StartedAt = nil
+
+	// Save the rollback using Update() directly (bypasses UpdateState validation)
+	if err := s.repo.Update(run); err != nil {
+		s.logger.Error("Failed to rollback AgentRun to queued state",
+			zap.Int("agent_run_id", id),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	s.logger.Info("AgentRun successfully rolled back to queued state",
+		zap.Int("agent_run_id", id),
+	)
 
 	return nil
 }
