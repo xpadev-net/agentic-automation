@@ -346,6 +346,8 @@ S3_REGION="us-east-1"
 S3_BUCKET="agentic-automation-sessions"
 S3_ACCESS_KEY_ID="AKIA..."
 S3_SECRET_ACCESS_KEY="your-secret-key"
+S3_USE_PATH_STYLE="false"  # MinIO: true / AWS: false
+S3_MAX_RETRIES="5"
 
 # Operator API
 OPERATOR_API_TOKEN="$(openssl rand -hex 32)"
@@ -1285,9 +1287,10 @@ env:
 | `AI_AGENT_TIMEOUT_MINUTES` | いいえ | `30` | Pod 実行タイムアウト（分） |
 | `AI_AGENT_MAX_CONCURRENT_PODS` | いいえ | `10` | 最大並行実行数 |
 | `AI_AGENT_DEFAULT_TYPE` | いいえ | `claude-code` | デフォルトエージェント種別 |
-| `S3_USE_PATH_STYLE` | いいえ | `false` | パススタイル URL 使用（MinIO: true） |
+| `S3_USE_PATH_STYLE` | いいえ | `true` | パススタイル URL 使用（MinIO: true / AWS: false） |
 | `S3_MAX_RETRIES` | いいえ | `5` | S3 リトライ回数 |
-| `S3_RETRY_INITIAL_INTERVAL` | いいえ | `1s` | 初期バックオフ間隔 |
+| `S3_RETRY_INITIAL_INTERVAL` | いいえ | `1s` | 初期バックオフ間隔（現状未使用/将来拡張） |
+| `S3_CREDENTIALS_SECRET` | いいえ | `s3-credentials` | S3資格情報Secret名 |
 
 #### Agent Runner Pod
 
@@ -1304,6 +1307,13 @@ env:
 | `CURSOR_API_KEY` | 条件付き | - | Cursor API キー（AGENT_TYPE=cursor-agents の場合） |
 | `RETRY_COUNT` | いいえ | `0` | 現在のリトライ回数 |
 | `WORKSPACE_DIR` | いいえ | `/workspace` | 作業ディレクトリ |
+| `S3_ENDPOINT` | はい | - | S3 API エンドポイント |
+| `S3_REGION` | はい | - | S3 リージョン |
+| `S3_BUCKET` | はい | - | S3 バケット名 |
+| `S3_ACCESS_KEY_ID` | はい | - | S3 アクセスキー（Secret参照） |
+| `S3_SECRET_ACCESS_KEY` | はい | - | S3 シークレットキー（Secret参照） |
+| `S3_USE_PATH_STYLE` | いいえ | `true` | パススタイル URL 使用（MinIO: true / AWS: false） |
+| `S3_MAX_RETRIES` | いいえ | `5` | S3 リトライ回数 |
 
 **注**: Operator API URL は、`KUBERNETES_NAMESPACE`、`OPERATOR_SERVICE_NAME`、`OPERATOR_SERVICE_PORT` から自動構築されます：`http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}`
 
