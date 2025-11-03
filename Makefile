@@ -103,7 +103,7 @@ docker-build: ## Build Docker image for agent-runner
 	@echo "Building Docker image..."
 	@echo "Image: $(FULL_IMAGE_LATEST)"
 	@echo "Image: $(FULL_IMAGE_SHA)"
-	cd agent-runner && docker build -t $(FULL_IMAGE_LATEST) -t $(FULL_IMAGE_SHA) .
+	cd agent-runner && docker build --build-arg GIT_SHA=$(GIT_SHA) --build-arg BUILT_AT=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) -t $(FULL_IMAGE_LATEST) -t $(FULL_IMAGE_SHA) .
 
 docker-push: ## Push Docker image to registry
 	@echo "Pushing Docker images..."
@@ -118,7 +118,7 @@ docker-build-operator: ## Build Docker image for operator
 	@echo "Building operator Docker image..."
 	@echo "Image: $(OPERATOR_IMAGE_LATEST)"
 	@echo "Image: $(OPERATOR_IMAGE_SHA)"
-	docker build -t $(OPERATOR_IMAGE_LATEST) -t $(OPERATOR_IMAGE_SHA) .
+	docker build --build-arg GIT_SHA=$(GIT_SHA) --build-arg BUILT_AT=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) -t $(OPERATOR_IMAGE_LATEST) -t $(OPERATOR_IMAGE_SHA) .
 
 docker-push-operator: ## Push operator Docker image to registry
 	@echo "Pushing operator Docker images..."
