@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/repositories"
+	"agentic-automation/internal/services"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -140,6 +143,78 @@ func HandleAgentReport(c *gin.Context) {
 		zap.String("agent_type", req.AgentType),
 		zap.String("path", c.Request.URL.Path),
 	)
+
+	// ------------------------------------------------------------------
+	// PR created notification (US2 T083)
+	// Post status comments to both Issue and PR upon success
+	// ------------------------------------------------------------------
+	if req.Status == "succeeded" && req.PRNumber != nil {
+		// Load Issue for repo context
+		issueRepo := repositories.NewIssueRepository()
+		issue, err := issueRepo.FindByID(agentRun.IssueID)
+		if err != nil {
+			logger.Warn("Failed to load Issue for PR notification",
+				zap.Error(err),
+				zap.Int("issue_id", agentRun.IssueID),
+				zap.Int("agent_run_id", agentRunID),
+			)
+		} else {
+			// Parse owner/repo from Issue.Repo (format: owner/repo)
+			owner := ""
+			repo := ""
+			if parts := strings.SplitN(issue.Repo, "/", 2); len(parts) == 2 {
+				owner, repo = parts[0], parts[1]
+			}
+
+			if owner != "" && repo != "" {
+				// Initialize GitHub client and notification service
+				githubToken, tokenErr := config.GetEnvRequired("GITHUB_TOKEN")
+				if tokenErr != nil {
+					logger.Warn("Missing GITHUB_TOKEN; skip PR created notifications", zap.Error(tokenErr))
+				} else {
+					githubClient, cliErr := clients.NewClient(githubToken, logger)
+					if cliErr != nil {
+						logger.Warn("Failed to init GitHub client; skip PR created notifications", zap.Error(cliErr))
+					} else {
+						githubNotification := services.NewGitHubNotificationService(githubClient, logger)
+
+						prNumber := *req.PRNumber
+						prURL := "https://github.com/" + owner + "/" + repo + "/pull/" + strconv.Itoa(prNumber)
+						branch := req.Branch
+						sha := req.CommitSHA
+						idemKey := agentRun.IdempotencyKey
+
+						if err := githubNotification.NotifyPRCreated(
+							c.Request.Context(),
+							owner,
+							repo,
+							issue.Number,
+							prNumber,
+							prURL,
+							branch,
+							sha,
+							idemKey,
+						); err != nil {
+							logger.Warn("Failed to post PR created notifications",
+								zap.Error(err),
+								zap.String("owner", owner),
+								zap.String("repo", repo),
+								zap.Int("issue_number", issue.Number),
+								zap.Int("pr_number", prNumber),
+							)
+						} else {
+							logger.Info("Posted PR created notifications",
+								zap.String("owner", owner),
+								zap.String("repo", repo),
+								zap.Int("issue_number", issue.Number),
+								zap.Int("pr_number", prNumber),
+							)
+						}
+					}
+				}
+			}
+		}
+	}
 
 	// Return success response
 	c.JSON(http.StatusOK, ReportResponse{
