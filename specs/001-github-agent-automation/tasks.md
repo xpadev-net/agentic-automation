@@ -174,7 +174,7 @@
 ### Tests for User Story 2 (Test-First Development)
 
 - [x] T086 [P] [US2] Write unit tests for PullRequest upsert logic
-- [ ] T087 [P] [US2] Write unit tests for GitHub notification service (PR created message)
+- [x] T087 [P] [US2] Write unit tests for GitHub notification service (PR created message)
 - [ ] T088 [US2] Write integration test for agent-runner success report → PR record creation
 - [ ] T089 [US2] Write integration test for agent-runner failure report → retry trigger
 
