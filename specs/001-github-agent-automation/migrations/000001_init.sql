@@ -1,6 +1,8 @@
--- Migration: 000001_init
+-- Migration: 000001_init (single file)
 -- Description: Initial schema for GitHub Agent Automation
 -- Created: 2025-11-01
+
+-- +goose Up
 
 -- Table: issues
 CREATE TABLE IF NOT EXISTS issues (
@@ -160,3 +162,18 @@ CREATE TABLE IF NOT EXISTS branch_locks (
 
     FOREIGN KEY fk_branch_lock_run (agent_run_id) REFERENCES agent_runs(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- +goose Down
+
+-- Drop tables in reverse order (respecting foreign key constraints)
+DROP TABLE IF EXISTS branch_locks;
+DROP TABLE IF EXISTS operation_logs;
+DROP TABLE IF EXISTS audit_logs;
+DROP TABLE IF EXISTS blocker_graph_edges;
+DROP TABLE IF EXISTS ci_status;
+DROP TABLE IF EXISTS review_feedback;
+DROP TABLE IF EXISTS agent_runs;
+DROP TABLE IF EXISTS pull_requests;
+DROP TABLE IF EXISTS issues;
+
+
