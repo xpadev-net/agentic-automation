@@ -385,6 +385,11 @@ func (c *Client) GetPullRequestMergeable(ctx context.Context, owner, repo string
 
 // CheckCollaboratorPermission checks if a user is a collaborator on the repository
 // Returns true if the user is a collaborator (204 response), false otherwise
+//
+// Note: This method only checks for explicit collaborators and does not include
+// repository owners or organization team members with write/admin access.
+// For a more comprehensive check that includes owners and team members,
+// use CheckWritePermission instead.
 func (c *Client) CheckCollaboratorPermission(ctx context.Context, owner, repo, username string) (bool, error) {
 	c.logger.Info("Checking GitHub collaborator permission",
 		zap.String("owner", owner),
@@ -404,6 +409,74 @@ func (c *Client) CheckCollaboratorPermission(ctx context.Context, owner, repo, u
 
 	c.handleRateLimit(resp)
 	return isCollaborator, nil
+}
+
+// CheckWritePermission checks if a user has write, maintain, or admin permission on a repository.
+// This includes repository owners, explicit collaborators, and organization team members
+// with write/maintain/admin access. This is the recommended method for checking FR-018 requirements
+// (Collaborator+ permission) as it accurately includes all users with write-equivalent rights.
+//
+// The maintain role grants all write capabilities plus additional management rights and should
+// be considered equivalent to write/admin for authorization purposes.
+//
+// Returns true if the user has admin, maintain, or write permission, false if the user has read
+// permission, no permission, or the user/repository does not exist.
+// Returns an error if the GitHub API call fails (network error, rate limit, etc.).
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - owner: Repository owner (e.g., "octocat")
+//   - repo: Repository name (e.g., "hello-world")
+//   - username: GitHub username to check (e.g., "octocat")
+//
+// Returns:
+//   - bool: true if user has write/maintain/admin permission, false otherwise
+//   - error: GitHub API error (network error, rate limit, authentication error, etc.)
+func (c *Client) CheckWritePermission(ctx context.Context, owner, repo, username string) (bool, error) {
+	c.logger.Info("Checking GitHub user write permission",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("username", username),
+	)
+
+	permissionLevel, resp, err := c.Repositories.GetPermissionLevel(ctx, owner, repo, username)
+	if err != nil {
+		// Check if it's a 404 (user has no permission, user doesn't exist, or repo doesn't exist)
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			c.handleRateLimit(resp)
+			c.logger.Info("GitHub user has no permission",
+				zap.String("owner", owner),
+				zap.String("repo", repo),
+				zap.String("username", username),
+			)
+			return false, nil
+		}
+		return false, c.handleError(err, resp, "CheckWritePermission")
+	}
+
+	c.handleRateLimit(resp)
+
+	// Check if permission level is admin, maintain, or write
+	hasPermission := false
+	if permissionLevel != nil && permissionLevel.Permission != nil {
+		permission := *permissionLevel.Permission
+		hasPermission = permission == "admin" || permission == "maintain" || permission == "write"
+		c.logger.Info("GitHub user permission check completed",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("username", username),
+			zap.String("permission_level", permission),
+			zap.Bool("has_write_permission", hasPermission),
+		)
+	} else {
+		c.logger.Warn("GitHub API returned nil permission level",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.String("username", username),
+		)
+	}
+
+	return hasPermission, nil
 }
 
 // GetCheckSuite retrieves a GitHub check suite
