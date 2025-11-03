@@ -61,5 +61,5 @@ jobs:
           file: ${{ matrix.component.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha,scope=${{ matrix.component.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}
+          # cache-from: type=gha,scope=${{ matrix.component.name }}
+          # cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}
