@@ -97,4 +97,3 @@ func (s *AuthorizationService) CheckPermission(ctx context.Context, owner, repo,
 
 	return hasPermission, nil
 }
-
