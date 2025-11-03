@@ -113,7 +113,7 @@
 - [x] T060_S3 Add S3 environment variables to Kubernetes Pod template (S3_ENDPOINT, S3_REGION, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_USE_PATH_STYLE, S3_MAX_RETRIES)
 - [x] T061_S3 Update internal/clients/kubernetes.go to inject S3 config and RETRY_COUNT into Job creation
 - [x] T062_S3 [P] Create scripts/setup-minio.sh for MinIO bucket initialization (create agent-sessions bucket)
-- [ ] T063_S3 [P] Write unit tests for S3 client (mock S3 API, test retry logic, path-style URLs)
+- [x] T063_S3 [P] Write unit tests for S3 client (mock S3 API, test retry logic, path-style URLs)
 - [x] T064_S3 [P] Write unit tests for session archive/restore (tar.gz operations, file exclusion)
 - [x] T065_S3 [P] Write unit tests for exponential backoff retry (mock failures, verify backoff intervals)
 - [ ] T066_S3 Write integration test for session save/restore flow (MinIO test server, full lifecycle)
