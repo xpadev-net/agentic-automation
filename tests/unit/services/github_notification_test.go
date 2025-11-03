@@ -93,7 +93,8 @@ func TestNotifyPRCreated_PostsToIssueAndPR(t *testing.T) {
 	// Body contains marker and formatted message with short SHA
 	for _, body := range []string{created[10][0], created[42][0]} {
 		assert.Contains(t, body, "<!-- agent:pr-created:idem-123 -->")
-		assert.Contains(t, body, "PR created: #42 (https://github.com/o/r/pull/42) branch=feature/x sha=abc1234")
+		// short SHA of abc123def456 is abc123d (first 7 chars)
+		assert.Contains(t, body, "PR created: #42 (https://github.com/o/r/pull/42) branch=feature/x sha=abc123d")
 	}
 }
 
@@ -131,7 +132,6 @@ func TestNotifyPRCreated_SkipsWhenMarkerExists(t *testing.T) {
 func TestNotifyPRCreated_RetryOnTransientFailure(t *testing.T) {
 	// Arrange a server that fails the first POST to issue 10 with 500, then succeeds
 	var issuePostCount int
-	existing := map[int][]string{}
 	created := map[int][]string{}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
