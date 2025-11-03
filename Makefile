@@ -51,7 +51,7 @@ build: ## Build all binaries
 
 test: ## Run all tests
 	@echo "Running tests..."
-	go test ./... -v
+	CGO_ENABLED=1 go test ./... -v
 
 vet: ## Run go vet
 	@echo "Running go vet..."
