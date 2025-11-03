@@ -221,6 +221,8 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 				newRun := &models.AgentRun{
 					IssueID: issueDBID,
 					State:   "queued", // Initial state - will be updated by downstream handlers
+					Input:   "{}",     // Ensure valid JSON for MySQL JSON column
+					Output:  "{}",     // Ensure valid JSON for MySQL JSON column
 				}
 
 				createdRun, isNew, createErr := agentRunRepo.CreateOrGet(deliveryID, newRun)
