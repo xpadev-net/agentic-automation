@@ -91,6 +91,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 			retry_count INTEGER DEFAULT 0,
 			error_message TEXT,
 			commit_sha TEXT,
+			s3_session_key TEXT,
+			session_saved_at DATETIME,
 			started_at DATETIME,
 			completed_at DATETIME,
 			created_at DATETIME,
