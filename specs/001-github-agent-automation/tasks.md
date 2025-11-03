@@ -148,7 +148,7 @@
 
 - [x] T077 [P] [US1] Write contract tests for issue_comment webhook payload validation
 - [x] T078 [P] [US1] Write unit tests for TriggerDetectionService ("/run-agent" detection)
-- [ ] T079 [P] [US1] Write unit tests for AuthorizationService (Collaborator+ check)
+- [x] T079 [P] [US1] Write unit tests for AuthorizationService (Collaborator+ check)
 - [ ] T080 [US1] Write integration test for webhook → K8s Job creation flow
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently - webhook triggers K8s Pod execution
