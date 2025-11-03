@@ -168,6 +168,33 @@ func TestDetectRunAgentTrigger(t *testing.T) {
 			input:    "`/run-agent` in code",
 			expected: true,
 		},
+		// Additional edge/locale/length cases
+		{
+			name:     "JapaneseContext",
+			input:    "このIssueを処理してください。/run-agent を実行",
+			expected: true,
+		},
+		{
+			name:     "MixedFullHalfSpaces",
+			input:    "\u3000/run-agent\t 実行",
+			expected: true,
+		},
+		{
+			name:     "HTMLEscapedLike",
+			input:    "&sol;run-agent should not be detected",
+			expected: false,
+		},
+		{
+			name: "VeryLongInputWithTrigger",
+			input: func() string {
+				s := "/run-agent"
+				for i := 0; i < 10000; i++ {
+					s += "x"
+				}
+				return s
+			}(),
+			expected: true,
+		},
 	}
 
 	for _, tt := range tests {
