@@ -2,6 +2,7 @@ package main
 
 import (
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/version"
 	"agentic-automation/internal/webhooks"
 	"context"
 	"os"
@@ -21,6 +22,9 @@ func main() {
 	}
 
 	logger := config.GetLogger()
+
+	// Build information
+	logger.Info("Build info", zap.String("commit", version.Commit), zap.String("builtAt", version.BuiltAt))
 
 	// Create webhook server
 	server, err := webhooks.NewServer()

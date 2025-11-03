@@ -7,6 +7,10 @@
 # Builds the agent-runner Go binary from source
 FROM golang:1.24-alpine AS builder
 
+# Build arguments for embedding build metadata
+ARG GIT_SHA="unknown"
+ARG BUILT_AT="unknown"
+
 # Set working directory for build
 WORKDIR /build
 
@@ -20,8 +24,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the agent-runner binary
-RUN go build -o agent-runner main.go
+# Build the agent-runner binary with build metadata
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X agent-runner/pkg/version.Commit=${GIT_SHA} -X agent-runner/pkg/version.BuiltAt=${BUILT_AT}" -o agent-runner main.go
 
 # ==============================================================================
 # Stage 2: Runtime Image

@@ -17,6 +17,7 @@ import (
 	"agent-runner/pkg/hooks"
 	"agent-runner/pkg/reporter"
 	"agent-runner/pkg/storage"
+	"agent-runner/pkg/version"
 )
 
 func main() {
@@ -34,6 +35,10 @@ func main() {
 		Long: `agent-runner executes AI agents (claude-code or cursor-agents) in Kubernetes Pods.
 It processes GitHub Issues, runs lint/typecheck, commits changes, and reports results to the Operator API.`,
 		Version: "0.1.0",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// Build information to stderr (keeps stdout clean for any machine parsing)
+			fmt.Fprintf(os.Stderr, "Build: commit=%s builtAt=%s\n", version.Commit, version.BuiltAt)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate command-line arguments
 			if err := validateArgs(issueID, repo, prompt); err != nil {

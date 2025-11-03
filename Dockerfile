@@ -7,6 +7,10 @@
 # Builds the operator Go binary from source
 FROM golang:1.24-alpine AS builder
 
+# Build arguments for embedding build metadata
+ARG GIT_SHA="unknown"
+ARG BUILT_AT="unknown"
+
 # Set working directory for build
 WORKDIR /build
 
@@ -23,7 +27,7 @@ COPY . .
 # Build the operator binary
 # CGO_ENABLED=0 for static binary (no C dependencies)
 # -ldflags="-s -w" to strip debug info and reduce binary size
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o operator ./cmd/operator
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X agentic-automation/internal/version.Commit=${GIT_SHA} -X agentic-automation/internal/version.BuiltAt=${BUILT_AT}" -o operator ./cmd/operator
 
 # ==============================================================================
 # Stage 2: Runtime Image
