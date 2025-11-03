@@ -11,7 +11,7 @@
 # 2. Update spec.tls[0].hosts with your domain
 # 3. Update spec.tls[0].secretName with your TLS certificate secret
 # 4. Apply: kubectl apply -f k8s/ingress.yaml
-# 5. Configure GitHub App webhook URL: https://<your-domain>/webhook
+# 5. Configure GitHub App webhook URL: https://<your-domain>/webhooks/github
 #
 ---
 apiVersion: networking.k8s.io/v1
@@ -66,7 +66,7 @@ spec:
       http:
         paths:
           # GitHub webhook endpoint
-          - path: /webhook
+          - path: /webhooks/github
             pathType: Prefix
             backend:
               service:

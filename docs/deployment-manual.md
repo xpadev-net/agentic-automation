@@ -288,7 +288,7 @@ S3_REGION=us-east-1 \
 **Basic information:**
 - GitHub App name: `Agentic Automation`
 - Homepage URL: `https://your-domain.com`
-- Webhook URL: `https://your-domain.com/webhook` (後で設定する Ingress のドメイン)
+- Webhook URL: `https://your-domain.com/webhooks/github` (後で設定する Ingress のドメイン)
 - Webhook secret: ランダムな文字列を生成（例: `openssl rand -hex 32`）
 
 **Permissions:**
@@ -786,7 +786,7 @@ curl https://your-domain.com/health
 
 1. GitHub App の設定ページに移動
 2. "Webhook" セクションを確認
-3. Webhook URL を `https://your-domain.com/webhook` に設定（まだの場合）
+3. Webhook URL を `https://your-domain.com/webhooks/github` に設定（まだの場合）
 4. "Recent Deliveries" で webhook が正常に送信されているか確認
 
 #### 9.2 テスト Issue の作成
@@ -1106,7 +1106,7 @@ kubectl describe certificate agent-operator-tls
 
 - GitHub App の設定ページで "Recent Deliveries" を確認
 - レスポンスコードが 200 でない場合、エラーメッセージを確認
-- Webhook URL が正しいか確認（`https://your-domain.com/webhook`）
+- Webhook URL が正しいか確認（`https://your-domain.com/webhooks/github`）
 
 5. **Webhook Secret が一致しない**
 
