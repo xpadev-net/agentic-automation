@@ -60,6 +60,8 @@ AI エージェントが Issue 内容を元に変更を作成し、コミット�
 1. Given 実行が started When 変更生成が成功 Then 新規ブランチとコミットが作成される
 2. Given コミットが作成済み When プッシュが成功 Then 新規 PR が作成されリンクが保存される
 
+Note (Scope Boundary): US2では失敗時の「記録・要約抽出」までを対象とし、自動再試行（retry_count増分とK8s Job再作成）はUS3で扱う。
+
 ---
 
 ### User Story 3 - Codex レビューと再試行 (Priority: P2)

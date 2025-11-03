@@ -10,6 +10,8 @@ This document clarifies when to retry agent execution and how to count retry att
 1. **AI Retry**: Counted against the 50-attempt limit (FR-014)
 2. **API Retry**: Exponential backoff for transient failures (FR-016)
 
+Note (Phased Implementation): In US2, failure handling covers recording and summarizing errors only; automatic AI retry orchestration (retry_count increment and Job re-creation) is introduced in US3.
+
 ---
 
 ## Decision Tree
