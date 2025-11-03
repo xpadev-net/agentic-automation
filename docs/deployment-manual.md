@@ -519,6 +519,7 @@ spec:
               apk add --no-cache curl
               curl -fsSL https://github.com/pressly/goose/releases/download/v3.15.0/goose_linux_x86_64 -o /usr/local/bin/goose
               chmod +x /usr/local/bin/goose
+              # Note: migrations は単一ファイル形式（-- +goose Up/Down セクション）を使用
               goose -dir /migrations mysql "$DATABASE_URL" up
           env:
             - name: DATABASE_URL

@@ -514,7 +514,7 @@ type AuditLog struct {
 
 ## Migration Strategy (goose)
 
-1. Create initial SQL migration with all tables under `migrations/000001_init.up.sql` and corresponding `down.sql`
+1. Create initial SQL migration `migrations/000001_init.sql` with single file sections `-- +goose Up` and `-- +goose Down`
 2. Apply migrations:
    - Development: `goose -dir migrations mysql "<dsn>" up`
    - Production: run goose in CI/CD with manual approval for down migrations

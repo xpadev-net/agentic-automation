@@ -250,8 +250,7 @@ pkg/                              # Public packages (if needed)
     └── api.go                   # Internal API types
 
 migrations/                       # Database migrations (goose)
-├── 000001_init.up.sql
-├── 000001_init.down.sql
+├── 000001_init.sql               # single-file with `-- +goose Up/Down`
 └── ...
 
 tests/
