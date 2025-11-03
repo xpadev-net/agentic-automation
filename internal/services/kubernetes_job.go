@@ -118,7 +118,7 @@ func getOptionalEnvInt(key string, defaultValue int, logger *zap.Logger) int {
 // Returns:
 //   - string: Previous attempts JSON string, or empty string if not available
 func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) string {
-	if agentRun == nil || agentRun.Input == "" {
+	if agentRun == nil || len(agentRun.Input) == 0 {
 		return ""
 	}
 
@@ -128,7 +128,7 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) 
 
 	// Validate that Input is valid JSON (basic check)
 	var rawValue interface{}
-	if err := json.Unmarshal([]byte(agentRun.Input), &rawValue); err != nil {
+	if err := json.Unmarshal(agentRun.Input, &rawValue); err != nil {
 		// If Input is not valid JSON, return empty string
 		// This is a defensive check - Input should normally contain valid JSON
 		logger.Warn("AgentRun.Input contains invalid JSON, returning empty string for PreviousAttempts",
@@ -139,7 +139,7 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) 
 		return ""
 	}
 
-	return agentRun.Input
+	return string(agentRun.Input)
 }
 
 // CreateJobForAgentRun creates a Kubernetes Job for the given AgentRun and Issue
