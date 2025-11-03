@@ -165,7 +165,7 @@
 
 **Note**: US2 is mostly handled by agent-runner in Pod. Operator側は結果受信とPR管理のみ。
 
-- [ ] T081 [P] [US2] Implement PullRequest upsert logic in internal/repositories/pull_request.go (from agent-runner report)
+- [x] T081 [P] [US2] Implement PullRequest upsert logic in internal/repositories/pull_request.go (from agent-runner report)
 - [ ] T082 [US2] Implement PR URL generation and storage to AgentRun record in internal/webhooks/handlers/agent_report.go
 - [ ] T083 [US2] Add GitHub status comment for PR creation success in internal/services/github_notification.go
 - [x] T084 [US2] Implement Discord notification for PR creation in internal/services/discord_notification.go
@@ -173,7 +173,7 @@
 
 ### Tests for User Story 2 (Test-First Development)
 
-- [ ] T086 [P] [US2] Write unit tests for PullRequest upsert logic
+- [x] T086 [P] [US2] Write unit tests for PullRequest upsert logic
 - [ ] T087 [P] [US2] Write unit tests for GitHub notification service (PR created message)
 - [ ] T088 [US2] Write integration test for agent-runner success report → PR record creation
 - [ ] T089 [US2] Write integration test for agent-runner failure report → retry trigger
