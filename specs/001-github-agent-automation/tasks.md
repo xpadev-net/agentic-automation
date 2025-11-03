@@ -137,10 +137,10 @@
 - [x] T068 [US1] Implement comment parser to detect "/run-agent" in internal/utils/comment_parser.go
 - [x] T069 [US1] Implement GitHub user permission checker (Collaborator+) in internal/services/authorization.go
 - [ ] T070 [US1] Create webhook handler for issue_comment events in internal/webhooks/handlers/issue_comment.go
-- [ ] T071 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in internal/services/agent_run_state_machine.go
+- [x] T071 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in internal/services/agent_run_state_machine.go
 - [ ] T072 [US1] Implement Kubernetes Job creation service in internal/services/kubernetes_job.go
-- [ ] T073 [US1] Implement Issue context collector (body, comments, labels) in internal/services/issue_context.go
-- [ ] T074 [US1] Implement agent type detector from Issue labels in internal/services/agent_type_detector.go
+- [x] T073 [US1] Implement Issue context collector (body, comments, labels) in internal/services/issue_context.go
+- [x] T074 [US1] Implement agent type detector from Issue labels in internal/services/agent_type_detector.go
 - [ ] T075 [US1] Add logging for trigger detection and authorization failures in internal/webhooks/handlers/issue_comment.go
 - [ ] T076 [US1] Implement GitHub status comment poster for execution start in internal/services/github_notification.go
 
@@ -168,7 +168,7 @@
 - [ ] T081 [P] [US2] Implement PullRequest upsert logic in internal/repositories/pull_request.go (from agent-runner report)
 - [ ] T082 [US2] Implement PR URL generation and storage to AgentRun record in internal/webhooks/handlers/agent_report.go
 - [ ] T083 [US2] Add GitHub status comment for PR creation success in internal/services/github_notification.go
-- [ ] T084 [US2] Implement Discord notification for PR creation in internal/services/discord_notification.go
+- [x] T084 [US2] Implement Discord notification for PR creation in internal/services/discord_notification.go
 - [ ] T085 [US2] Handle agent-runner failure reports and extract error logs in internal/webhooks/handlers/agent_report.go
 
 ### Tests for User Story 2 (Test-First Development)
