@@ -7,6 +7,7 @@ import (
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"agentic-automation/internal/utils"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -66,9 +67,85 @@ const deliveryHeader = "X-GitHub-Delivery"
 // HandleIssueComment handles GitHub issue_comment webhook events
 // It detects "/run-agent" trigger and initiates AI agent execution
 func HandleIssueComment(c *gin.Context) {
-	// Step 1: Initialization
+	// Delegate to WithDeps using production dependencies
 	logger := config.GetLogger()
 	db := config.GetDB()
+
+	// Build production dependencies
+	deps := IssueCommentDeps{
+		Logger: logger,
+	}
+
+	// Initialize GitHub client
+	if token, err := config.GetEnvRequired("GITHUB_TOKEN"); err == nil {
+		if gh, err := clients.NewClient(token, logger); err == nil {
+			deps.GitHubClient = gh
+		} else {
+			logger.Error("Failed to initialize GitHub client", zap.Error(err))
+			c.Error(err)
+			return
+		}
+	} else {
+		logger.Error("Failed to get GitHub token", zap.Error(err))
+		c.Error(err)
+		return
+	}
+
+	// Initialize Kubernetes client
+	k8sClient, err := clients.NewKubernetesClient(logger)
+	if err != nil {
+		logger.Error("Failed to initialize Kubernetes client", zap.Error(err))
+		c.Error(err)
+		return
+	}
+	deps.KubernetesClient = k8sClient
+
+	// Initialize services
+	agentRunRepo := repositories.NewAgentRunRepository(db)
+	deps.TriggerService = services.NewTriggerDetectionService(logger)
+	deps.AuthorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
+	deps.IssueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
+	deps.AgentTypeDetectorService = services.NewAgentTypeDetectorService(logger)
+	deps.StateMachine = services.NewAgentRunStateMachine(agentRunRepo, logger)
+	deps.GitHubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
+
+	HandleIssueCommentWithDeps(c, deps)
+}
+
+// IssueCommentDeps represents injectable dependencies for HandleIssueComment
+// Narrow interfaces for dependency injection (allow fakes in tests)
+type Authorization interface {
+	CheckPermission(ctx context.Context, owner, repo, username string) (bool, error)
+}
+
+type IssueContext interface {
+	CollectIssueContext(ctx context.Context, owner, repo string, issueNumber int) (*services.IssueContext, error)
+	FormatPrompt(issueCtx *services.IssueContext) string
+}
+
+type GitHubNotification interface {
+	PostExecutionStartComment(ctx context.Context, owner, repo string, issueNumber int, agentType string, agentRunID int) error
+}
+
+type IssueCommentDeps struct {
+	Logger                    *zap.Logger
+	GitHubClient              *clients.Client
+	KubernetesClient          *clients.KubernetesClient
+	TriggerService            *services.TriggerDetectionService
+	AuthorizationService      Authorization
+	IssueContextService       IssueContext
+	AgentTypeDetectorService  *services.AgentTypeDetectorService
+	StateMachine              services.AgentRunStateMachine
+	GitHubNotificationService GitHubNotification
+}
+
+// HandleIssueCommentWithDeps handles issue_comment webhook with injected dependencies (for tests)
+func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
+	// Step 1: Initialization
+	logger := deps.Logger
+	if logger == nil {
+		logger = config.GetLogger()
+	}
 
 	// Get delivery ID from header (idempotency key)
 	deliveryID := c.GetHeader(deliveryHeader)
@@ -150,47 +227,63 @@ func HandleIssueComment(c *gin.Context) {
 
 	// Step 4: Repository/Service initialization
 	issueRepo := repositories.NewIssueRepository()
+	db := config.GetDB()
 	agentRunRepo := repositories.NewAgentRunRepository(db)
 
-	// Initialize GitHub client
-	githubToken, err := config.GetEnvRequired("GITHUB_TOKEN")
-	if err != nil {
-		logger.Error("Failed to get GitHub token",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-		)
-		c.Error(err)
-		return
+	// Use injected services/clients, fallback to production if missing
+	triggerService := deps.TriggerService
+	if triggerService == nil {
+		triggerService = services.NewTriggerDetectionService(logger)
 	}
-	githubClient, err := clients.NewClient(githubToken, logger)
-	if err != nil {
-		logger.Error("Failed to initialize GitHub client",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-		)
-		c.Error(err)
-		return
+	authorizationService := deps.AuthorizationService
+	if authorizationService == nil {
+		if deps.GitHubClient == nil {
+			c.Error(errors.New("github client not provided"))
+			return
+		}
+		authorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
+	}
+	issueContextService := deps.IssueContextService
+	if issueContextService == nil {
+		if deps.GitHubClient == nil {
+			c.Error(errors.New("github client not provided"))
+			return
+		}
+		issueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
+	}
+	agentTypeDetectorService := deps.AgentTypeDetectorService
+	if agentTypeDetectorService == nil {
+		agentTypeDetectorService = services.NewAgentTypeDetectorService(logger)
+	}
+	stateMachine := deps.StateMachine
+	if stateMachine == nil {
+		stateMachine = services.NewAgentRunStateMachine(agentRunRepo, logger)
+	}
+	githubNotificationService := deps.GitHubNotificationService
+	if githubNotificationService == nil {
+		if deps.GitHubClient == nil {
+			c.Error(errors.New("github client not provided"))
+			return
+		}
+		githubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
 	}
 
-	// Initialize services
-	triggerService := services.NewTriggerDetectionService(logger)
-	authorizationService := services.NewAuthorizationService(githubClient, logger)
-	issueContextService := services.NewIssueContextService(githubClient, logger)
-	agentTypeDetectorService := services.NewAgentTypeDetectorService(logger)
-	stateMachine := services.NewAgentRunStateMachine(agentRunRepo, logger)
-	githubNotificationService := services.NewGitHubNotificationService(githubClient, logger)
-
-	// Initialize Kubernetes client
-	kubernetesClient, err := clients.NewKubernetesClient(logger)
-	if err != nil {
-		logger.Error("Failed to initialize Kubernetes client",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-		)
-		c.Error(err)
-		return
+	// Initialize Kubernetes job service
+	var jobService services.KubernetesJobService
+	if deps.KubernetesClient != nil {
+		jobService = services.NewKubernetesJobService(deps.KubernetesClient, logger)
+	} else {
+		k8sClient, err := clients.NewKubernetesClient(logger)
+		if err != nil {
+			logger.Error("Failed to initialize Kubernetes client",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+			)
+			c.Error(err)
+			return
+		}
+		jobService = services.NewKubernetesJobService(k8sClient, logger)
 	}
-	jobService := services.NewKubernetesJobService(kubernetesClient, logger)
 
 	// Step 5: Trigger detection
 	logger.Info("Checking for trigger in comment",
@@ -312,7 +405,7 @@ func HandleIssueComment(c *gin.Context) {
 	)
 
 	// Step 7: Get AgentRun (created by idempotency middleware)
-	agentRun, err := agentRunRepo.GetByIDempotencyKey(deliveryID)
+	agentRun, err := repositories.NewAgentRunRepository(db).GetByIDempotencyKey(deliveryID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error("AgentRun not found for delivery ID (should be created by middleware)",
