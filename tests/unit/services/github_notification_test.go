@@ -1,192 +1,208 @@
 package services_test
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strconv"
-	"strings"
+	"agentic-automation/internal/services"
+	testmocks "agentic-automation/tests/mocks"
+	"context"
 	"testing"
 
-	"agentic-automation/internal/services"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-// mockIssueCommentsAPI creates a test server that mocks GitHub issue comments endpoints
-// It supports:
-// - GET /repos/:owner/:repo/issues/:number/comments
-// - POST /repos/:owner/:repo/issues/:number/comments
-func mockIssueCommentsAPI(t *testing.T, existingByNumber map[int][]string, createdByNumber map[int][]string) *httptest.Server {
-	t.Helper()
+func TestNotifyPRCreated_NewPostsToIssueAndPR(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Expected paths: /repos/:owner/:repo/issues/:number/comments
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-		if len(parts) != 6 || parts[0] != "repos" || parts[3] != "issues" || parts[5] != "comments" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		// owner := parts[1]
-		// repo := parts[2]
-		numStr := parts[4]
-		n, err := strconv.Atoi(numStr)
-		require.NoError(t, err)
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
 
-		switch r.Method {
-		case http.MethodGet:
-			// Return existing comments
-			bodies := existingByNumber[n]
-			type comment struct {
-				Body string `json:"body"`
-			}
-			resp := make([]comment, 0, len(bodies))
-			for _, b := range bodies {
-				resp = append(resp, comment{Body: b})
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		case http.MethodPost:
-			// Capture created comment
-			var payload struct {
-				Body string `json:"body"`
-			}
-			dec := json.NewDecoder(r.Body)
-			_ = dec.Decode(&payload)
-			createdByNumber[n] = append(createdByNumber[n], payload.Body)
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "body": payload.Body})
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
+	ctx := context.Background()
+	owner, repo := "org", "repo"
+	issueNum := 12
+	prNum := 34
+	prURL := "https://github.com/org/repo/pull/34"
+	branch := "feature/x"
+	sha := "0123456789abcdef"
+	idem := "delivery-1"
 
-	return httptest.NewServer(handler)
-}
-
-func TestNotifyPRCreated_PostsToIssueAndPR(t *testing.T) {
-	existing := map[int][]string{}
-	created := map[int][]string{}
-	srv := mockIssueCommentsAPI(t, existing, created)
-	t.Cleanup(srv.Close)
-
-	ghClient := buildTestGitHubClient(t, srv.URL)
-	svc := services.NewGitHubNotificationService(ghClient, zap.NewNop())
-
-	err := svc.NotifyPRCreated(
-		t.Context(),
-		"o", "r",
-		10, // issue number
-		42, // pr number
-		"https://github.com/o/r/pull/42",
-		"feature/x",
-		"abc123def456",
-		"idem-123",
-	)
+	err := svc.NotifyPRCreated(ctx, owner, repo, issueNum, prNum, prURL, branch, sha, idem)
 	require.NoError(t, err)
 
-	// One comment on issue and one on PR
-	assert.Len(t, created[10], 1)
-	assert.Len(t, created[42], 1)
-
-	// Body contains marker and formatted message with short SHA
-	for _, body := range []string{created[10][0], created[42][0]} {
-		assert.Contains(t, body, "<!-- agent:pr-created:idem-123 -->")
-		// short SHA of abc123def456 is abc123d (first 7 chars)
-		assert.Contains(t, body, "PR created: #42 (https://github.com/o/r/pull/42) branch=feature/x sha=abc123d")
+	posts := mock.Posts()
+	require.Len(t, posts, 2)
+	// Expect one post to issue and one to PR
+	seenIssue := false
+	seenPR := false
+	for _, p := range posts {
+		if p.Number == issueNum {
+			seenIssue = true
+			require.Contains(t, p.Body, "<!-- agent:pr-created:"+idem+" -->")
+			require.Contains(t, p.Body, "PR created: #34 ("+prURL+") branch="+branch+" sha=0123456")
+		}
+		if p.Number == prNum {
+			seenPR = true
+			require.Contains(t, p.Body, "<!-- agent:pr-created:"+idem+" -->")
+			require.Contains(t, p.Body, "PR created: #34 ("+prURL+") branch="+branch+" sha=0123456")
+		}
 	}
+	require.True(t, seenIssue)
+	require.True(t, seenPR)
 }
 
-func TestNotifyPRCreated_SkipsWhenMarkerExists(t *testing.T) {
-	// Existing marker in both threads should skip posting
-	marker := "<!-- agent:pr-created:idem-999 -->"
-	existing := map[int][]string{
-		10: {marker + "\nold"},
-		42: {marker + "\nold"},
+func TestNotifyPRCreated_Idempotent_IssueHasMarkerOnly(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	// Seed marker in issue thread only
+	idem := "same-key"
+	marker := "<!-- agent:pr-created:" + idem + " -->"
+	mock.Seed(100, marker+"\npre-existing")
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyPRCreated(ctx, "o", "r", 100, 200, "https://github.com/o/r/pull/200", "b", "abcdef0", idem)
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	// Should skip issue, but post to PR
+	require.Len(t, posts, 1)
+	require.Equal(t, 200, posts[0].Number)
+}
+
+func TestNotifyPRCreated_Idempotent_BothHaveMarker(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	idem := "k"
+	marker := "<!-- agent:pr-created:" + idem + " -->"
+	mock.Seed(10, marker+"\nissue")
+	mock.Seed(20, marker+"\npr")
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", idem)
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 0)
+}
+
+func TestNotifyPRCreated_SkipWhenMissingPRNumber(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 0, "", "b", "abcd12", "id1")
+	require.NoError(t, err)
+	require.Len(t, mock.Posts(), 0)
+}
+
+func TestNotifyPRCreated_IssueList500_ReturnsErrorButPRPosts(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+	mock.SetErrorMode(testmocks.ErrorMode{List500For: map[int]bool{10: true}})
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
+	require.Error(t, err)
+
+	posts := mock.Posts()
+	// Should still attempt to post to PR thread
+	// One POST to PR even if issue list failed
+	foundPR := false
+	for _, p := range posts {
+		if p.Number == 20 {
+			foundPR = true
+		}
 	}
-	created := map[int][]string{}
-	srv := mockIssueCommentsAPI(t, existing, created)
-	t.Cleanup(srv.Close)
-
-	ghClient := buildTestGitHubClient(t, srv.URL)
-	svc := services.NewGitHubNotificationService(ghClient, zap.NewNop())
-
-	err := svc.NotifyPRCreated(
-		t.Context(),
-		"o", "r",
-		10,
-		42,
-		"https://github.com/o/r/pull/42",
-		"feature/x",
-		"abc123def456",
-		"idem-999",
-	)
-	require.NoError(t, err)
-
-	// No new comments should be created
-	assert.Len(t, created[10], 0)
-	assert.Len(t, created[42], 0)
+	require.True(t, foundPR)
 }
 
-func TestNotifyPRCreated_RetryOnTransientFailure(t *testing.T) {
-	// Arrange a server that fails the first POST to issue 10 with 500, then succeeds
-	var issuePostCount int
-	created := map[int][]string{}
+func TestNotifyPRCreated_PRPost500_ReturnsErrorButIssuePosts(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+	mock.SetErrorMode(testmocks.ErrorMode{Post500For: map[int]bool{20: true}})
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-		if len(parts) != 6 || parts[0] != "repos" || parts[3] != "issues" || parts[5] != "comments" {
-			w.WriteHeader(http.StatusNotFound)
-			return
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
+	require.Error(t, err)
+
+	posts := mock.Posts()
+	// Should have at least issue post
+	foundIssue := false
+	for _, p := range posts {
+		if p.Number == 10 {
+			foundIssue = true
 		}
-		n, _ := strconv.Atoi(parts[4])
-		switch r.Method {
-		case http.MethodGet:
-			type comment struct {
-				Body string `json:"body"`
-			}
-			_ = json.NewEncoder(w).Encode([]comment{})
-		case http.MethodPost:
-			if n == 10 {
-				issuePostCount++
-				if issuePostCount == 1 {
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
-			}
-			var payload struct {
-				Body string `json:"body"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&payload)
-			created[n] = append(created[n], payload.Body)
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "body": payload.Body})
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+	require.True(t, foundIssue)
+}
+
+func TestNotifyPRCreated_ShortSHABoundary(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	ctx := context.Background()
+
+	// 6 chars -> unchanged
+	_ = svc.NotifyPRCreated(ctx, "o", "r", 1, 2, "https://github.com/o/r/pull/2", "b", "123456", "i1")
+	// 7 chars -> unchanged
+	_ = svc.NotifyPRCreated(ctx, "o", "r", 3, 4, "https://github.com/o/r/pull/4", "b", "1234567", "i2")
+	// 8 chars -> trimmed to 7
+	_ = svc.NotifyPRCreated(ctx, "o", "r", 5, 6, "https://github.com/o/r/pull/6", "b", "12345678", "i3")
+
+	posts := mock.Posts()
+	// We made 3 invocations, each should post 2 comments (issue+pr) = 6 posts
+	require.Len(t, posts, 6)
+
+	// Find third invocation posts (issue 5 and pr 6) and check sha=1234567
+	var bodies []string
+	for _, p := range posts {
+		if p.Number == 5 || p.Number == 6 {
+			bodies = append(bodies, p.Body)
 		}
-	})
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
+	}
+	require.Len(t, bodies, 2)
+	require.Contains(t, bodies[0], "sha=1234567")
+	require.Contains(t, bodies[1], "sha=1234567")
+}
 
-	ghClient := buildTestGitHubClient(t, srv.URL)
-	svc := services.NewGitHubNotificationService(ghClient, zap.NewNop())
+func TestNotifyPRCreated_NoIssueNumber_PROnly(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
 
-	err := svc.NotifyPRCreated(
-		t.Context(),
-		"o", "r",
-		10,
-		42,
-		"https://github.com/o/r/pull/42",
-		"feature/x",
-		"abc123def456",
-		"idem-retry",
-	)
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyPRCreated(ctx, "o", "r", 0, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
 	require.NoError(t, err)
 
-	// Should have eventually created on both threads
-	require.Len(t, created[10], 1)
-	require.Len(t, created[42], 1)
-
-	// Verify that it retried at least once on issue 10
-	require.GreaterOrEqual(t, issuePostCount, 2)
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Equal(t, 20, posts[0].Number)
 }

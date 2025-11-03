@@ -169,12 +169,12 @@
 - [x] T082 [US2] Implement PR URL generation and storage to AgentRun record in internal/webhooks/handlers/agent_report.go
 - [x] T083 [US2] Add GitHub status comment for PR creation success in internal/services/github_notification.go
 - [x] T084 [US2] Implement Discord notification for PR creation in internal/services/discord_notification.go
-- [ ] T085 [US2] Handle agent-runner failure reports and extract error logs in internal/webhooks/handlers/agent_report.go
+- [x] T085 [US2] Handle agent-runner failure reports and extract error logs in internal/webhooks/handlers/agent_report.go
 
 ### Tests for User Story 2 (Test-First Development)
 
 - [x] T086 [P] [US2] Write unit tests for PullRequest upsert logic
-- [ ] T087 [P] [US2] Write unit tests for GitHub notification service (PR created message)
+- [x] T087 [P] [US2] Write unit tests for GitHub notification service (PR created message)
 - [ ] T088 [US2] Write integration test for agent-runner success report → PR record creation
 - [ ] T089 [US2] Write integration test for agent-runner failure report → retry trigger
 
