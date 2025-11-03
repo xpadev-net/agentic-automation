@@ -27,6 +27,7 @@ git checkout -b feature/issue-123 master
 
 1. 対象リポジトリを `WORKSPACE_DIR` にクローン
 2. `master` から `feature/issue-{番号}` を作成
+   - specs以下のタスク以外を依頼された場合はこのブランチの命名規則を無視してよいです
 3. エージェント（`claude-code` または `cursor-agents`）を実行（Issue文脈・過去試行・CIログをプロンプトに付与）
 4. Lint/型チェックを実行
 5. 変更検知（変更があればコミット/Push）
