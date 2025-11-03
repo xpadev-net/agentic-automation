@@ -138,7 +138,7 @@
 - [x] T069 [US1] Implement GitHub user permission checker (Collaborator+) in internal/services/authorization.go
 - [ ] T070 [US1] Create webhook handler for issue_comment events in internal/webhooks/handlers/issue_comment.go
 - [x] T071 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in internal/services/agent_run_state_machine.go
-- [ ] T072 [US1] Implement Kubernetes Job creation service in internal/services/kubernetes_job.go
+- [x] T072 [US1] Implement Kubernetes Job creation service in internal/services/kubernetes_job.go
 - [x] T073 [US1] Implement Issue context collector (body, comments, labels) in internal/services/issue_context.go
 - [x] T074 [US1] Implement agent type detector from Issue labels in internal/services/agent_type_detector.go
 - [ ] T075 [US1] Add logging for trigger detection and authorization failures in internal/webhooks/handlers/issue_comment.go
