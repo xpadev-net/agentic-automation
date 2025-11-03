@@ -6,6 +6,7 @@ import (
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
+	"agentic-automation/internal/utils"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -200,10 +201,22 @@ func HandleIssueComment(c *gin.Context) {
 
 	triggerDetected := triggerService.DetectRunAgentTrigger(payload.Comment.Body)
 	if !triggerDetected {
+		// Create comment body preview (first 100 characters for security)
+		commentBodyPreview := payload.Comment.Body
+		if len(commentBodyPreview) > 100 {
+			commentBodyPreview = commentBodyPreview[:100]
+		}
+
 		logger.Info("No trigger detected in comment",
 			zap.String("delivery_id", deliveryID),
 			zap.Int("issue_number", payload.Issue.Number),
 			zap.String("repo", payload.Repository.FullName),
+			zap.Int("comment_id", payload.Comment.ID),
+			zap.String("comment_created_at", payload.Comment.CreatedAt),
+			zap.String("comment_body_preview", commentBodyPreview),
+			zap.String("comment_user", payload.Comment.User.Login),
+			zap.String("trigger_string", utils.RunAgentTrigger),
+			zap.String("detection_reason", "trigger string '/run-agent' not found in comment body"),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "no_trigger",
@@ -234,11 +247,41 @@ func HandleIssueComment(c *gin.Context) {
 
 	hasPermission, err := authorizationService.CheckPermission(ctx, owner, repo, payload.Comment.User.Login)
 	if err != nil {
-		logger.Error("Failed to check user permission",
+		// Extract error details for enhanced logging
+		var errorType string
+		var httpStatusCode int
+		var ghErr *clients.GitHubError
+		if errors.As(err, &ghErr) {
+			errorType = "GitHubError"
+			if ghErr.ErrorResponse != nil && ghErr.ErrorResponse.Response != nil {
+				httpStatusCode = ghErr.ErrorResponse.Response.StatusCode
+			}
+		} else {
+			// Determine error type based on error message
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "rate limit") {
+				errorType = "rate_limit_error"
+			} else if strings.Contains(errMsg, "network") || strings.Contains(errMsg, "timeout") {
+				errorType = "network_error"
+			} else {
+				errorType = "unknown_error"
+			}
+		}
+
+		logFields := []zap.Field{
 			zap.Error(err),
 			zap.String("delivery_id", deliveryID),
 			zap.String("user", payload.Comment.User.Login),
 			zap.String("repo", payload.Repository.FullName),
+			zap.String("api_method", "GetPermissionLevel"),
+			zap.String("error_type", errorType),
+		}
+		if httpStatusCode > 0 {
+			logFields = append(logFields, zap.Int("http_status_code", httpStatusCode))
+		}
+
+		logger.Error("Failed to check user permission",
+			logFields...,
 		)
 		c.Error(err)
 		return
@@ -250,6 +293,8 @@ func HandleIssueComment(c *gin.Context) {
 			zap.String("user", payload.Comment.User.Login),
 			zap.String("repo", payload.Repository.FullName),
 			zap.Int("issue_number", payload.Issue.Number),
+			zap.String("authorization_required_level", "write/maintain/admin"),
+			zap.String("authorization_policy", "FR-018: Collaborator+ permission required"),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "permission_denied",
