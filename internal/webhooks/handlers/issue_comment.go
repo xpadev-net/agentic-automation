@@ -361,6 +361,33 @@ func HandleIssueComment(c *gin.Context) {
 	// Step 10: Format prompt
 	prompt := issueContextService.FormatPrompt(issueContext)
 
+	// Step 10.5: Set labels from issueContext for agent type detection
+	if len(issueContext.Labels) > 0 {
+		labelsJSON, err := json.Marshal(issueContext.Labels)
+		if err != nil {
+			logger.Warn("Failed to marshal issue labels",
+				zap.Error(err),
+				zap.Int("issue_id", issue.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else {
+			issue.Labels = string(labelsJSON)
+			if err := issueRepo.Update(issue); err != nil {
+				logger.Warn("Failed to update issue labels",
+					zap.Error(err),
+					zap.Int("issue_id", issue.ID),
+					zap.String("delivery_id", deliveryID),
+				)
+			} else {
+				logger.Info("Issue labels updated from GitHub",
+					zap.Int("labels_count", len(issueContext.Labels)),
+					zap.Int("issue_id", issue.ID),
+					zap.String("delivery_id", deliveryID),
+				)
+			}
+		}
+	}
+
 	// Step 11: Detect agent type
 	agentType := agentTypeDetectorService.DetectAgentType(issue)
 
