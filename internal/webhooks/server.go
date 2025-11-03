@@ -2,6 +2,7 @@ package webhooks
 
 import (
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/models"
 	"agentic-automation/internal/webhooks/handlers"
 	"agentic-automation/internal/webhooks/middleware"
 	"context"
@@ -56,8 +57,7 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 }
 
 // handleGitHubWebhook is the handler for GitHub webhook events
-// This is a temporary implementation that logs the event and delivery ID.
-// It will be replaced by proper handlers in subsequent tasks.
+// It routes events to appropriate handlers based on event type
 func handleGitHubWebhook(c *gin.Context) {
 	logger := config.GetLogger()
 
@@ -65,31 +65,39 @@ func handleGitHubWebhook(c *gin.Context) {
 	eventType := c.GetHeader(eventHeader)
 	deliveryID := c.GetHeader(deliveryHeader)
 
-	// Get payload from context (set by signature middleware)
-	payload, exists := c.Get("webhook_payload")
-	if !exists {
-		// If payload is not in context, try to read from request body
-		body, err := c.GetRawData()
-		if err != nil {
-			c.Error(err)
-			return
+	// Route to specific handler based on event type
+	switch eventType {
+	case models.EventTypeIssueComment:
+		handlers.HandleIssueComment(c)
+		return
+	default:
+		// For unhandled event types, log and return 200 OK
+		// Get payload from context (set by signature middleware)
+		payload, exists := c.Get("webhook_payload")
+		if !exists {
+			// If payload is not in context, try to read from request body
+			body, err := c.GetRawData()
+			if err != nil {
+				c.Error(err)
+				return
+			}
+			payload = body
 		}
-		payload = body
+
+		// Log the webhook event
+		logger.Info("Received unhandled GitHub webhook event",
+			zap.String("event_type", eventType),
+			zap.String("delivery_id", deliveryID),
+			zap.Int("payload_size", len(payload.([]byte))),
+		)
+
+		// Return 200 OK to acknowledge receipt
+		c.JSON(200, gin.H{
+			"status":      "received",
+			"event":       eventType,
+			"delivery_id": deliveryID,
+		})
 	}
-
-	// Log the webhook event
-	logger.Info("Received GitHub webhook",
-		zap.String("event_type", eventType),
-		zap.String("delivery_id", deliveryID),
-		zap.Int("payload_size", len(payload.([]byte))),
-	)
-
-	// Return 200 OK to acknowledge receipt
-	c.JSON(200, gin.H{
-		"status":      "received",
-		"event":       eventType,
-		"delivery_id": deliveryID,
-	})
 }
 
 // NewServer creates a new webhook server instance
