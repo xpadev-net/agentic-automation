@@ -1,0 +1,25 @@
+{
+  "action": "created",
+  "issue": {
+    "id": 11,
+    "number": 22,
+    "title": "特殊文字と絵文字🚀",
+    "body": "Quotes: \" ' \n Backslashes: \\ \n Unicode: こんにちは世界",
+    "state": "open",
+    "labels": [ { "name": "bug" }, { "name": "🐛" } ],
+    "user": { "login": "ユーザー" }
+  },
+  "comment": {
+    "id": 33,
+    "body": "/run-agent please ✅",
+    "user": { "login": "octocat" },
+    "created_at": "2025-10-31T12:00:00Z"
+  },
+  "repository": {
+    "full_name": "octo-cat/hello-world",
+    "owner": { "login": "octo-cat" },
+    "name": "hello-world"
+  }
+}
+
+

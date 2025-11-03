@@ -1,0 +1,25 @@
+{
+  "action": "created",
+  "issue": {
+    "id": 1,
+    "number": 1,
+    "title": "t",
+    "body": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "state": "open",
+    "labels": [],
+    "user": { "login": "octocat" }
+  },
+  "comment": {
+    "id": 2,
+    "body": "/run-agent",
+    "user": { "login": "octocat" },
+    "created_at": "2025-10-31T12:00:00Z"
+  },
+  "repository": {
+    "full_name": "octocat/hello-world",
+    "owner": { "login": "octocat" },
+    "name": "hello-world"
+  }
+}
+
+
