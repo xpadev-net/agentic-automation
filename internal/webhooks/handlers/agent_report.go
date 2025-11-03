@@ -6,6 +6,7 @@ import (
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
+	"agentic-automation/internal/utils"
 	"errors"
 	"fmt"
 	"net/http"
@@ -202,9 +203,36 @@ func HandleAgentReport(c *gin.Context) {
 		agentRun.CommitSHA = &req.CommitSHA
 	}
 
-	// Update error message if provided (for failed status)
-	if req.Status == "failed" && req.ErrorMessage != "" {
-		agentRun.ErrorMessage = &req.ErrorMessage
+	// Failure handling: extract error summary and record audit log
+	if req.Status == "failed" {
+		var parts []string
+		if strings.TrimSpace(req.ErrorMessage) != "" {
+			parts = append(parts, strings.TrimSpace(req.ErrorMessage))
+		}
+		summary, excerpt := utils.ExtractErrorSummary(req.Logs, utils.ErrSummaryMaxLines, utils.ErrSummaryMaxBytes)
+		if strings.TrimSpace(summary) != "" {
+			parts = append(parts, strings.TrimSpace(summary))
+		}
+		if len(parts) > 0 {
+			combined := strings.Join(parts, "\n---\n")
+			// Ensure combined stays within ErrSummaryMaxBytes for safety
+			trimmed := combined
+			if len(trimmed) > utils.ErrSummaryMaxBytes {
+				trimmed = trimmed[:utils.ErrSummaryMaxBytes]
+			}
+			agentRun.ErrorMessage = &trimmed
+			preview := trimmed
+			if len(preview) > 100 {
+				preview = preview[:100]
+			}
+			config.GetLogger().Info("Agent run failure summary prepared",
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("error_preview", preview),
+			)
+		}
+		if err := services.RecordAgentRunFailure(agentRun, summary, excerpt); err != nil {
+			config.GetLogger().Warn("Failed to record audit log for agent-run failure", zap.Error(err))
+		}
 	}
 
 	// Save updated AgentRun
