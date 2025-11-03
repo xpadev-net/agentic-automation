@@ -134,7 +134,7 @@
 
 - [x] T066 [P] [US1] Create webhook event types definition in internal/models/webhook_events.go
 - [ ] T067 [P] [US1] Implement trigger detection service in internal/services/trigger_detection.go
-- [ ] T068 [US1] Implement comment parser to detect "/run-agent" in internal/utils/comment_parser.go
+- [x] T068 [US1] Implement comment parser to detect "/run-agent" in internal/utils/comment_parser.go
 - [ ] T069 [US1] Implement GitHub user permission checker (Collaborator+) in internal/services/authorization.go
 - [ ] T070 [US1] Create webhook handler for issue_comment events in internal/webhooks/handlers/issue_comment.go
 - [ ] T071 [US1] Implement AgentRun state machine (queued→started→succeeded/failed) in internal/services/agent_run_state_machine.go
