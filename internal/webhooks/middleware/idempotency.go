@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -220,9 +221,9 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 				// Create AgentRun record to persist delivery ID
 				newRun := &models.AgentRun{
 					IssueID: issueDBID,
-					State:   "queued", // Initial state - will be updated by downstream handlers
-					Input:   "{}",     // Ensure valid JSON for MySQL JSON column
-					Output:  "{}",     // Ensure valid JSON for MySQL JSON column
+					State:   "queued",                     // Initial state - will be updated by downstream handlers
+					Input:   datatypes.JSON([]byte("{}")), // Ensure valid JSON for MySQL JSON column
+					Output:  datatypes.JSON([]byte("{}")), // Ensure valid JSON for MySQL JSON column
 				}
 
 				createdRun, isNew, createErr := agentRunRepo.CreateOrGet(deliveryID, newRun)

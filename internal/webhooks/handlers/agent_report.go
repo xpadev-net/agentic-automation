@@ -7,6 +7,7 @@ import (
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"agentic-automation/internal/utils"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -110,6 +112,8 @@ func HandleAgentReport(c *gin.Context) {
 	agentRun.CompletedAt = &now
 
 	var prURL string
+	var logsExcerpt string
+	var finalErrorMessage string
 
 	if req.Status == "succeeded" {
 		// Load Issue for repo to build PR URL
@@ -221,6 +225,7 @@ func HandleAgentReport(c *gin.Context) {
 				trimmed = trimmed[:utils.ErrSummaryMaxBytes]
 			}
 			agentRun.ErrorMessage = &trimmed
+			finalErrorMessage = trimmed
 			preview := trimmed
 			if len(preview) > 100 {
 				preview = preview[:100]
@@ -230,9 +235,40 @@ func HandleAgentReport(c *gin.Context) {
 				zap.String("error_preview", preview),
 			)
 		}
+		logsExcerpt = excerpt
 		if err := services.RecordAgentRunFailure(agentRun, summary, excerpt); err != nil {
 			config.GetLogger().Warn("Failed to record audit log for agent-run failure", zap.Error(err))
 		}
+	}
+
+	// Build structured output JSON (schema v1)
+	outputPayload := map[string]any{
+		"schema_version": "1",
+		"status":         req.Status,
+		"agent_type":     req.AgentType,
+	}
+	if req.PRNumber != nil {
+		outputPayload["pr_number"] = *req.PRNumber
+	}
+	if prURL != "" {
+		outputPayload["pr_url"] = prURL
+	}
+	if req.CommitSHA != "" {
+		outputPayload["commit_sha"] = req.CommitSHA
+	}
+	if finalErrorMessage != "" {
+		outputPayload["error_message"] = finalErrorMessage
+	} else if strings.TrimSpace(req.ErrorMessage) != "" {
+		outputPayload["error_message"] = strings.TrimSpace(req.ErrorMessage)
+	}
+	if logsExcerpt != "" {
+		outputPayload["logs_excerpt"] = logsExcerpt
+	}
+
+	if outBytes, mErr := json.Marshal(outputPayload); mErr == nil {
+		agentRun.Output = datatypes.JSON(outBytes)
+	} else {
+		logger.Warn("Failed to marshal structured output payload", zap.Error(mErr))
 	}
 
 	// Save updated AgentRun

@@ -113,24 +113,24 @@ func getOptionalEnvInt(key string, defaultValue int, logger *zap.Logger) int {
 // extractPreviousAttemptsJSON extracts previous attempts JSON from AgentRun Input field
 // Parameters:
 //   - agentRun: AgentRun record
-//   - logger: Logger for logging (currently unused but kept for future extensibility)
+//   - logger: Logger for logging
 //
 // Returns:
-//   - string: Previous attempts JSON string, or empty string if not available
+//   - string: Previous attempts JSON string (array format), or empty string if not available
+//
+// Note: The new Input schema (v1) stores a structured object with prompt, agent_type, and issue metadata.
+// This is not the same format as previous-attempts, which expects an array of {retry_count, error} entries.
+// Until we implement proper previous attempts tracking, this function returns an empty string to avoid
+// passing the Input object to agent-runner, which would cause validation errors.
 func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) string {
-	if agentRun == nil || agentRun.Input == "" {
+	if agentRun == nil || len(agentRun.Input) == 0 {
 		return ""
 	}
 
-	// At this point, we return the Input field as-is
-	// The agent-runner will parse it according to its own format
-	// In the future, we might parse and restructure this data here
-
-	// Validate that Input is valid JSON (basic check)
-	var rawValue interface{}
-	if err := json.Unmarshal([]byte(agentRun.Input), &rawValue); err != nil {
+	// Parse Input to detect schema version
+	var inputMap map[string]interface{}
+	if err := json.Unmarshal(agentRun.Input, &inputMap); err != nil {
 		// If Input is not valid JSON, return empty string
-		// This is a defensive check - Input should normally contain valid JSON
 		logger.Warn("AgentRun.Input contains invalid JSON, returning empty string for PreviousAttempts",
 			zap.Int("agent_run_id", agentRun.ID),
 			zap.Error(err),
@@ -139,7 +139,25 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) 
 		return ""
 	}
 
-	return agentRun.Input
+	// Check if this is the new structured schema (v1)
+	if schemaVersion, ok := inputMap["schema_version"].(string); ok && schemaVersion == "1" {
+		// New schema detected - Input contains structured data, not previous attempts
+		// Return empty string to avoid passing the Input object to agent-runner
+		// TODO: In the future, extract actual previous attempts from Output or a dedicated field
+		logger.Debug("AgentRun.Input uses new schema v1, returning empty string for PreviousAttempts",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return ""
+	}
+
+	// Old format or unrecognized format - return empty string for safety
+	// Previous attempts should be in a separate field or extracted differently
+	logger.Debug("AgentRun.Input does not contain previous attempts data, returning empty string",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.String("service", "kubernetes_job"),
+	)
+	return ""
 }
 
 // CreateJobForAgentRun creates a Kubernetes Job for the given AgentRun and Issue

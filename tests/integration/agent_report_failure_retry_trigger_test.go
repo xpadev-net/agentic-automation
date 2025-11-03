@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -148,8 +149,8 @@ func createStartedRun(t *testing.T, db *gorm.DB, issueID int) *models.AgentRun {
 		IssueID:        issueID,
 		State:          "started",
 		AgentType:      "claude-code",
-		Input:          `{}`,
-		Output:         `{}`,
+		Input:          datatypes.JSON([]byte("{}")),
+		Output:         datatypes.JSON([]byte("{}")),
 		RetryCount:     0,
 	}
 	now := time.Now()
