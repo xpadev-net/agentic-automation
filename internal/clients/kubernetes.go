@@ -435,6 +435,126 @@ func int64Ptr(i int64) *int64 {
 	return &i
 }
 
+// GetOperatorPod retrieves the Operator Pod information
+// It uses HOSTNAME environment variable (set by Kubernetes) or attempts to get Pod name from Downward API
+func (c *KubernetesClient) GetOperatorPod(ctx context.Context) (*corev1.Pod, error) {
+	// Try to get Pod name from HOSTNAME environment variable (Kubernetes sets this automatically)
+	podName := os.Getenv("HOSTNAME")
+	if podName == "" {
+		// Fallback: try to read from Downward API file
+		// This is a fallback mechanism, but HOSTNAME should always be set in Kubernetes Pods
+		c.logger.Warn("HOSTNAME environment variable is not set, cannot determine Operator Pod name")
+		return nil, fmt.Errorf("HOSTNAME environment variable is not set")
+	}
+
+	// Get Pod information
+	pod, err := c.clientset.CoreV1().Pods(c.namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		c.logger.Error("Failed to get Operator Pod",
+			zap.String("pod_name", podName),
+			zap.String("namespace", c.namespace),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("failed to get operator pod %s: %w", podName, err)
+	}
+
+	c.logger.Info("Retrieved Operator Pod information",
+		zap.String("pod_name", podName),
+		zap.String("namespace", c.namespace),
+		zap.String("uid", string(pod.UID)),
+	)
+
+	return pod, nil
+}
+
+// GetOwnerReferenceFromPod retrieves the appropriate OwnerReference from a Pod
+// Priority: Deployment > StatefulSet > ReplicaSet > Pod itself
+func (c *KubernetesClient) GetOwnerReferenceFromPod(ctx context.Context, pod *corev1.Pod) (*metav1.OwnerReference, error) {
+	if pod == nil {
+		return nil, fmt.Errorf("pod is nil")
+	}
+
+	// Check Pod's OwnerReferences
+	for _, ownerRef := range pod.OwnerReferences {
+		// Priority order: Deployment > StatefulSet > ReplicaSet
+		if ownerRef.Kind == "Deployment" && ownerRef.APIVersion == "apps/v1" {
+			// Verify the Deployment exists
+			_, err := c.clientset.AppsV1().Deployments(c.namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+			if err != nil {
+				c.logger.Warn("Deployment owner reference found but deployment does not exist",
+					zap.String("deployment", ownerRef.Name),
+					zap.Error(err),
+				)
+				continue
+			}
+
+			c.logger.Info("Using Deployment as OwnerReference",
+				zap.String("deployment", ownerRef.Name),
+				zap.String("uid", string(ownerRef.UID)),
+			)
+
+			return &ownerRef, nil
+		}
+
+		if ownerRef.Kind == "StatefulSet" && ownerRef.APIVersion == "apps/v1" {
+			// Verify the StatefulSet exists
+			_, err := c.clientset.AppsV1().StatefulSets(c.namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+			if err != nil {
+				c.logger.Warn("StatefulSet owner reference found but statefulset does not exist",
+					zap.String("statefulset", ownerRef.Name),
+					zap.Error(err),
+				)
+				continue
+			}
+
+			c.logger.Info("Using StatefulSet as OwnerReference",
+				zap.String("statefulset", ownerRef.Name),
+				zap.String("uid", string(ownerRef.UID)),
+			)
+
+			return &ownerRef, nil
+		}
+
+		if ownerRef.Kind == "ReplicaSet" && ownerRef.APIVersion == "apps/v1" {
+			// Verify the ReplicaSet exists
+			_, err := c.clientset.AppsV1().ReplicaSets(c.namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
+			if err != nil {
+				c.logger.Warn("ReplicaSet owner reference found but replicaset does not exist",
+					zap.String("replicaset", ownerRef.Name),
+					zap.Error(err),
+				)
+				continue
+			}
+
+			c.logger.Info("Using ReplicaSet as OwnerReference",
+				zap.String("replicaset", ownerRef.Name),
+				zap.String("uid", string(ownerRef.UID)),
+			)
+
+			return &ownerRef, nil
+		}
+	}
+
+	// No suitable OwnerReference found, use Pod itself
+	c.logger.Info("No suitable OwnerReference found, using Pod itself",
+		zap.String("pod_name", pod.Name),
+		zap.String("pod_uid", string(pod.UID)),
+	)
+
+	return &metav1.OwnerReference{
+		APIVersion: "v1",
+		Kind:       "Pod",
+		Name:       pod.Name,
+		UID:        pod.UID,
+		Controller: boolPtr(false), // Pod is not a controller, so we don't set it as controller
+	}, nil
+}
+
+// boolPtr returns a pointer to a bool
+func boolPtr(b bool) *bool {
+	return &b
+}
+
 // CreateJob creates a Kubernetes Job
 func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config *JobConfig) (*batchv1.Job, error) {
 	jobSpec := c.BuildJobSpec(config)
@@ -450,6 +570,36 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 			},
 		},
 		Spec: *jobSpec,
+	}
+
+	// Try to set OwnerReference from Operator Pod
+	operatorPod, err := c.GetOperatorPod(ctx)
+	if err != nil {
+		// Log warning but continue without OwnerReference
+		// This is not a fatal error - the Job can still be created
+		c.logger.Warn("Failed to get Operator Pod for OwnerReference, creating Job without OwnerReference",
+			zap.String("job_name", jobName),
+			zap.Error(err),
+		)
+	} else {
+		// Get OwnerReference from Operator Pod
+		ownerRef, err := c.GetOwnerReferenceFromPod(ctx, operatorPod)
+		if err != nil {
+			// Log warning but continue without OwnerReference
+			c.logger.Warn("Failed to get OwnerReference from Operator Pod, creating Job without OwnerReference",
+				zap.String("job_name", jobName),
+				zap.Error(err),
+			)
+		} else {
+			// Set OwnerReference on Job
+			job.OwnerReferences = []metav1.OwnerReference{*ownerRef}
+			c.logger.Info("Set OwnerReference on Job",
+				zap.String("job_name", jobName),
+				zap.String("owner_kind", ownerRef.Kind),
+				zap.String("owner_name", ownerRef.Name),
+				zap.String("owner_uid", string(ownerRef.UID)),
+			)
+		}
 	}
 
 	c.logger.Info("Creating Kubernetes Job",
