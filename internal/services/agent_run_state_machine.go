@@ -93,6 +93,10 @@ func (s *agentRunStateMachine) TransitionToStarted(id int) error {
 		return err
 	}
 
+	// Update the struct's State field to match the new state
+	// This prevents Update() from reverting the state transition
+	run.State = "started"
+
 	// Set StartedAt timestamp
 	now := time.Now()
 	run.StartedAt = &now
@@ -173,6 +177,10 @@ func (s *agentRunStateMachine) TransitionToSucceeded(id int, prID *int, commitSH
 		return err
 	}
 
+	// Update the struct's State field to match the new state
+	// This prevents Update() from reverting the state transition
+	run.State = "succeeded"
+
 	// Set CompletedAt timestamp
 	now := time.Now()
 	run.CompletedAt = &now
@@ -237,6 +245,10 @@ func (s *agentRunStateMachine) TransitionToFailed(id int, errorMessage *string) 
 		)
 		return err
 	}
+
+	// Update the struct's State field to match the new state
+	// This prevents Update() from reverting the state transition
+	run.State = "failed"
 
 	// Set CompletedAt timestamp
 	now := time.Now()
