@@ -1,6 +1,6 @@
 {
   "setup-worktree": [
     "git pull",
-    "pnpm install"
+    "PATH=\"/usr/local/go/bin:$PATH\""
   ]
 }
