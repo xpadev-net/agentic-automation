@@ -1,0 +1,198 @@
+# MinIO Deployment for Development/Testing
+# S3-compatible object storage for agent session persistence
+#
+# WARNING: This configuration is for DEVELOPMENT/TESTING ONLY
+# For production, use:
+# - AWS S3, Google Cloud Storage, or Azure Blob Storage
+# - MinIO in distributed mode (4+ nodes) for high availability
+# - Proper backup and disaster recovery strategies
+# - TLS encryption and security hardening
+#
+# Prerequisites:
+# - StorageClass configured (or use hostPath for local testing)
+# - kubectl apply -f k8s/minio-deployment.yaml
+# - Run scripts/setup-minio.sh to create bucket
+#
+---
+# PersistentVolumeClaim for MinIO data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  # Uncomment and specify storageClassName if needed
+  # storageClassName: standard
+
+---
+# MinIO Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: default
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  strategy:
+    type: Recreate  # Ensure only one pod at a time (for data consistency)
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          ports:
+            # S3 API port
+            - containerPort: 9000
+              name: api
+            # Web console port
+            - containerPort: 9001
+              name: console
+          env:
+            # Root credentials (CHANGE THESE in production)
+            - name: MINIO_ROOT_USER
+              value: "minioadmin"
+            - name: MINIO_ROOT_PASSWORD
+              value: "minioadmin"
+
+            # Optional: Create default bucket on startup
+            # Uncomment if you want automatic bucket creation
+            # - name: MINIO_DEFAULT_BUCKETS
+            #   value: "agent-sessions"
+
+          # Resource limits
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          # Volume mounts
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+
+          # Liveness probe
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness probe
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-pvc
+
+---
+# MinIO Service (S3 API)
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: default
+  labels:
+    app: minio
+spec:
+  type: ClusterIP
+  selector:
+    app: minio
+  ports:
+    # S3 API port
+    - name: api
+      port: 9000
+      targetPort: 9000
+      protocol: TCP
+
+---
+# MinIO Console Service (Web UI)
+# Optional: Expose this via Ingress or NodePort for web console access
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-console
+  namespace: default
+  labels:
+    app: minio
+spec:
+  type: ClusterIP
+  selector:
+    app: minio
+  ports:
+    # Web console port
+    - name: console
+      port: 9001
+      targetPort: 9001
+      protocol: TCP
+
+---
+# Secret for MinIO credentials
+# Used by operator and agent-runner pods
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s3-credentials
+  namespace: default
+type: Opaque
+stringData:
+  access-key-id: "minioadmin"
+  secret-access-key: "minioadmin"
+
+---
+# Example: S3 configuration for operator
+# S3_ENDPOINT=http://minio.default.svc.cluster.local:9000
+# S3_REGION=us-east-1
+# S3_BUCKET=agent-sessions
+# S3_ACCESS_KEY_ID=minioadmin
+# S3_SECRET_ACCESS_KEY=minioadmin
+# S3_USE_PATH_STYLE=true
+#
+# After deploying, create the bucket:
+# 1. Port-forward: kubectl port-forward svc/minio 9000:9000
+# 2. Run: S3_ENDPOINT=http://localhost:9000 \
+#         S3_ACCESS_KEY_ID=minioadmin \
+#         S3_SECRET_ACCESS_KEY=minioadmin \
+#         S3_BUCKET=agent-sessions \
+#         S3_REGION=us-east-1 \
+#         ./scripts/setup-minio.sh
+#
+# Or use the MinIO web console:
+# 1. Port-forward: kubectl port-forward svc/minio-console 9001:9001
+# 2. Open: http://localhost:9001
+# 3. Login: minioadmin / minioadmin
+# 4. Create bucket: agent-sessions

@@ -1,0 +1,174 @@
+# MySQL 8.0 Deployment for Development/Testing
+#
+# WARNING: This configuration is for DEVELOPMENT/TESTING ONLY
+# For production, use:
+# - Managed database services (AWS RDS, Google Cloud SQL, Azure Database for MySQL)
+# - High availability setups (MySQL replication, Galera cluster)
+# - Proper backup and disaster recovery strategies
+# - Network policies and security hardening
+#
+# Prerequisites:
+# - StorageClass configured (or use hostPath for local testing)
+# - kubectl apply -f k8s/mysql-deployment.yaml
+#
+---
+# ConfigMap for MySQL initialization scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-init-scripts
+  namespace: default
+data:
+  # Database and user creation script
+  init.sql: |
+    -- Create database with UTF-8 character set
+    CREATE DATABASE IF NOT EXISTS github_agent_automation
+      CHARACTER SET utf8mb4
+      COLLATE utf8mb4_unicode_ci;
+
+    -- Create application user with necessary privileges
+    CREATE USER IF NOT EXISTS 'agent_user'@'%' IDENTIFIED BY 'agent_password';
+    GRANT ALL PRIVILEGES ON github_agent_automation.* TO 'agent_user'@'%';
+    FLUSH PRIVILEGES;
+
+---
+# PersistentVolumeClaim for MySQL data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # Uncomment and specify storageClassName if needed
+  # storageClassName: standard
+
+---
+# MySQL Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: default
+  labels:
+    app: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  strategy:
+    type: Recreate  # Ensure only one pod at a time (for data consistency)
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+              name: mysql
+          env:
+            # Root password (CHANGE THIS in production)
+            - name: MYSQL_ROOT_PASSWORD
+              value: "root_password_change_me"
+
+            # Database, user, and password (created by init script)
+            - name: MYSQL_DATABASE
+              value: "github_agent_automation"
+            - name: MYSQL_USER
+              value: "agent_user"
+            - name: MYSQL_PASSWORD
+              value: "agent_password"
+
+            # MySQL configuration
+            - name: MYSQL_CHARSET
+              value: "utf8mb4"
+            - name: MYSQL_COLLATION
+              value: "utf8mb4_unicode_ci"
+
+          # Resource limits
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+
+          # Volume mounts
+          volumeMounts:
+            # Persistent data directory
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+
+            # Initialization scripts
+            - name: mysql-init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+
+          # Liveness probe
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness probe
+          readinessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+
+      volumes:
+        # Persistent volume for MySQL data
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+
+        # ConfigMap with initialization scripts
+        - name: mysql-init-scripts
+          configMap:
+            name: mysql-init-scripts
+
+---
+# MySQL Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: default
+  labels:
+    app: mysql
+spec:
+  type: ClusterIP
+  selector:
+    app: mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+      protocol: TCP
+
+---
+# Example: Database connection string for operator
+# DATABASE_URL=mysql://agent_user:agent_password@tcp(mysql.default.svc.cluster.local:3306)/github_agent_automation?charset=utf8mb4&parseTime=True&loc=Local
