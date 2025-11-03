@@ -39,7 +39,7 @@ It processes GitHub Issues, runs lint/typecheck, commits changes, and reports re
 			if err := validateArgs(issueID, repo, prompt); err != nil {
 				return fmt.Errorf("validation failed: %w", err)
 			}
-			return run(issueID, repo, prompt, previousAttempts, ciLogs)
+			return Run(issueID, repo, prompt, previousAttempts, ciLogs)
 		},
 	}
 
@@ -158,7 +158,9 @@ type envConfig struct {
 	WorkDir          string
 }
 
-func run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
+// Run executes the agent-runner workflow.
+// This function is exported for testing purposes.
+func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	// 1. Validate and load environment variables
 	envCfg, err := validateEnv()
 	if err != nil {

@@ -7,6 +7,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,7 +22,12 @@ func TestClient_Download_DirectoryCreationFailure(t *testing.T) {
 		SecretAccessKey: "test-secret",
 		MaxRetries:      5,
 	}
-	client, err := newClientForTesting(cfg, createMockS3Client())
+	// Create a minimal real S3 client with fake credentials for testing
+	awsCfg := aws.Config{
+		Region: "us-east-1",
+	}
+	mockS3Client := s3.NewFromConfig(awsCfg)
+	client, err := newClientForTesting(cfg, mockS3Client)
 	require.NoError(t, err)
 
 	// Try to create a file in a path that would require creating a directory
