@@ -24,12 +24,41 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
-	// Pre-create minimal issues table to satisfy GORM's relation discovery on AgentRun without MySQL enums
-	if err := db.Exec("CREATE TABLE IF NOT EXISTS issues (id integer PRIMARY KEY AUTOINCREMENT)").Error; err != nil {
-		t.Fatalf("failed to create stub issues table: %v", err)
+	// Create minimal sqlite tables manually to avoid enum/foreign key issues
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS agent_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        idempotency_key TEXT,
+        issue_id INTEGER,
+        pr_id INTEGER,
+        state TEXT,
+        agent_type TEXT,
+        input TEXT,
+        output TEXT,
+        retry_count INTEGER DEFAULT 0,
+        error_message TEXT,
+        commit_sha TEXT,
+        s3_session_key TEXT,
+        session_saved_at DATETIME,
+        started_at DATETIME,
+        completed_at DATETIME,
+        created_at DATETIME,
+        updated_at DATETIME
+    )`).Error; err != nil {
+		t.Fatalf("failed to create agent_runs: %v", err)
 	}
-	if err := db.AutoMigrate(&models.AgentRun{}, &models.AuditLog{}); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_type TEXT,
+        actor TEXT,
+        resource_type TEXT,
+        resource_id INTEGER,
+        payload TEXT,
+        idempotency_key TEXT,
+        ip_address TEXT,
+        user_agent TEXT,
+        created_at DATETIME
+    )`).Error; err != nil {
+		t.Fatalf("failed to create audit_logs: %v", err)
 	}
 	config.SetDBForTesting(db)
 	return db
