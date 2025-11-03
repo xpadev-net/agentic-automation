@@ -24,7 +24,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Issue{}, &models.AgentRun{}, &models.PullRequest{}, &models.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&models.AgentRun{}, &models.PullRequest{}, &models.AuditLog{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	config.SetDBForTesting(db)
@@ -33,14 +33,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 func TestHandleAgentReport_Failed_StoresSummaryAndAudit(t *testing.T) {
 	db := setupTestDB(t)
-	// seed issue and agent run
-	issue := &models.Issue{Repo: "owner/repo", Number: 1, Title: "test"}
-	if err := db.Create(issue).Error; err != nil {
-		t.Fatalf("seed issue: %v", err)
-	}
+	// seed agent run (failed path does not require Issue row)
 	run := &models.AgentRun{
 		IdempotencyKey: "idem-1",
-		IssueID:        issue.ID,
+		IssueID:        0,
 		State:          "started",
 		AgentType:      "claude-code",
 		StartedAt:      ptrTime(time.Now()),
