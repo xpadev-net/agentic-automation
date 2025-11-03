@@ -580,7 +580,7 @@ func TestMaxRetriesExceededError_WithoutLastError(t *testing.T) {
 	assert.Contains(t, msg, "max retries (3) exceeded")
 }
 
-func TestMaxRetriesExceededError_Unwrap(t *testing.T) {
+func TestMaxRetriesExceededError_Unwrap_S3(t *testing.T) {
 	lastErr := errors.New("last error")
 	err := &MaxRetriesExceededError{
 		MaxAttempts: 5,

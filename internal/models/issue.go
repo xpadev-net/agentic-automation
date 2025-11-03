@@ -9,7 +9,7 @@ type Issue struct {
 	ID            int       `gorm:"primaryKey;autoIncrement"`
 	Repo          string    `gorm:"size:255;index:idx_issue_repo_number,unique"`
 	Number        int       `gorm:"index:idx_issue_repo_number,unique"`
-	GitHubIssueID int       `gorm:"column:github_issue_id;index"` // GitHub's numeric issue ID
+	GitHubIssueID uint64    `gorm:"column:github_issue_id;type:bigint unsigned;index"` // GitHub's numeric issue ID
 	Title         string    `gorm:"size:512"`
 	Body          *string   `gorm:"type:text"`
 	Labels        string    `gorm:"type:json"` // JSON array stored as string, parsed in application layer

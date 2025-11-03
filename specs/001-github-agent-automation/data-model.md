@@ -10,6 +10,7 @@
 - id: INT (PK, auto-increment)
 - repo: STRING (e.g., "owner/repo-name")
 - number: INT (GitHub Issue number)
+- github_issue_id: BIGINT UNSIGNED (numeric GitHub Issue ID)
 - title: STRING
 - body: TEXT (nullable)
 - labels: JSON (array of label names)
