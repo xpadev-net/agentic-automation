@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -130,7 +131,7 @@ func createTestAgentRun(t *testing.T, db *gorm.DB, state string) *models.AgentRu
 		IssueID:        1,
 		State:          state,
 		AgentType:      "claude-code",
-		Input:          `{"test": "data"}`,
+		Input:          datatypes.JSON([]byte(`{"test": "data"}`)),
 	}
 
 	err := db.Create(agentRun).Error
