@@ -60,6 +60,41 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	`).Error
 	require.NoError(t, err, "Failed to create agent_runs table")
 
+	// Create Issues table (minimal columns used by handler/tests)
+	err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS issues (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT,
+			number INTEGER,
+			github_issue_id INTEGER,
+			title TEXT,
+			body TEXT,
+			labels TEXT,
+			state TEXT DEFAULT 'open',
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+	`).Error
+	require.NoError(t, err, "Failed to create issues table")
+
+	// Create PullRequests table (minimal columns used by handler/tests)
+	err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS pull_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT NOT NULL,
+			number INTEGER NOT NULL,
+			issue_id INTEGER,
+			branch TEXT,
+			base_branch TEXT DEFAULT 'main',
+			status TEXT DEFAULT 'open',
+			mergeable BOOLEAN,
+			created_at DATETIME,
+			updated_at DATETIME,
+			UNIQUE(repo, number)
+		)
+	`).Error
+	require.NoError(t, err, "Failed to create pull_requests table")
+
 	return db
 }
 
@@ -101,6 +136,13 @@ func createTestAgentRun(t *testing.T, db *gorm.DB, state string) *models.AgentRu
 	err := db.Create(agentRun).Error
 	require.NoError(t, err, "Failed to create test AgentRun")
 	return agentRun
+}
+
+// createTestIssue inserts a minimal Issue row used by handler for repo lookup
+func createTestIssue(t *testing.T, db *gorm.DB, id int, repo string, number int) {
+	// Insert deterministic issue id by specifying id explicitly if possible
+	err := db.Exec(`INSERT INTO issues (id, repo, number, state, created_at, updated_at) VALUES (?, ?, ?, 'open', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`, id, repo, number).Error
+	require.NoError(t, err, "Failed to create test Issue")
 }
 
 // makeRequest creates and executes an HTTP request
@@ -179,9 +221,11 @@ func TestHandleAgentReport_ValidBearerToken(t *testing.T) {
 	db, router := setupTest(t)
 	agentRun := createTestAgentRun(t, db, "started")
 
+	// This test validates token handling only; avoid success path requirements
 	reqBody := map[string]interface{}{
-		"status":     "succeeded",
-		"agent_type": "claude-code",
+		"status":        "failed",
+		"agent_type":    "claude-code",
+		"error_message": "just testing token",
 	}
 
 	w := makeRequest(t, router, "POST", "/api/agent-runs/"+strconv.Itoa(agentRun.ID)+"/report", reqBody, testAPIToken)
@@ -192,7 +236,7 @@ func TestHandleAgentReport_ValidBearerToken(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 	assert.Equal(t, agentRun.ID, response.AgentRunID)
-	assert.Contains(t, response.Message, "succeeded")
+	assert.Contains(t, response.Message, "failed")
 }
 
 func TestHandleAgentReport_MissingAuthHeader(t *testing.T) {
@@ -289,6 +333,9 @@ func TestHandleAgentReport_Success_Succeeded(t *testing.T) {
 	db, router := setupTest(t)
 	agentRun := createTestAgentRun(t, db, "started")
 
+	// Seed Issue required for PR URL generation
+	createTestIssue(t, db, agentRun.IssueID, "owner/repo", 1)
+
 	prNumber := 123
 	reqBody := map[string]interface{}{
 		"status":     "succeeded",
@@ -314,8 +361,17 @@ func TestHandleAgentReport_Success_Succeeded(t *testing.T) {
 	err = db.First(&updatedRun, agentRun.ID).Error
 	require.NoError(t, err)
 	assert.Equal(t, "succeeded", updatedRun.State)
-	assert.NotNil(t, updatedRun.PRID)
-	assert.Equal(t, prNumber, *updatedRun.PRID)
+	require.NotNil(t, updatedRun.PRID)
+	// Verify PR foreign key points to a pull_requests row with expected number
+	type prRow struct {
+		ID     int
+		Repo   string
+		Number int
+	}
+	var row prRow
+	err = db.Raw("SELECT id, repo, number FROM pull_requests WHERE id = ?", *updatedRun.PRID).Scan(&row).Error
+	require.NoError(t, err)
+	assert.Equal(t, prNumber, row.Number)
 	assert.NotNil(t, updatedRun.CommitSHA)
 	assert.Equal(t, "abc123def456", *updatedRun.CommitSHA)
 	assert.NotNil(t, updatedRun.CompletedAt)
@@ -357,11 +413,15 @@ func TestHandleAgentReport_WithCommitSHA(t *testing.T) {
 	db, router := setupTest(t)
 	agentRun := createTestAgentRun(t, db, "started")
 
+	// Seed Issue for success path
+	createTestIssue(t, db, agentRun.IssueID, "owner/repo", 1)
+
 	commitSHA := "def456ghi789"
 	reqBody := map[string]interface{}{
 		"status":     "succeeded",
 		"agent_type": "claude-code",
 		"commit_sha": commitSHA,
+		"pr_number":  111,
 	}
 
 	w := makeRequest(t, router, "POST", "/api/agent-runs/"+strconv.Itoa(agentRun.ID)+"/report", reqBody, testAPIToken)
@@ -477,6 +537,9 @@ func TestHandleAgentReport_PRNumberOnlyOnSuccess(t *testing.T) {
 	db, router := setupTest(t)
 	agentRun := createTestAgentRun(t, db, "started")
 
+	// Seed Issue for success path
+	createTestIssue(t, db, agentRun.IssueID, "owner/repo", 1)
+
 	prNumber := 456
 	reqBody := map[string]interface{}{
 		"status":     "succeeded",
@@ -488,12 +551,17 @@ func TestHandleAgentReport_PRNumberOnlyOnSuccess(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// Verify PR number is set
+	// Verify PR link is set
 	var updatedRun models.AgentRun
 	err := db.First(&updatedRun, agentRun.ID).Error
 	require.NoError(t, err)
-	assert.NotNil(t, updatedRun.PRID)
-	assert.Equal(t, prNumber, *updatedRun.PRID)
+	require.NotNil(t, updatedRun.PRID)
+	// Check that linked PullRequest has the provided number
+	type prRow2 struct{ Number int }
+	var row2 prRow2
+	err = db.Raw("SELECT number FROM pull_requests WHERE id = ?", *updatedRun.PRID).Scan(&row2).Error
+	require.NoError(t, err)
+	assert.Equal(t, prNumber, row2.Number)
 
 	// Test that PR number is not set for failed status
 	agentRun2 := createTestAgentRun(t, db, "started")
@@ -536,10 +604,13 @@ func TestHandleAgentReport_ErrorMessageOnlyOnFailed(t *testing.T) {
 
 	// Test that error message is not set for succeeded status
 	agentRun2 := createTestAgentRun(t, db, "started")
+	// Seed Issue and include pr_number to satisfy success path requirements
+	createTestIssue(t, db, agentRun2.IssueID, "owner/repo", 1)
 	reqBody2 := map[string]interface{}{
 		"status":        "succeeded",
 		"agent_type":    "claude-code",
 		"error_message": "This should be ignored",
+		"pr_number":     333,
 	}
 
 	w2 := makeRequest(t, router, "POST", "/api/agent-runs/"+strconv.Itoa(agentRun2.ID)+"/report", reqBody2, testAPIToken)
@@ -555,11 +626,15 @@ func TestHandleAgentReport_OptionalFields(t *testing.T) {
 	db, router := setupTest(t)
 	agentRun := createTestAgentRun(t, db, "started")
 
+	// Seed Issue for success path
+	createTestIssue(t, db, agentRun.IssueID, "owner/repo", 1)
+
 	reqBody := map[string]interface{}{
 		"status":     "succeeded",
 		"agent_type": "claude-code",
 		"branch":     "feature/optional-fields",
 		"logs":       "Optional log data",
+		"pr_number":  222,
 	}
 
 	w := makeRequest(t, router, "POST", "/api/agent-runs/"+strconv.Itoa(agentRun.ID)+"/report", reqBody, testAPIToken)

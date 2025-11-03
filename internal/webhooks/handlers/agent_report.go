@@ -3,9 +3,11 @@ package handlers
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,6 +33,7 @@ type ReportRequest struct {
 type ReportResponse struct {
 	Message    string `json:"message"`
 	AgentRunID int    `json:"agent_run_id"`
+	PRURL      string `json:"pr_url,omitempty"`
 }
 
 // HandleAgentReport handles POST /api/agent-runs/:id/report requests
@@ -99,16 +102,99 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
-	// Update AgentRun state and related fields
+	// Prepare values common to both success and failure
 	now := time.Now()
 	agentRun.State = req.Status
 	agentRun.AgentType = req.AgentType
 	agentRun.CompletedAt = &now
 
-	// Update PR ID if provided (for succeeded status)
-	if req.Status == "succeeded" && req.PRNumber != nil {
-		prID := *req.PRNumber
-		agentRun.PRID = &prID
+	var prURL string
+
+	if req.Status == "succeeded" {
+		// Load Issue for repo to build PR URL
+		issueRepo := repositories.NewIssueRepository()
+		issue, err := issueRepo.FindByID(agentRun.IssueID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Warn("Issue not found for AgentRun",
+					zap.Int("agent_run_id", agentRunID),
+					zap.Int("issue_id", agentRun.IssueID),
+				)
+				c.JSON(http.StatusNotFound, gin.H{
+					"error":   "ISSUE_NOT_FOUND",
+					"message": "Issue not found for the agent run",
+				})
+				return
+			}
+			logger.Error("Failed to load Issue for AgentRun",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+				zap.Int("issue_id", agentRun.IssueID),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to load related issue",
+			})
+			return
+		}
+
+		// Upsert PullRequest and link to AgentRun
+		prRepo := repositories.NewPullRequestRepository(db)
+		pr := &models.PullRequest{
+			Repo:    issue.Repo,
+			Number:  *req.PRNumber,
+			IssueID: &agentRun.IssueID,
+			Branch:  req.Branch,
+			Status:  "open",
+		}
+		if err := prRepo.Upsert(pr); err != nil {
+			logger.Error("Failed to upsert PullRequest",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("repo", issue.Repo),
+				zap.Int("pr_number", *req.PRNumber),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to upsert pull request",
+			})
+			return
+		}
+
+		// Reload PR to obtain ID (Upsert doesn't mutate ID reliably)
+		savedPR, err := prRepo.FindByRepoAndNumber(issue.Repo, *req.PRNumber)
+		if err != nil {
+			logger.Error("Failed to load PullRequest after upsert",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("repo", issue.Repo),
+				zap.Int("pr_number", *req.PRNumber),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to load pull request",
+			})
+			return
+		}
+
+		// Link PR to AgentRun and build PR URL
+		agentRun.PRID = &savedPR.ID
+		prURL = fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repo, savedPR.Number)
+	}
+
+	// Validate required fields for succeeded status (after ensuring AgentRun exists)
+	if req.Status == "succeeded" {
+		if req.PRNumber == nil || *req.PRNumber <= 0 {
+			logger.Warn("Missing or invalid PR number for succeeded status",
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("path", c.Request.URL.Path),
+			)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "INVALID_REQUEST",
+				"message": "pr_number is required and must be > 0 when status is succeeded",
+			})
+			return
+		}
 	}
 
 	// Update commit SHA if provided
@@ -137,12 +223,22 @@ func HandleAgentReport(c *gin.Context) {
 	}
 
 	// Log successful report
-	logger.Info("Agent execution report received",
-		zap.Int("agent_run_id", agentRunID),
-		zap.String("status", req.Status),
-		zap.String("agent_type", req.AgentType),
-		zap.String("path", c.Request.URL.Path),
-	)
+	if prURL != "" {
+		logger.Info("Agent execution report received",
+			zap.Int("agent_run_id", agentRunID),
+			zap.String("status", req.Status),
+			zap.String("agent_type", req.AgentType),
+			zap.String("pr_url", prURL),
+			zap.String("path", c.Request.URL.Path),
+		)
+	} else {
+		logger.Info("Agent execution report received",
+			zap.Int("agent_run_id", agentRunID),
+			zap.String("status", req.Status),
+			zap.String("agent_type", req.AgentType),
+			zap.String("path", c.Request.URL.Path),
+		)
+	}
 
 	// ------------------------------------------------------------------
 	// PR created notification (US2 T083)
@@ -220,5 +316,6 @@ func HandleAgentReport(c *gin.Context) {
 	c.JSON(http.StatusOK, ReportResponse{
 		Message:    "Report received, AgentRun #" + idStr + " updated to " + req.Status,
 		AgentRunID: agentRunID,
+		PRURL:      prURL,
 	})
 }
