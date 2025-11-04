@@ -1,7 +1,9 @@
 package repositories
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -57,10 +59,14 @@ func setupTestDBForReviewFeedback(t *testing.T) *gorm.DB {
 }
 
 // createTestPullRequestForReviewFeedback creates a test PullRequest for ReviewFeedback testing
+// Each call generates a unique repo/number combination to avoid conflicts with other tests
 func createTestPullRequestForReviewFeedback(t *testing.T, db *gorm.DB) *models.PullRequest {
+	// Generate unique repo/number to avoid conflicts with other tests in the same package
+	// Using timestamp-based approach similar to other test files
+	uniqueID := time.Now().UnixNano()
 	pr := &models.PullRequest{
-		Repo:       "test/repo",
-		Number:     1,
+		Repo:       fmt.Sprintf("test/repo-review-%d", uniqueID),
+		Number:     int(uniqueID % 100000), // Use modulo to keep number reasonable
 		Branch:     "feature/test",
 		BaseBranch: "main",
 		Status:     "open",
