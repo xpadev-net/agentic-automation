@@ -311,6 +311,13 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		hasCIFailure = feedback.HasCIFailure
 		previousAttemptsLength = len(previousAttempts)
 		ciLogsLength = len(ciLogs)
+	} else {
+		// Preserve existing behavior: extract previous attempts from AgentRun when feedback is nil
+		// This ensures agent-runner maintains context for retries even when aggregation fails
+		previousAttempts = extractPreviousAttemptsJSON(agentRun, s.logger)
+		ciLogs = "" // CILogs remains empty as per existing CreateJobForAgentRun behavior
+		previousAttemptsLength = len(previousAttempts)
+		ciLogsLength = 0
 	}
 
 	// Log job configuration before building
