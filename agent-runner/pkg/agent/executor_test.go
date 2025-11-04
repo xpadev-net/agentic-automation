@@ -162,10 +162,10 @@ func TestExecutor_Execute_Cursor_Success(t *testing.T) {
 	if mockRunner.CallCount != 1 {
 		t.Errorf("Expected CallCount = 1, got %d", mockRunner.CallCount)
 	}
-	if mockRunner.CommandName != "cursor" {
-		t.Errorf("Expected CommandName = 'cursor', got %q", mockRunner.CommandName)
+	if mockRunner.CommandName != "cursor-agent" {
+		t.Errorf("Expected CommandName = 'cursor-agent', got %q", mockRunner.CommandName)
 	}
-	expectedArgs := []string{"agent", "-p", prompt}
+	expectedArgs := []string{"-p", prompt}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -368,7 +368,7 @@ func TestExecutor_Execute_Cursor_LongPrompt(t *testing.T) {
 	longPrompt := strings.Repeat("a", 1000)
 	executor.Execute("/tmp/work", longPrompt)
 
-	expectedArgs := []string{"agent", "-p", longPrompt}
+	expectedArgs := []string{"-p", longPrompt}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -399,7 +399,7 @@ func TestExecutor_Execute_Cursor_EmptyPrompt(t *testing.T) {
 
 	executor.Execute("/tmp/work", "")
 
-	expectedArgs := []string{"agent", "-p", ""}
+	expectedArgs := []string{"-p", ""}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
