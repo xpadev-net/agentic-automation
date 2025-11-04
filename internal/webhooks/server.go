@@ -1,6 +1,7 @@
 package webhooks
 
 import (
+	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/webhooks/handlers"
@@ -40,6 +41,14 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 
 	// Create router (use gin.New() for all environments)
 	router := gin.New()
+
+	// Initialize and inject GitHub App client (fail-fast on error)
+	if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+		handlers.SetAppGitHubClient(ghApp)
+	} else {
+		// Log error and continue; individual handlers will surface initialization errors
+		logger.Error("Failed to initialize GitHub App client at startup", zap.Error(err))
+	}
 
 	// Apply global error handling middleware (before signature verification)
 	router.Use(middleware.ErrorHandler())

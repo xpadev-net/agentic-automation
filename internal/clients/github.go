@@ -67,6 +67,19 @@ func NewClient(token string, logger *zap.Logger) (*Client, error) {
 	}, nil
 }
 
+// NewFromGitHub wraps an existing *github.Client with our Client wrapper.
+// Use this when an authenticated client is prepared elsewhere (e.g., via GitHub App installation token).
+func NewFromGitHub(g *github.Client, logger *zap.Logger) *Client {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &Client{
+		Client:      g,
+		logger:      logger,
+		retryConfig: nil,
+	}
+}
+
 // handleRateLimit extracts and logs rate limit information from response
 func (c *Client) handleRateLimit(resp *github.Response) {
 	if resp != nil && resp.Rate.Remaining > 0 {
