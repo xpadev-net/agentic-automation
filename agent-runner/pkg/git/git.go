@@ -263,8 +263,13 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 		}
 	}
 
-	// Create new PR
-	base := "master" // Default base branch
+	// Determine base branch using repository default branch
+	base := "master"
+	if repoInfo, repoResp, derr := client.Repositories.Get(ctx, owner, repoName); derr == nil && repoInfo != nil && repoInfo.DefaultBranch != nil && *repoInfo.DefaultBranch != "" {
+		base = *repoInfo.DefaultBranch
+		_ = repoResp // rate limit handled by caller if needed
+	}
+	// Fallback to main if default branch retrieval failed and master fails later
 	title := fmt.Sprintf("Fix: issue #%d", issueNumber)
 	body := "自動生成: エージェントによる修正"
 
@@ -281,9 +286,8 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 		if resp != nil && resp.StatusCode == 403 {
 			return 0, fmt.Errorf("GitHub API rate limit exceeded")
 		}
-		// Check if base branch doesn't exist (might be "main" instead of "master")
-		if resp != nil && resp.StatusCode == 422 {
-			// Try with "main" as base branch
+		// If validation error, try fallback to "main" only if different from current base
+		if resp != nil && resp.StatusCode == 422 && base != "main" {
 			base = "main"
 			newPR.Base = &base
 			pr, resp, err = client.PullRequests.Create(ctx, owner, repoName, newPR)

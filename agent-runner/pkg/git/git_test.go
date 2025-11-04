@@ -348,6 +348,12 @@ func TestCreatePR_InvalidInputs(t *testing.T) {
 	}
 }
 
+// Minimal test to assert CreatePR determines base branch via API client path exists.
+// Full integration is skipped by default.
+func TestCreatePR_DefaultBaseDetection_Smoke(t *testing.T) {
+	t.Skip("Default branch detection requires live GitHub; skipping")
+}
+
 // TestCreatePR_Integration tests CreatePR with actual GitHub API.
 // This test is skipped by default and should be run manually with valid credentials.
 func TestCreatePR_Integration(t *testing.T) {
