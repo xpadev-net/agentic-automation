@@ -92,6 +92,31 @@ func (s *CodexReviewService) hasCommentWithMarker(ctx context.Context, owner, re
 	return false, nil
 }
 
+// findCommentWithMarker finds a comment containing the given marker and returns it.
+// It scans only the last N comments to limit API/CPU usage.
+// Returns nil, nil if no comment with the marker is found (not an error).
+func (s *CodexReviewService) findCommentWithMarker(ctx context.Context, owner, repo string, number int, marker string) (*github.IssueComment, error) {
+	comments, err := s.githubClient.ListIssueComments(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	// Scan only the last N comments to limit API/CPU
+	start := 0
+	if len(comments) > maxCommentsToScan {
+		start = len(comments) - maxCommentsToScan
+	}
+	for i := len(comments) - 1; i >= start; i-- { // newest first within the window
+		c := comments[i]
+		if c == nil || c.Body == nil {
+			continue
+		}
+		if *c.Body != "" && marker != "" && strings.Contains(*c.Body, marker) {
+			return c, nil
+		}
+	}
+	return nil, nil // Not found, but not an error
+}
+
 // RequestReview posts a "@codex review" comment to the specified GitHub PR
 // and creates a ReviewFeedback record with status "requested".
 // It is idempotent per idempotencyKey; if a request already exists, it returns
@@ -174,7 +199,6 @@ func (s *CodexReviewService) RequestReview(
 		// Continue processing even if check fails (best effort)
 	} else if hasMarker {
 		// Comment with marker already exists - check if we have a ReviewFeedback record
-		// If not, create one to maintain consistency
 		existingFeedbacks, err := s.reviewFeedbackRepo.FindByPRIDAndStatus(prID, "requested")
 		if err == nil && len(existingFeedbacks) > 0 {
 			existingFeedback := existingFeedbacks[0]
@@ -188,7 +212,59 @@ func (s *CodexReviewService) RequestReview(
 			)
 			return existingFeedback, nil
 		}
-		// Comment exists but no ReviewFeedback record - continue to create one
+		// Comment exists but no ReviewFeedback record - create one without reposting
+		existingComment, err := s.findCommentWithMarker(ctx, owner, repo, prNumber, marker)
+		if err != nil {
+			s.logger.Warn("Failed to find existing comment with marker",
+				zap.Error(err),
+				zap.String("owner", owner),
+				zap.String("repo", repo),
+				zap.Int("pr_number", prNumber),
+				zap.Int("pr_id", prID),
+				zap.String("idempotency_key", idempotencyKey),
+			)
+			// Continue to normal flow if we can't find the comment
+		} else if existingComment != nil {
+			// Comment exists - create ReviewFeedback record without reposting
+			s.logger.Info("Codex review comment already exists, skipping repost, creating ReviewFeedback record only",
+				zap.String("owner", owner),
+				zap.String("repo", repo),
+				zap.Int("pr_number", prNumber),
+				zap.Int("pr_id", prID),
+				zap.String("idempotency_key", idempotencyKey),
+			)
+			feedback := &models.ReviewFeedback{
+				PRID:             prID,
+				Source:           "Codex",
+				Status:           "requested",
+				ApprovalDetected: false,
+				Content:          nil,
+			}
+			if existingComment.ID != nil {
+				feedback.GitHubCommentID = existingComment.ID
+			}
+			if err := s.reviewFeedbackRepo.Create(feedback); err != nil {
+				s.logger.Error("Failed to create ReviewFeedback record from existing comment",
+					zap.Error(err),
+					zap.String("owner", owner),
+					zap.String("repo", repo),
+					zap.Int("pr_number", prNumber),
+					zap.Int("pr_id", prID),
+					zap.String("idempotency_key", idempotencyKey),
+				)
+				return nil, fmt.Errorf("failed to create ReviewFeedback record from existing comment: %w", err)
+			}
+			s.logger.Info("Created ReviewFeedback record from existing comment",
+				zap.Int("feedback_id", feedback.ID),
+				zap.String("owner", owner),
+				zap.String("repo", repo),
+				zap.Int("pr_number", prNumber),
+				zap.Int("pr_id", prID),
+				zap.String("idempotency_key", idempotencyKey),
+			)
+			return feedback, nil
+		}
+		// If we can't find the comment even though hasMarker is true, continue to normal flow
 	}
 
 	// Post comment with retry logic
