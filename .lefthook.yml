@@ -6,13 +6,17 @@ pre-commit:
       stage_fixed: true
     deps-check:
       run: |
-        go mod verify
-        go mod tidy
-        if ! git diff --exit-code go.mod go.sum 2>/dev/null; then
-          echo "go.mod or go.sum are not tidy. Run 'go mod tidy' and commit the changes."
-          exit 1
-        fi
-      glob: "go.mod"
+        set -e
+        for MODDIR in . agent-runner; do
+          if [ -f "$MODDIR/go.mod" ]; then
+            (cd "$MODDIR" && go mod verify && go mod tidy)
+            if ! git diff --exit-code "$MODDIR/go.mod" "$MODDIR/go.sum" 2>/dev/null; then
+              echo "$MODDIR/go.mod or $MODDIR/go.sum are not tidy. Run 'go mod tidy' and commit the changes."
+              exit 1
+            fi
+          fi
+        done
+      glob: "{go.mod,agent-runner/go.mod}"
 
 pre-push:
   commands:
@@ -22,13 +26,17 @@ pre-push:
       stage_fixed: true
     deps-check:
       run: |
-        go mod verify
-        go mod tidy
-        if ! git diff --exit-code go.mod go.sum 2>/dev/null; then
-          echo "go.mod or go.sum are not tidy. Run 'go mod tidy' and commit the changes."
-          exit 1
-        fi
-      glob: "go.mod"
+        set -e
+        for MODDIR in . agent-runner; do
+          if [ -f "$MODDIR/go.mod" ]; then
+            (cd "$MODDIR" && go mod verify && go mod tidy)
+            if ! git diff --exit-code "$MODDIR/go.mod" "$MODDIR/go.sum" 2>/dev/null; then
+              echo "$MODDIR/go.mod or $MODDIR/go.sum are not tidy. Run 'go mod tidy' and commit the changes."
+              exit 1
+            fi
+          fi
+        done
+      glob: "{go.mod,agent-runner/go.mod}"
     test:
       run: go test ./... -v
     build:
