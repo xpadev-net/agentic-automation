@@ -270,14 +270,19 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 				tc = oauth2.NewClient(ctx, ts)
 				client = github.NewClient(tc)
 				prs, resp, err = client.PullRequests.List(ctx, owner, repoName, opts)
+				if err == nil {
+					// retry success → continue normal flow
+					goto LIST_SUCCESS
+				}
 			}
 		}
 		// Check if it's a rate limit error
-		if err != nil && resp != nil && resp.StatusCode == 403 {
+		if resp != nil && resp.StatusCode == 403 {
 			return 0, fmt.Errorf("GitHub API rate limit exceeded")
 		}
 		return 0, fmt.Errorf("failed to list pull requests: %w", err)
 	}
+LIST_SUCCESS:
 
 	// If PR exists, return its number
 	if len(prs) > 0 {
@@ -319,7 +324,8 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 				client = github.NewClient(tc)
 				pr, resp, err = client.PullRequests.Create(ctx, owner, repoName, newPR)
 				if err == nil {
-					// continue to success path
+					// retry success → continue normal flow
+					goto CREATE_SUCCESS
 				}
 			}
 		}
@@ -338,6 +344,7 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 			return 0, fmt.Errorf("failed to create pull request: %w", err)
 		}
 	}
+CREATE_SUCCESS:
 
 	if pr.Number == nil {
 		return 0, fmt.Errorf("created PR but PR number is nil")
