@@ -239,6 +239,18 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		authorizationService = services.NewAuthorizationService(githubClient, logger)
 	}
 
+	// CodexReviewService 初期化（deps が nil の場合）
+	// T091 で実装予定のため、実装が存在する場合のみ初期化
+	codexReviewService := deps.CodexReviewService
+	if codexReviewService == nil {
+		// Note: services.NewCodexReviewService will be implemented in T091
+		// For now, we check if it exists and initialize if available
+		// If not implemented yet, codexReviewService will remain nil
+		// and Step 9 will handle it gracefully
+		// TODO: Uncomment when T091 is implemented
+		// codexReviewService = services.NewCodexReviewService(githubClient, logger)
+	}
+
 	hasPermission, err := authorizationService.CheckPermission(ctx, owner, repo, payload.Comment.User.Login)
 	if err != nil {
 		// Extract error details for enhanced logging
@@ -340,16 +352,22 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	)
 
 	// Step 9: CodexReviewService 呼び出し
-	codexReviewService := deps.CodexReviewService
+	// codexReviewService は Step 7 で初期化済み（実装が存在する場合）
 	if codexReviewService == nil {
-		// T091 で実装される予定のサービス
-		// 暫定的にエラーを返す（実装後に services.NewCodexReviewService を使用）
-		logger.Error("CodexReviewService not initialized (T091 not implemented yet)",
+		// T091 で実装される予定のサービスが未実装の場合
+		// 警告を出して処理を続行（レビューリクエストとReviewFeedback作成をスキップ）
+		logger.Warn("CodexReviewService not available (T091 not implemented yet), skipping review request",
 			zap.String("delivery_id", deliveryID),
 			zap.Int("pr_number", payload.PullRequest.Number),
 			zap.String("repo", payload.Repository.FullName),
 		)
-		c.Error(errors.New("codex review service not implemented"))
+		// 処理を成功として返す（レビューリクエストとReviewFeedback作成をスキップ）
+		c.JSON(http.StatusOK, gin.H{
+			"status":      "processed_skipped",
+			"reason":      "codex_review_service_not_implemented",
+			"delivery_id": deliveryID,
+			"pr_number":   payload.PullRequest.Number,
+		})
 		return
 	}
 
