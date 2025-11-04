@@ -646,12 +646,20 @@ type GitHubClient struct {
 func NewGitHubAppClient(logger *zap.Logger) (*GitHubClient, error) {
 	appIDStr := os.Getenv("GITHUB_APP_ID")
 	privKey := os.Getenv("GITHUB_PRIVATE_KEY")
+	testMode := os.Getenv("GITHUB_APP_TEST_MODE") == "1"
+	// In test mode, allow missing credentials to avoid hard dependency on secrets
 	if appIDStr == "" || privKey == "" {
-		return nil, fmt.Errorf("missing GitHub App credentials")
+		if !testMode {
+			return nil, fmt.Errorf("missing GitHub App credentials")
+		}
 	}
-	appID, err := strconv.ParseInt(appIDStr, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid GITHUB_APP_ID: %w", err)
+	var appID int64
+	if appIDStr != "" {
+		var err error
+		appID, err = strconv.ParseInt(appIDStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid GITHUB_APP_ID: %w", err)
+		}
 	}
 	cache := &InstallationTokenCache{
 		mutex:      sync.RWMutex{},
@@ -660,7 +668,7 @@ func NewGitHubAppClient(logger *zap.Logger) (*GitHubClient, error) {
 		privateKey: []byte(privKey),
 	}
 	client := &GitHubClient{logger: logger, tokenCache: cache}
-	if os.Getenv("GITHUB_APP_TEST_MODE") == "1" {
+	if testMode {
 		client.testMode = true
 	}
 	return client, nil

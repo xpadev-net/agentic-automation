@@ -85,15 +85,23 @@ func HandleIssueComment(c *gin.Context) {
 		Logger: logger,
 	}
 
+	// テスト互換: 許可フラグがあり token があれば従来の token クライアントを利用
+	if config.GetEnv("GITHUB_APP_TEST_ALLOW_TOKEN", "0") == "1" {
+		if token := config.GetEnv("GITHUB_TOKEN", ""); token != "" {
+			if gh, err := clients.NewClient(token, logger); err == nil {
+				deps.GitHubClient = gh
+			}
+		}
+	}
 	// GitHub App クライアントは DI から取得（なければここで生成）
 	if appGitHubClient == nil {
 		ghApp, err := clients.NewGitHubAppClient(logger)
 		if err != nil {
-			logger.Error("Failed to initialize GitHub App client", zap.Error(err))
-			c.Error(err)
-			return
+			// テスト環境などで資格情報が無い場合でもここではエラーにせず後段で処理
+			logger.Warn("GitHub App client not initialized", zap.Error(err))
+		} else {
+			appGitHubClient = ghApp
 		}
-		appGitHubClient = ghApp
 	}
 
 	// Initialize Kubernetes client
@@ -326,6 +334,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 	// リポジトリ単位の認証済みクライアントを生成（テストで注入済みならそれを優先）
 	if deps.GitHubClient == nil {
+		if appGitHubClient == nil {
+			c.Error(errors.New("github client not provided"))
+			return
+		}
 		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 		if err != nil {
 			logger.Error("Failed to init per-repo GitHub client",
