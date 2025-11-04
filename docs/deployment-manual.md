@@ -75,7 +75,6 @@ Agentic Automation は、GitHub の Issue と Pull Request を AI エージェ�
 - GitHub App ID
 - GitHub App Private Key (PEM フォーマット)
 - GitHub Webhook Secret
-- GitHub Personal Access Token (AI エージェント実行用)
 - Anthropic API Key (Claude Code 用)
 - Cursor API Key (Cursor Agents 用、オプション)
 - Discord Webhook URL (通知用、オプション)
@@ -333,8 +332,8 @@ DATABASE_URL="mysql://admin:YOUR_PASSWORD@your-rds-endpoint.rds.amazonaws.com:33
 
 # GitHub App
 GITHUB_APP_ID="123456"
+GITHUB_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...snip...\n-----END PRIVATE KEY-----\n"
 GITHUB_WEBHOOK_SECRET="your-webhook-secret"
-GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # AI エージェント
 ANTHROPIC_API_KEY="sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -383,19 +382,15 @@ kubectl create secret generic operator-secrets \
   --from-literal=discord-webhook-url="$DISCORD_WEBHOOK_URL" \
   --from-literal=operator-api-token="$OPERATOR_API_TOKEN"
 
-# 2. github-token
-kubectl create secret generic github-token \
-  --from-literal=token="$GITHUB_TOKEN"
-
-# 3. anthropic-api-key
+# 2. anthropic-api-key
 kubectl create secret generic anthropic-api-key \
   --from-literal=api-key="$ANTHROPIC_API_KEY"
 
-# 4. cursor-api-key (オプション)
+# 3. cursor-api-key (オプション)
 kubectl create secret generic cursor-api-key \
   --from-literal=api-key="$CURSOR_API_KEY"
 
-# 5. s3-credentials
+# 4. s3-credentials
 kubectl create secret generic s3-credentials \
   --from-literal=access-key-id="$S3_ACCESS_KEY_ID" \
   --from-literal=secret-access-key="$S3_SECRET_ACCESS_KEY"
@@ -420,7 +415,7 @@ kubectl get secret operator-secrets -o jsonpath='{.data.github-app-id}' | base64
 **GitHub Container Registry の場合:**
 
 ```bash
-echo $GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+echo $CR_PAT | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 ```
 
 **Docker Hub の場合:**
@@ -1141,16 +1136,15 @@ kubectl describe nodes
 # Pod のリソースリクエストを下げる、またはノードを追加
 ```
 
-2. **GitHub Token の権限不足**
+2. **GitHub App の権限不足**
 
 ```bash
 # Agent Runner のログを確認
 kubectl logs -l job-name=agent-run-xxx --tail=100
 
 # エラー例: "403 Forbidden"
-# → GITHUB_TOKEN に必要な権限がない
-
-# 必要な権限: repo (すべて)
+# → GitHub App に必要なリポジトリ権限が付与されていない
+# 必要な権限例: Contents:RW, Issues:RW, Pull Requests:RW, Metadata:R
 ```
 
 3. **AI API キーの問題**

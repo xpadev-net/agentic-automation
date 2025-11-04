@@ -67,7 +67,9 @@ ENTRYPOINT ["agent-runner"]
 # - OPERATOR_API_TOKEN: Bearer token for API authentication
 # - AGENT_RUN_ID: AgentRun database record ID
 # - AGENT_TYPE: Agent to execute ("claude-code" or "cursor-agents")
-# - GITHUB_TOKEN: GitHub Personal Access Token
+# - GITHUB_APP_ID: GitHub App ID (App auth is the default; PAT unsupported)
+# - GITHUB_PRIVATE_KEY: GitHub App private key (PEM, multi-line)
+# - GITHUB_WEBHOOK_SECRET: Webhook signature verification secret
 # - ANTHROPIC_API_KEY: Claude API key (required if AGENT_TYPE=claude-code)
 # - CURSOR_API_KEY: Cursor API key (required if AGENT_TYPE=cursor-agents)
 # - RETRY_COUNT: Current retry count (default: 0)

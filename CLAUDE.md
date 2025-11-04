@@ -106,28 +106,34 @@ git checkout -b feature/issue-123 master
 - `OPERATOR_API_TOKEN`: API 認証トークン
 - `AGENT_RUN_ID`: AgentRun レコードID
 - `AGENT_TYPE`: `claude-code` または `cursor-agents`
-- `GITHUB_TOKEN`: GitHub PAT（クローン/Push/PR 作成に使用）
 - `WORKSPACE_DIR`: 作業ディレクトリ（例: `/workspace`）
 
 エージェント別:
 - `ANTHROPIC_API_KEY`（`claude-code` 用）
 - `CURSOR_API_KEY`（`cursor-agents` 用）
 
+GitHub App（必須）:
+- `GITHUB_APP_ID`: GitHub App ID
+- `GITHUB_PRIVATE_KEY`: GitHub App 秘密鍵（PEM 本文、改行含む）
+- `GITHUB_WEBHOOK_SECRET`: Webhook 署名検証シークレット
+
 **注**: 以前は `OPERATOR_API_URL` を直接設定していましたが、現在は Kubernetes Downward API を利用して自動的に URL を構築します。
 
 Kubernetes での注入例は `k8s/pod-template.yaml` および `internal/clients/kubernetes.go` を参照してください。
 
-## PR 作成（`gh` コマンド）
+## 認証フロー（GitHub App 前提）
 
-`GITHUB_TOKEN` による認証を前提に、次のように PR を作成します（ベースは `master`）。
+本リポジトリは GitHub App を前提とします（PAT フォールバックなし）。概要:
 
-```bash
-git checkout -b feature/issue-123 master
-git push origin HEAD
-gh pr create --base master --head feature/issue-123 \
-  --title "Fix: issue #123" \
-  --body "自動生成: エージェントによる修正"
-```
+1. App 認証用 JWT を生成
+2. リポジトリに紐づく Installation ID を取得
+3. Installation Token を発行（有効期限 1 時間）
+4. 発行済みトークンで GitHub API と Git 操作を実行
+
+注意:
+- トークンはログ出力しないこと
+- 必要権限（例: Contents: RW, Issues: RW, Pull Requests: RW, Metadata: R）を付与
+- トークンは各操作前に再取得する実装を推奨（長時間実行対策）
 
 ## specs 配下タスクの運用ポリシー
 

@@ -46,8 +46,10 @@ agent-runner \
 | `OPERATOR_API_TOKEN` | Bearer token for API authentication | `sk-secret-token-abc123` |
 | `AGENT_RUN_ID` | AgentRun database record ID | `456` |
 | `AGENT_TYPE` | Agent to execute | `claude-code` or `cursor-agents` |
-| `GITHUB_TOKEN` | GitHub Personal Access Token | `ghp_xxxxx` |
 | `WORKSPACE_DIR` | Working directory | `/workspace` (default) |
+| `GITHUB_APP_ID` | GitHub App ID | `123456` |
+| `GITHUB_PRIVATE_KEY` | GitHub App RSA private key (PEM, multi-line) | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n` |
+| `GITHUB_WEBHOOK_SECRET` | Webhook signature verification secret | `xxxx` |
 
 **Note**: The Operator API URL is automatically constructed from `KUBERNETES_NAMESPACE`, `OPERATOR_SERVICE_NAME`, and `OPERATOR_SERVICE_PORT` as: `http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}`
 
@@ -56,7 +58,8 @@ agent-runner \
 ```
 1. Parse command-line arguments (Issue context)
 2. Clone repository to WORKSPACE_DIR
-   └─ git clone https://${GITHUB_TOKEN}@github.com/${repo}.git
+   └─ Obtain GitHub App installation token, then
+      git clone https://x-access-token:${INSTALLATION_TOKEN}@github.com/${repo}.git
 3. Checkout new branch (auto-generated name: feature/issue-{id})
 4. Execute selected agent (claude-code or cursor-agents)
    └─ Pass Issue context + previous attempts + CI logs as prompt
@@ -68,8 +71,8 @@ agent-runner \
 7. Commit changes
    └─ git commit -m "feat: implement issue #{id}"
 8. Push to remote
-   └─ git push origin feature/issue-{id}
-9. Create Pull Request (via GitHub API using go-github/v62)
+   └─ Obtain fresh installation token (if expired) and `git push origin feature/issue-{id}`
+9. Create Pull Request (via GitHub API using go-github/v62 with installation token)
    └─ github.CreatePullRequest(repo, base, head, title, body)
 10. Report result to Operator API (with retry)
     └─ POST /api/agent-runs/{id}/report
@@ -341,11 +344,21 @@ spec:
       value: "{{ .AgentRunID }}"
     - name: AGENT_TYPE
       value: "{{ .AgentType }}"
-    - name: GITHUB_TOKEN
+    - name: GITHUB_APP_ID
       valueFrom:
         secretKeyRef:
-          name: github-token
-          key: token
+          name: operator-secrets
+          key: github-app-id
+    - name: GITHUB_PRIVATE_KEY
+      valueFrom:
+        secretKeyRef:
+          name: operator-secrets
+          key: github-private-key
+    - name: GITHUB_WEBHOOK_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: operator-secrets
+          key: github-webhook-secret
     - name: ANTHROPIC_API_KEY
       valueFrom:
         secretKeyRef:
@@ -482,20 +495,32 @@ stringData:
 
 **Rotation**: Rotate token periodically (30-90 days)
 
-### 2. GitHub Token Scope
+### 2. GitHub App Permissions & Secrets
 
-**Required permissions**:
-- `repo` (full repository access for private repos)
-- `workflow` (if PR triggers CI)
+**Required repository permissions (App)**:
+- Contents: Read & Write
+- Issues: Read & Write
+- Pull Requests: Read & Write
+- Metadata: Read-only
 
-**Injection**:
+**Secrets injection (Operator Namespace)**:
 ```yaml
 env:
-- name: GITHUB_TOKEN
+- name: GITHUB_APP_ID
   valueFrom:
     secretKeyRef:
-      name: github-token
-      key: token
+      name: operator-secrets
+      key: github-app-id
+- name: GITHUB_PRIVATE_KEY
+  valueFrom:
+    secretKeyRef:
+      name: operator-secrets
+      key: github-private-key
+- name: GITHUB_WEBHOOK_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: operator-secrets
+      key: github-webhook-secret
 ```
 
 ### 3. Network Policies

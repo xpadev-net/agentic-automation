@@ -327,8 +327,11 @@ import (
 	"strings"
 )
 
-func CloneRepo(token, repo, dest string) error {
-	url := fmt.Sprintf("https://%s@github.com/%s.git", token, repo)
+// Installation token should be obtained just-in-time using GitHub App credentials.
+// Example remote URL format with installation token:
+//   https://x-access-token:<installation_token>@github.com/<owner>/<repo>.git
+func CloneRepo(installationToken, repo, dest string) error {
+    url := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", installationToken, repo)
 	cmd := exec.Command("git", "clone", url, dest)
 	return cmd.Run()
 }
@@ -375,13 +378,13 @@ func CommitChanges(workDir, message string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func PushBranch(workDir, branchName, token string) error {
+func PushBranch(workDir, branchName, installationToken string) error {
 	cmd := exec.Command("git", "push", "-u", "origin", branchName)
 	cmd.Dir = workDir
 	return cmd.Run()
 }
 
-func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
+func CreatePR(installationToken, repo, branchName string, issueNumber int) (int, error) {
 	// Use go-github library to create PR via API
 	// Implementation details in actual code
 	// Returns PR number
@@ -682,7 +685,8 @@ ENTRYPOINT ["agent-runner"]
 | `OPERATOR_API_TOKEN` | Bearer token for API auth | Yes | `sk-secret-token-abc123` |
 | `AGENT_RUN_ID` | AgentRun database record ID | Yes | `456` |
 | `AGENT_TYPE` | Agent to execute | Yes | `claude-code` or `cursor-agents` |
-| `GITHUB_TOKEN` | GitHub Personal Access Token | Yes | `ghp_xxxxx` |
+| `GITHUB_APP_ID` | GitHub App ID | Yes | `123456` |
+| `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM, multi-line) | Yes | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n` |
 | `ANTHROPIC_API_KEY` | Claude API key | Conditional | Required if `AGENT_TYPE=claude-code` |
 | `CURSOR_API_KEY` | Cursor API key | Conditional | Required if `AGENT_TYPE=cursor-agents` |
 | `WORKSPACE_DIR` | Working directory | No | `/workspace` (default) |
