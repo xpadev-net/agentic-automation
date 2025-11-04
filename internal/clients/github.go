@@ -664,10 +664,14 @@ func (c *GitHubClient) ForRepo(ctx context.Context, owner, repo string) (*github
 		return nil, err
 	}
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	hc := oauth2.NewClient(ctx, ts)
+	base := http.DefaultTransport
+	if c.httpClient != nil && c.httpClient.Transport != nil {
+		base = c.httpClient.Transport
+	}
+	oauthTr := &oauth2.Transport{Source: ts, Base: base}
+	hc := &http.Client{Transport: oauthTr}
 	if c.httpClient != nil {
-		// reuse transport from injected client to cooperate with test server
-		hc.Transport = c.httpClient.Transport
+		hc.Timeout = c.httpClient.Timeout
 	}
 	client := github.NewClient(hc)
 	if c.baseURL != nil {

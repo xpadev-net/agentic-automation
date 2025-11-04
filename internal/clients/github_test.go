@@ -142,8 +142,12 @@ func TestForRepo_MinimalIntegrationWithMockServer(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/app/installations/789/access_tokens":
 			_ = json.NewEncoder(w).Encode(tokenResp{Token: "itkn", ExpiresAt: time.Now().Add(55 * time.Minute)})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/"+owner+"/"+repo:
-			_ = json.NewEncoder(w).Encode(github.Repository{Name: github.String(repo)})
-			return
+			auth := r.Header.Get("Authorization")
+			if auth == "token itkn" || auth == "Bearer itkn" {
+				_ = json.NewEncoder(w).Encode(github.Repository{Name: github.String(repo)})
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
