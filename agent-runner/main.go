@@ -151,8 +151,7 @@ func validateEnv() (*envConfig, error) {
 		return nil, fmt.Errorf("AGENT_TYPE must be 'claude-code' or 'cursor-agents', got: %q", cfg.AgentType)
 	}
 
-	// GITHUB_TOKEN is optional; when absent, a GitHub App installation token will be used on-demand
-	cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
+	// GitHub authentication is handled via GitHub App installation token (on-demand). No PAT support.
 
 	// Optional environment variables with defaults
 	retryCountStr := os.Getenv("RETRY_COUNT")
@@ -187,7 +186,6 @@ type envConfig struct {
 	OperatorAPIToken string
 	AgentRunID       int
 	AgentType        string
-	GitHubToken      string
 	RetryCount       int
 	WorkDir          string
 }
@@ -220,7 +218,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 
 	// 4. Clone repository
 	fmt.Fprintf(os.Stderr, "Cloning repository %s to %s\n", repo, envCfg.WorkDir)
-	if err := git.CloneRepo(envCfg.GitHubToken, repo, envCfg.WorkDir); err != nil {
+	if err := git.CloneRepo("", repo, envCfg.WorkDir); err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Repository clone failed: %v", err),
 			"",
@@ -393,7 +391,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 
 	// 12. Push branch
 	fmt.Fprintf(os.Stderr, "Pushing branch %s to remote\n", branchName)
-	if err := git.PushBranch(envCfg.WorkDir, branchName, envCfg.GitHubToken); err != nil {
+	if err := git.PushBranch(envCfg.WorkDir, branchName, ""); err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Git push failed: %v", err),
 			"",
@@ -423,7 +421,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 
 	// 14. Create Pull Request
 	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
-	prNumber, err := git.CreatePR(envCfg.GitHubToken, repo, branchName, issueID)
+	prNumber, err := git.CreatePR("", repo, branchName, issueID)
 	if err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("PR creation failed: %v", err),

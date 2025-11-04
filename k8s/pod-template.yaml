@@ -20,7 +20,6 @@
 #   - agent-runner Docker image must be built and pushed to registry
 #
 # Required Secrets (create before applying):
-#   kubectl create secret generic github-token --from-literal=token=<GITHUB_TOKEN>
 #   kubectl create secret generic agent-runner-secret --from-literal=token=<OPERATOR_API_TOKEN>
 #   kubectl create secret generic anthropic-api-key --from-literal=api-key=<ANTHROPIC_API_KEY>
 #   kubectl create secret generic cursor-api-key --from-literal=api-key=<CURSOR_API_KEY>
@@ -123,12 +122,7 @@ spec:
           - name: WORKSPACE_DIR
             value: "/workspace"
           
-          # GitHub authentication
-          - name: GITHUB_TOKEN
-            valueFrom:
-              secretKeyRef:
-                name: github-token
-                key: token
+          # GitHub authentication is handled via GitHub App installation token (on-demand)
           
           # Agent-specific API keys (conditional - uncomment based on AGENT_TYPE)
           # For claude-code:
@@ -239,7 +233,7 @@ spec:
       # - KUBERNETES_NAMESPACE (from Downward API), OPERATOR_SERVICE_NAME, OPERATOR_SERVICE_PORT (Operator API URL construction)
       # - OPERATOR_API_TOKEN (Operator API authentication)
       # - AGENT_RUN_ID, AGENT_TYPE, WORKSPACE_DIR (Agent execution configuration)
-      # - GITHUB_TOKEN (GitHub authentication)
+      # - GitHub authentication is handled via GitHub App installation token (on-demand)
       # - ANTHROPIC_API_KEY or CURSOR_API_KEY (Agent-specific API keys)
       # - RETRY_COUNT (T059_S3: Retry configuration, "0" for initial run, "1", "2", etc. for retries)
       # - S3_ENDPOINT, S3_REGION, S3_BUCKET (T060_S3: S3 Session Persistence configuration)

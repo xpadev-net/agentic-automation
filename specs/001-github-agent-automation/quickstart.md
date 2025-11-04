@@ -292,7 +292,6 @@ tail -f logs/app.log
 ### Agent Runner Requirements
 
 - The runner image uses go-github/v62 library for PR creation (no CLI dependencies).
-- GitHub API token provided via GITHUB_TOKEN environment variable.
 - Node.js runtime required for claude-code/cursor-agents execution.
 
 ### Repository Manifest Configuration (.agent-config.yaml)
@@ -577,15 +576,7 @@ make docker-build-push
 
 **Authentication for ghcr.io:**
 
-```bash
-# Login to GitHub Container Registry
-docker login ghcr.io -u <YOUR_GITHUB_USERNAME> -p <GITHUB_TOKEN>
-```
-
-To get a GitHub token:
-1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Generate a new token with `write:packages` permission
-3. Use the token as the password when logging in
+- In CI, use the built-in GitHub Actions token; no manual PAT is required.
 
 **Customizing the image location:**
 
