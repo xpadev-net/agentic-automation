@@ -332,28 +332,36 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	owner := repoParts[0]
 	repo := repoParts[1]
 
-	// リポジトリ単位の認証済みクライアントを生成（テストで注入済みならそれを優先）
-	if deps.GitHubClient == nil {
-		if appGitHubClient == nil {
-			c.Error(errors.New("github client not provided"))
-			return
+	// 依存が未注入の場合のみ、GitHub クライアントとサービスを構築
+	if authorizationService == nil || issueContextService == nil || githubNotificationService == nil {
+		if deps.GitHubClient == nil {
+			if appGitHubClient == nil {
+				c.Error(errors.New("github client not provided"))
+				return
+			}
+			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
+			if err != nil {
+				logger.Error("Failed to init per-repo GitHub client",
+					zap.Error(err),
+					zap.String("owner", owner),
+					zap.String("repo", repo),
+					zap.String("delivery_id", deliveryID),
+				)
+				c.Error(err)
+				return
+			}
+			deps.GitHubClient = clients.NewFromGitHub(rawClient, logger)
 		}
-		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
-		if err != nil {
-			logger.Error("Failed to init per-repo GitHub client",
-				zap.Error(err),
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.String("delivery_id", deliveryID),
-			)
-			c.Error(err)
-			return
+		if authorizationService == nil {
+			authorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
 		}
-		deps.GitHubClient = clients.NewFromGitHub(rawClient, logger)
+		if issueContextService == nil {
+			issueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
+		}
+		if githubNotificationService == nil {
+			githubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
+		}
 	}
-	authorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
-	issueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
-	githubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
 
 	hasPermission, err := authorizationService.CheckPermission(ctx, owner, repo, payload.Comment.User.Login)
 	if err != nil {
