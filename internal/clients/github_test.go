@@ -51,6 +51,7 @@ func TestInstallationTokenCache_ReusesValidToken(t *testing.T) {
 	defer server.Close()
 
 	logger := newTestLogger(t)
+	t.Setenv("GITHUB_APP_TEST_MODE", "1")
 	// inject fake envs
 	t.Setenv("GITHUB_APP_ID", "1")
 	t.Setenv("GITHUB_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nMIIB...test...\n-----END PRIVATE KEY-----\n")
@@ -99,6 +100,7 @@ func TestInstallationTokenCache_RefreshNearExpiry(t *testing.T) {
 	defer server.Close()
 
 	logger := newTestLogger(t)
+	t.Setenv("GITHUB_APP_TEST_MODE", "1")
 	t.Setenv("GITHUB_APP_ID", "1")
 	t.Setenv("GITHUB_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nMIIB...test...\n-----END PRIVATE KEY-----\n")
 
@@ -149,6 +151,7 @@ func TestForRepo_MinimalIntegrationWithMockServer(t *testing.T) {
 	defer server.Close()
 
 	logger := newTestLogger(t)
+	t.Setenv("GITHUB_APP_TEST_MODE", "1")
 	t.Setenv("GITHUB_APP_ID", "1")
 	t.Setenv("GITHUB_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nMIIB...test...\n-----END PRIVATE KEY-----\n")
 
