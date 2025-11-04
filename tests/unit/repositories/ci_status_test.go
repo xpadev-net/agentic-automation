@@ -62,8 +62,8 @@ func setupTestDBForCIStatus(t *testing.T) *gorm.DB {
 	return db
 }
 
-// createTestPullRequest creates a test PullRequest
-func createTestPullRequest(t *testing.T, db *gorm.DB, repo string, number int) *models.PullRequest {
+// createTestPullRequestForCIStatus creates a test PullRequest
+func createTestPullRequestForCIStatus(t *testing.T, db *gorm.DB, repo string, number int) *models.PullRequest {
 	pr := &models.PullRequest{
 		Repo:       repo,
 		Number:     number,
@@ -82,7 +82,7 @@ func TestCIStatusRepository_CreateOrUpdate_Create(t *testing.T) {
 	repo := repositories.NewCIStatusRepositoryWithDB(db)
 
 	// Create test PR
-	pr := createTestPullRequest(t, db, "test/repo", 1)
+	pr := createTestPullRequestForCIStatus(t, db, "test/repo", 1)
 
 	// Create CIStatus
 	now := time.Now()
@@ -129,7 +129,7 @@ func TestCIStatusRepository_CreateOrUpdate_Update(t *testing.T) {
 	repo := repositories.NewCIStatusRepositoryWithDB(db)
 
 	// Create test PR
-	pr := createTestPullRequest(t, db, "test/repo", 1)
+	pr := createTestPullRequestForCIStatus(t, db, "test/repo", 1)
 
 	// Create initial CIStatus
 	now := time.Now()
@@ -231,7 +231,7 @@ func TestCIStatusRepository_FindByPRID(t *testing.T) {
 	repo := repositories.NewCIStatusRepositoryWithDB(db)
 
 	// Create test PR
-	pr := createTestPullRequest(t, db, "test/repo", 1)
+	pr := createTestPullRequestForCIStatus(t, db, "test/repo", 1)
 
 	// Create CIStatus records
 	now := time.Now()
@@ -271,7 +271,7 @@ func TestCIStatusRepository_FindByPRIDAndCheckSuiteID(t *testing.T) {
 	repo := repositories.NewCIStatusRepositoryWithDB(db)
 
 	// Create test PR
-	pr := createTestPullRequest(t, db, "test/repo", 1)
+	pr := createTestPullRequestForCIStatus(t, db, "test/repo", 1)
 
 	// Create CIStatus
 	now := time.Now()

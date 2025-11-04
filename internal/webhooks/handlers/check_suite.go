@@ -19,6 +19,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// Reuse deliveryHeader from issue_comment.go
+const deliveryHeader = "X-GitHub-Delivery"
+
 // CheckSuitePayload represents the GitHub webhook payload for check_suite events
 type CheckSuitePayload struct {
 	Action     string               `json:"action"`
