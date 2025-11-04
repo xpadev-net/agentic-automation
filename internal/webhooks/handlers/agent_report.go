@@ -323,6 +323,93 @@ func HandleAgentReport(c *gin.Context) {
 	}
 
 	// ------------------------------------------------------------------
+	// Retry progress notification (US3 T102)
+	// Post retry progress comment on failure when retry_count < 50
+	// ------------------------------------------------------------------
+	if req.Status == "failed" && agentRun.RetryCount < services.MaxRetryAttempts {
+		// Load Issue for repo context
+		issueRepo := repositories.NewIssueRepository()
+		issue, err := issueRepo.FindByID(agentRun.IssueID)
+		if err != nil {
+			logger.Warn("Failed to load Issue for retry progress notification",
+				zap.Error(err),
+				zap.Int("issue_id", agentRun.IssueID),
+				zap.Int("agent_run_id", agentRunID),
+			)
+		} else {
+			// Parse owner/repo from Issue.Repo (format: owner/repo)
+			owner := ""
+			repo := ""
+			if parts := strings.SplitN(issue.Repo, "/", 2); len(parts) == 2 {
+				owner, repo = parts[0], parts[1]
+			}
+
+			if owner != "" && repo != "" {
+				// Initialize GitHub App client (DI/global), then per-repo client
+				if appGitHubClient == nil {
+					if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+						appGitHubClient = ghApp
+					} else {
+						logger.Warn("Failed to init GitHub App client; skip retry progress notifications", zap.Error(err))
+						// Skip notifications safely
+					}
+				}
+
+				if appGitHubClient != nil {
+					rawClient, err := appGitHubClient.ForRepo(c.Request.Context(), owner, repo)
+					if err != nil {
+						logger.Warn("Failed to init per-repo GitHub client; skip retry progress notifications", zap.Error(err))
+					} else {
+						githubClient := clients.NewFromGitHub(rawClient, logger)
+						githubNotification := services.NewGitHubNotificationService(githubClient, logger)
+
+						prNumber := 0
+						if req.PRNumber != nil {
+							prNumber = *req.PRNumber
+						}
+
+						// Prepare error reason for notification
+						errorReason := finalErrorMessage
+						if errorReason == "" {
+							errorReason = "Agent execution failed"
+						}
+
+						// Notify retry progress (non-blocking, log errors but don't fail)
+						if err := githubNotification.NotifyRetryProgress(
+							c.Request.Context(),
+							owner,
+							repo,
+							issue.Number,
+							prNumber,
+							agentRun.RetryCount,
+							services.MaxRetryAttempts,
+							errorReason,
+							agentRun.IdempotencyKey,
+						); err != nil {
+							logger.Warn("Failed to post retry progress notifications",
+								zap.Error(err),
+								zap.String("owner", owner),
+								zap.String("repo", repo),
+								zap.Int("issue_number", issue.Number),
+								zap.Int("pr_number", prNumber),
+								zap.Int("agent_run_id", agentRunID),
+							)
+						} else {
+							logger.Info("Posted retry progress notifications",
+								zap.String("owner", owner),
+								zap.String("repo", repo),
+								zap.Int("issue_number", issue.Number),
+								zap.Int("pr_number", prNumber),
+								zap.Int("agent_run_id", agentRunID),
+							)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// PR created notification (US2 T083)
 	// Post status comments to both Issue and PR upon success
 	// ------------------------------------------------------------------
