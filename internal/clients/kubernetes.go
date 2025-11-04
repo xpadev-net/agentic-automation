@@ -411,6 +411,25 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 		},
 	}
 
+	// Set ImagePullSecrets if configured via environment variable
+	imagePullSecretName := appconfig.GetEnv("KUBERNETES_IMAGE_PULL_SECRET", "")
+	if imagePullSecretName != "" {
+		// Support comma-separated list of secret names
+		secrets := strings.Split(imagePullSecretName, ",")
+		imagePullSecrets := make([]corev1.LocalObjectReference, 0, len(secrets))
+		for _, secret := range secrets {
+			secret = strings.TrimSpace(secret)
+			if secret != "" {
+				imagePullSecrets = append(imagePullSecrets, corev1.LocalObjectReference{
+					Name: secret,
+				})
+			}
+		}
+		if len(imagePullSecrets) > 0 {
+			jobSpec.Template.Spec.ImagePullSecrets = imagePullSecrets
+		}
+	}
+
 	// Only set ActiveDeadlineSeconds if TimeoutMinutes is positive
 	// Kubernetes API validates this field as strictly positive integer
 	if config.TimeoutMinutes > 0 {
