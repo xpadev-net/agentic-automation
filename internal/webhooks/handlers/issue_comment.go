@@ -248,9 +248,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	if triggerService == nil {
 		triggerService = services.NewTriggerDetectionService(logger)
 	}
-	// GitHub 依存サービスは owner/repo 決定後に設定する
-	var authorizationService Authorization
-	var issueContextService IssueContext
+	// GitHub 依存サービスは owner/repo 決定後に設定する（まず注入済みを反映）
+	authorizationService := deps.AuthorizationService
+	issueContextService := deps.IssueContextService
 	agentTypeDetectorService := deps.AgentTypeDetectorService
 	if agentTypeDetectorService == nil {
 		agentTypeDetectorService = services.NewAgentTypeDetectorService(logger)
@@ -259,7 +259,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	if stateMachine == nil {
 		stateMachine = services.NewAgentRunStateMachine(agentRunRepo, logger)
 	}
-	var githubNotificationService GitHubNotification
+	githubNotificationService := deps.GitHubNotificationService
 
 	// Initialize Kubernetes job service
 	var jobService services.KubernetesJobService
