@@ -576,7 +576,7 @@ func TestAgentRunnerIntegration_NoFileChanges(t *testing.T) {
 	operatorServer, operatorMock := setupMockOperatorAPI(t)
 
 	// Setup environment
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// Create mock agent executor that doesn't create files
 	mockRunner := &MockAgentCommandRunnerNoChanges{
