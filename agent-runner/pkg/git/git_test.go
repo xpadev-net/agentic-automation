@@ -99,9 +99,12 @@ func TestCloneRepo_TokenMasking(t *testing.T) {
 	if strings.Contains(errorMsg, "secret-token-12345") {
 		t.Errorf("error message contains unmasked token: %s", errorMsg)
 	}
-	// Token should be masked as ***
+	// Token should be masked as *** and x-access-token:***
 	if !strings.Contains(errorMsg, "***") {
 		t.Logf("warning: token may not be masked in error message: %s", errorMsg)
+	}
+	if strings.Contains(errorMsg, "x-access-token:"+token) {
+		t.Errorf("error message contains unmasked x-access-token:<token> segment: %s", errorMsg)
 	}
 }
 

@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -32,9 +33,11 @@ func CloneRepo(token, repo, dest string) error {
 		return fmt.Errorf("repository must be in format owner/repo, got: %q", repo)
 	}
 
-	// Convert owner/repo to HTTPS URL with token
-	// Format: https://token@github.com/owner/repo.git
-	cloneURL := fmt.Sprintf("https://%s@github.com/%s.git", token, repo)
+	// Convert owner/repo to HTTPS URL with PAT as password
+	// Format: https://x-access-token:<token>@github.com/owner/repo.git
+	u := &url.URL{Scheme: "https", Host: "github.com", Path: fmt.Sprintf("/%s.git", repo)}
+	u.User = url.UserPassword("x-access-token", token)
+	cloneURL := u.String()
 
 	// Check if destination directory exists
 	if _, err := os.Stat(dest); err == nil {
@@ -52,9 +55,12 @@ func CloneRepo(token, repo, dest string) error {
 	cmd := exec.Command("git", "clone", cloneURL, dest)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Mask token in error output
+		// Mask token in error output (both raw token and x-access-token:<token>)
 		outputStr := strings.ReplaceAll(string(output), token, "***")
-		outputStr = strings.ReplaceAll(outputStr, cloneURL, fmt.Sprintf("https://***@github.com/%s.git", repo))
+		outputStr = strings.ReplaceAll(outputStr, "x-access-token:"+token, "x-access-token:***")
+		// Also mask the full URL
+		maskedURL := fmt.Sprintf("https://x-access-token:***@github.com/%s.git", repo)
+		outputStr = strings.ReplaceAll(outputStr, cloneURL, maskedURL)
 		return fmt.Errorf("git clone failed: %w, output: %s", err, outputStr)
 	}
 

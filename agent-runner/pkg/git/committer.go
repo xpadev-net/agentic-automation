@@ -55,7 +55,7 @@ func PushBranch(workDir, branchName, token string) error {
 		// First check if token is already present in URL credential position
 		// Supports any format: https://token@github.com:443/... or https://token@github.example.com/...
 		// Check for pattern: https://token@ or token@ followed by host
-		hasToken := strings.Contains(remoteUrl, token+"@") || strings.HasPrefix(remoteUrl, "https://"+token+"@") || strings.HasPrefix(remoteUrl, "http://"+token+"@")
+		hasToken := strings.Contains(remoteUrl, "x-access-token:"+token+"@") || strings.Contains(remoteUrl, token+"@") || strings.HasPrefix(remoteUrl, "https://x-access-token:"+token+"@")
 		if hasToken {
 			// Token is already in URL credential position, no need to update (supports non-canonical formats)
 			// This handles cases like https://token@github.com:443/... or https://token@github.example.com/...
@@ -67,8 +67,8 @@ func PushBranch(workDir, branchName, token string) error {
 				// Skip URL update and proceed with push using existing remote URL
 				// This maintains backward compatibility with non-standard remotes
 			} else {
-				// Successfully extracted repo path, rebuild URL with new token
-				newUrl := fmt.Sprintf("https://%s@github.com/%s.git", token, repoPath)
+				// Successfully extracted repo path, rebuild URL with PAT as password
+				newUrl := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", token, repoPath)
 				setUrlCmd := exec.Command("git", "remote", "set-url", "origin", newUrl)
 				setUrlCmd.Dir = workDir
 				if err := setUrlCmd.Run(); err != nil {
