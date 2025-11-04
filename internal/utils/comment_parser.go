@@ -31,13 +31,18 @@ func ContainsRunAgentTrigger(commentBody string) bool {
 }
 
 // ContainsCodexReviewTrigger checks if the comment body contains the "@codex review" trigger string.
-// This is a placeholder for future implementation (T092 - User Story 3).
-// Currently returns false for all inputs.
+// The check is case-insensitive as per GitHub webhook contract.
+// Returns false if commentBody is empty.
 //
 // Examples:
-//   - ContainsCodexReviewTrigger("@codex review") -> false (not yet implemented)
-//   - ContainsCodexReviewTrigger("@codex please review") -> false (not yet implemented)
+//   - ContainsCodexReviewTrigger("@codex review") -> true
+//   - ContainsCodexReviewTrigger("@CODEX REVIEW") -> true
+//   - ContainsCodexReviewTrigger("Please @codex review this PR") -> true
+//   - ContainsCodexReviewTrigger("hello world") -> false
+//   - ContainsCodexReviewTrigger("") -> false
 func ContainsCodexReviewTrigger(commentBody string) bool {
-	// Stub implementation - returns false until T092
-	return false
+	if commentBody == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(commentBody), strings.ToLower(CodexReviewTrigger))
 }
