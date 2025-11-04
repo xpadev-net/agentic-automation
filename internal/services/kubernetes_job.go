@@ -26,6 +26,17 @@ type KubernetesJobService interface {
 	//   - *batchv1.Job: Created Kubernetes Job, or nil on error
 	//   - error: Error if Job creation fails
 	CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string) (*batchv1.Job, error)
+	// CreateJobForAgentRunWithFeedback creates a Kubernetes Job with aggregated feedback for retry
+	// Parameters:
+	//   - ctx: Context for cancellation and timeout control
+	//   - agentRun: AgentRun record (must not be nil)
+	//   - issue: Issue record (must not be nil)
+	//   - prompt: Formatted prompt string for the agent (must not be empty)
+	//   - feedback: AggregatedFeedback containing review feedback and CI logs (may be nil)
+	// Returns:
+	//   - *batchv1.Job: Created Kubernetes Job, or nil on error
+	//   - error: Error if Job creation fails
+	CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback) (*batchv1.Job, error)
 }
 
 // kubernetesJobService implements KubernetesJobService interface
@@ -242,6 +253,125 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		zap.String("job_name", jobName),
 		zap.String("job_uid", string(job.UID)),
 		zap.String("namespace", job.Namespace),
+		zap.String("service", "kubernetes_job"),
+	)
+
+	return job, nil
+}
+
+// CreateJobForAgentRunWithFeedback creates a Kubernetes Job with aggregated feedback for retry
+func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback) (*batchv1.Job, error) {
+	// Input validation
+	if agentRun == nil {
+		s.logger.Error("agentRun must not be nil",
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("agentRun must not be nil")
+	}
+
+	if issue == nil {
+		s.logger.Error("issue must not be nil",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("issue must not be nil")
+	}
+
+	if prompt == "" {
+		s.logger.Error("prompt must not be empty",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("issue_id", issue.Number),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("prompt must not be empty")
+	}
+
+	// Get required environment variables
+	agentRunnerImage, err := getRequiredEnv("AGENT_RUNNER_IMAGE", s.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get optional environment variables with defaults
+	timeoutMinutes := getOptionalEnvInt("AGENT_RUNNER_TIMEOUT_MINUTES", 60, s.logger)
+
+	// Extract feedback values (handle nil case)
+	hasFeedback := feedback != nil
+	var previousAttempts string
+	var ciLogs string
+	var hasReviewFeedback bool
+	var hasCIFailure bool
+	var previousAttemptsLength int
+	var ciLogsLength int
+
+	if hasFeedback {
+		previousAttempts = feedback.PreviousAttemptsJSON
+		ciLogs = feedback.CILogs
+		hasReviewFeedback = feedback.HasReviewFeedback
+		hasCIFailure = feedback.HasCIFailure
+		previousAttemptsLength = len(previousAttempts)
+		ciLogsLength = len(ciLogs)
+	} else {
+		// Preserve existing behavior: extract previous attempts from AgentRun when feedback is nil
+		// This ensures agent-runner maintains context for retries even when aggregation fails
+		previousAttempts = extractPreviousAttemptsJSON(agentRun, s.logger)
+		ciLogs = "" // CILogs remains empty as per existing CreateJobForAgentRun behavior
+		previousAttemptsLength = len(previousAttempts)
+		ciLogsLength = 0
+	}
+
+	// Log job configuration before building
+	s.logger.Info("Building JobConfig for AgentRun with feedback",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("issue_id", issue.Number),
+		zap.String("repo", issue.Repo),
+		zap.String("agent_type", agentRun.AgentType),
+		zap.Int("retry_count", agentRun.RetryCount),
+		zap.Int("timeout_minutes", timeoutMinutes),
+		zap.Bool("has_feedback", hasFeedback),
+		zap.Bool("has_review_feedback", hasReviewFeedback),
+		zap.Bool("has_ci_failure", hasCIFailure),
+		zap.Int("previous_attempts_length", previousAttemptsLength),
+		zap.Int("ci_logs_length", ciLogsLength),
+		zap.String("service", "kubernetes_job"),
+	)
+
+	// Build JobConfig
+	jobConfig := &clients.JobConfig{
+		AgentRunID:       agentRun.ID,
+		RetryCount:       agentRun.RetryCount,
+		IssueID:          issue.Number,
+		Repo:             issue.Repo,
+		Prompt:           prompt,
+		PreviousAttempts: previousAttempts,
+		CILogs:           ciLogs,
+		AgentType:        agentRun.AgentType,
+		AgentRunnerImage: agentRunnerImage,
+		TimeoutMinutes:   timeoutMinutes,
+	}
+
+	// Generate job name
+	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+
+	// Create Kubernetes Job
+	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
+	if err != nil {
+		s.logger.Error("Failed to create Kubernetes Job with feedback",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("job_name", jobName),
+			zap.Error(err),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to create kubernetes job: %w", err)
+	}
+
+	// Log successful job creation
+	s.logger.Info("Kubernetes Job created successfully with feedback",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.String("job_name", jobName),
+		zap.String("job_uid", string(job.UID)),
+		zap.String("namespace", job.Namespace),
+		zap.Bool("has_feedback", hasFeedback),
 		zap.String("service", "kubernetes_job"),
 	)
 
