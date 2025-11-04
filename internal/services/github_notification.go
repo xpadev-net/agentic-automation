@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/models"
 	"agentic-automation/internal/utils"
 	"go.uber.org/zap"
 )
@@ -61,14 +62,30 @@ func formatExecutionStartMessage(agentType string, agentRunID int) string {
 Processing your request...`, agentType, agentRunID)
 }
 
+// getErrorMessageForNotification returns the error message for notification,
+// or a default message if the error message is nil or empty.
+//
+// Parameters:
+//   - errorMessage: Pointer to error message string (can be nil)
+//
+// Returns:
+//   - string: Error message or "No error details available" if nil/empty
+func getErrorMessageForNotification(errorMessage *string) string {
+	if errorMessage == nil || *errorMessage == "" {
+		return "No error details available"
+	}
+	return *errorMessage
+}
+
 // -----------------------------------------------------------------------------
 // PR Created Notification (US2 T083)
 // -----------------------------------------------------------------------------
 
 const (
-	prCreatedMarkerPrefix = "<!-- agent:pr-created:"
-	prCreatedTemplate     = "PR created: #%d (%s) branch=%s sha=%s"
-	maxCommentsToScan     = 30
+	prCreatedMarkerPrefix  = "<!-- agent:pr-created:"
+	maxRetriesMarkerPrefix = "<!-- agent:max-retries:"
+	prCreatedTemplate      = "PR created: #%d (%s) branch=%s sha=%s"
+	maxCommentsToScan      = 30
 )
 
 func shortSHA(sha string) string {
@@ -81,6 +98,32 @@ func shortSHA(sha string) string {
 func makePRCreatedBody(prNumber int, prURL, branch, sha, idempotencyKey string) string {
 	marker := prCreatedMarkerPrefix + idempotencyKey + " -->"
 	return marker + "\n" + fmt.Sprintf(prCreatedTemplate, prNumber, prURL, branch, shortSHA(sha))
+}
+
+// makeMaxRetriesBody formats a message body for max retries exceeded notification.
+// It includes an idempotency marker and formatted message with error details.
+//
+// Parameters:
+//   - agentRun: AgentRun instance with retry count, error message, and other details
+//   - idempotencyKey: Idempotency key for deduplication
+//
+// Returns:
+//   - string: Formatted message body with marker and notification content
+func makeMaxRetriesBody(agentRun *models.AgentRun, idempotencyKey string) string {
+	marker := maxRetriesMarkerPrefix + idempotencyKey + " -->"
+
+	message := fmt.Sprintf(`❌ Maximum retry limit (50) reached. Manual intervention required.
+
+**Total Attempts**: %d
+**Agent Type**: %s
+**Agent Run ID**: %d`, agentRun.RetryCount, agentRun.AgentType, agentRun.ID)
+
+	errorMsg := getErrorMessageForNotification(agentRun.ErrorMessage)
+	if errorMsg != "No error details available" {
+		message += fmt.Sprintf("\n\n**Last Error**:\n%s", errorMsg)
+	}
+
+	return marker + "\n" + message
 }
 
 // hasCommentWithMarker checks if a recent comment contains the given marker.
@@ -237,6 +280,105 @@ func (s *GitHubNotificationService) PostExecutionStartComment(ctx context.Contex
 		zap.Int("issue_number", issueNumber),
 		zap.String("agent_type", agentType),
 		zap.Int("agent_run_id", agentRunID),
+	)
+
+	return nil
+}
+
+// -----------------------------------------------------------------------------
+// Max Retries Exceeded Notification (US3 T100)
+// -----------------------------------------------------------------------------
+
+// NotifyMaxRetriesExceeded posts a notification comment to a GitHub Issue when
+// the maximum retry limit (50) has been reached. It is idempotent per idempotencyKey;
+// if a marker is already present, posting is skipped.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - agentRun: AgentRun instance with retry count, error message, and idempotency key
+//   - issue: Issue instance with repository information and issue number
+//
+// Returns:
+//   - error: Error if comment posting failed (GitHub API error, network error, etc.)
+func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
+	ctx context.Context,
+	agentRun *models.AgentRun,
+	issue *models.Issue,
+) error {
+	// Parameter validation
+	if agentRun == nil {
+		s.logger.Error("agentRun is required for NotifyMaxRetriesExceeded")
+		return fmt.Errorf("agentRun is required")
+	}
+	if issue == nil {
+		s.logger.Error("issue is required for NotifyMaxRetriesExceeded")
+		return fmt.Errorf("issue is required")
+	}
+
+	// Check if IdempotencyKey is empty
+	if agentRun.IdempotencyKey == "" {
+		s.logger.Warn("IdempotencyKey is empty for max retries notification",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("issue_id", issue.ID),
+		)
+	}
+
+	// Split Issue.Repo into owner and repo
+	parts := strings.SplitN(issue.Repo, "/", 2)
+	if len(parts) != 2 {
+		s.logger.Error("Invalid repo format",
+			zap.String("repo", issue.Repo),
+			zap.Int("issue_id", issue.ID),
+		)
+		return fmt.Errorf("invalid repo format: %s", issue.Repo)
+	}
+	owner := parts[0]
+	repo := parts[1]
+
+	// Log processing start
+	s.logger.Info("Posting max retries exceeded notification",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("issue_number", issue.Number),
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("retry_count", agentRun.RetryCount),
+		zap.String("idempotency_key", agentRun.IdempotencyKey),
+	)
+
+	// Generate idempotency marker
+	marker := maxRetriesMarkerPrefix + agentRun.IdempotencyKey + " -->"
+
+	// Check for existing comment with marker
+	exists, err := s.hasCommentWithMarker(ctx, owner, repo, issue.Number, marker)
+	if err != nil {
+		s.logger.Warn("Failed to scan issue comments for marker",
+			zap.Error(err),
+			zap.Int("issue_number", issue.Number),
+		)
+		// Continue processing even if scan fails
+	} else if exists {
+		s.logger.Info("Max retries notification already exists, skipping",
+			zap.Int("issue_number", issue.Number),
+		)
+		return nil
+	}
+
+	// Generate comment body
+	body := makeMaxRetriesBody(agentRun, agentRun.IdempotencyKey)
+
+	// Post comment
+	if err := s.postComment(ctx, owner, repo, issue.Number, body); err != nil {
+		s.logger.Error("Failed to post max retries notification",
+			zap.Error(err),
+			zap.Int("issue_number", issue.Number),
+		)
+		return err
+	}
+
+	// Log success
+	s.logger.Info("Max retries notification posted successfully",
+		zap.Int("issue_number", issue.Number),
+		zap.Int("agent_run_id", agentRun.ID),
 	)
 
 	return nil
