@@ -94,11 +94,11 @@ func (e *Executor) executeCursor(workDir, prompt string) (string, error) {
 
 	if e.cmdRunner != nil {
 		// Use injected command runner (for testing)
-		output, err = e.cmdRunner.Run("cursor", []string{"agent", "-p", prompt}, workDir)
+		output, err = e.cmdRunner.Run("cursor-agent", []string{"-p", prompt}, workDir)
 	} else {
-		// Build command: cursor agent -p "<prompt>"
+		// Build command: cursor-agent -p "<prompt>"
 		// Additional flags for working directory and headless mode may be needed
-		cmd := exec.Command("cursor", "agent", "-p", prompt)
+		cmd := exec.Command("cursor-agent", "-p", prompt)
 		cmd.Dir = workDir
 
 		// Preserve existing environment and ensure CURSOR_API_KEY is set
