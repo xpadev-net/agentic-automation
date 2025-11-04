@@ -147,6 +147,22 @@ func setupUS2TestDB(t *testing.T) *gorm.DB {
 		CREATE INDEX IF NOT EXISTS idx_agent_runs_state ON agent_runs(state);
 	`).Error)
 
+	// review_feedback
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS review_feedback (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			pr_id INTEGER NOT NULL,
+			source TEXT DEFAULT 'Codex',
+			content TEXT,
+			status TEXT DEFAULT 'requested',
+			approval_detected BOOLEAN DEFAULT FALSE,
+			github_comment_id INTEGER,
+			created_at DATETIME,
+			updated_at DATETIME
+		);
+		CREATE INDEX IF NOT EXISTS idx_review_feedback_pr_id ON review_feedback(pr_id);
+	`).Error)
+
 	// minimal supporting tables referenced elsewhere
 	require.NoError(t, db.Exec(`
 		CREATE TABLE IF NOT EXISTS operation_logs (

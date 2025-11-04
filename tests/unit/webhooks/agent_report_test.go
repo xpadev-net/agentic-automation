@@ -96,6 +96,22 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	`).Error
 	require.NoError(t, err, "Failed to create pull_requests table")
 
+	// Create ReviewFeedback table (required for US3 T103)
+	err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS review_feedback (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			pr_id INTEGER NOT NULL,
+			source TEXT DEFAULT 'Codex',
+			content TEXT,
+			status TEXT DEFAULT 'requested',
+			approval_detected BOOLEAN DEFAULT FALSE,
+			github_comment_id INTEGER,
+			created_at DATETIME,
+			updated_at DATETIME
+		)
+	`).Error
+	require.NoError(t, err, "Failed to create review_feedback table")
+
 	return db
 }
 
