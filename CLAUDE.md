@@ -66,13 +66,11 @@ git checkout -b feature/issue-123 master
 - インストール（Dockerfile の例）:
   ```dockerfile
   # Cursor CLI installation
-  RUN curl -fsSL https://download.cursor.com/install.sh | sh
+  RUN curl https://cursor.com/install -fsS | bash
   ```
 - 呼び出し例（agent-runner 内部からの起動イメージ）:
   ```bash
-  cursor agent \
-    --cwd /workspace \
-    --prompt "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+  cursor-agent -p "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
   Description:
   ${ISSUE_BODY}
@@ -80,9 +78,7 @@ git checkout -b feature/issue-123 master
   Previous Attempts:
   ${PREVIOUS_ATTEMPTS}
 
-  Please fix the issue and ensure all tests pass." \
-    --headless \
-    --no-confirm
+  Please fix the issue and ensure all tests pass."
   ```
 - 必須環境変数:
   - `CURSOR_API_KEY`
