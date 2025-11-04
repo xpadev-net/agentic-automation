@@ -31,16 +31,17 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X agent-runner/pkg/version.Commit=${
 # Stage 2: Runtime Image
 # ==============================================================================
 # Runtime image with Node.js and AI agent CLIs (Claude Code, Cursor)
-FROM node:22-alpine
+FROM node:22-slim
 
 # Install system tools required for agent execution
 # - git: Repository clone, commit, and push operations
 # - curl: Required for Cursor CLI installation script download
 # - bash: Required for executing hook scripts from .agent-config.yaml
-RUN apk add --no-cache git curl bash
+RUN apt-get update && apt-get install -y git curl bash && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
-RUN addgroup -S agent && adduser -S agent -G agent
+# --home option creates the home directory for the system user
+RUN addgroup --system agent && adduser --system --home /home/agent --group agent
 
 # Create workspace directory and set ownership
 RUN mkdir -p /workspace && chown -R agent:agent /workspace
