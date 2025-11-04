@@ -81,12 +81,16 @@ func (r *RetryOrchestrator) ShouldRetry(agentRun *models.AgentRun) bool {
 // IncrementRetryCount increments the retry count for an AgentRun and saves it to the database.
 // This method does NOT perform state transitions - it only updates the retry_count field.
 //
+// The method enforces the maximum retry limit (MaxRetryCount = 50). If the retry count
+// has already reached or exceeded the maximum, this method returns an error and does
+// not increment the count. This prevents retry_count from exceeding the configured maximum.
+//
 // Parameters:
 //   - ctx: Context for cancellation and timeout control (reserved for future use)
 //   - agentRun: AgentRun instance to update (must not be nil, must have valid ID)
 //
 // Returns:
-//   - error: Error if validation fails or database update fails
+//   - error: Error if validation fails, max retries already reached, or database update fails
 func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *models.AgentRun) error {
 	// Parameter validation
 	if agentRun == nil {
@@ -101,6 +105,19 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 			zap.String("service", "retry_orchestrator"),
 		)
 		return errors.New("agentRun.ID must not be zero")
+	}
+
+	// Check if max retries already reached before incrementing
+	if r.IsMaxRetriesReached(agentRun) {
+		err := fmt.Errorf("maximum retry count (%d) already reached, cannot increment", MaxRetryCount)
+		r.logger.Warn("Cannot increment retry count: max retries already reached",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("retry_count", agentRun.RetryCount),
+			zap.Int("max_retry_count", MaxRetryCount),
+			zap.Error(err),
+			zap.String("service", "retry_orchestrator"),
+		)
+		return err
 	}
 
 	// Log current retry count before increment
