@@ -151,9 +151,8 @@ func validateEnv() (*envConfig, error) {
 		return nil, fmt.Errorf("AGENT_TYPE must be 'claude-code' or 'cursor-agents', got: %q", cfg.AgentType)
 	}
 
-	if cfg.GitHubToken = os.Getenv("GITHUB_TOKEN"); cfg.GitHubToken == "" {
-		missing = append(missing, "GITHUB_TOKEN")
-	}
+	// GITHUB_TOKEN is optional; when absent, a GitHub App installation token will be used on-demand
+	cfg.GitHubToken = os.Getenv("GITHUB_TOKEN")
 
 	// Optional environment variables with defaults
 	retryCountStr := os.Getenv("RETRY_COUNT")

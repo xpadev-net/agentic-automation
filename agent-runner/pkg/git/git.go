@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	githubutil "agent-runner/pkg/github"
 	"github.com/google/go-github/v57/github"
 	"golang.org/x/oauth2"
 )
@@ -18,9 +19,6 @@ import (
 // dest: Destination directory path
 func CloneRepo(token, repo, dest string) error {
 	// Validate inputs
-	if token == "" {
-		return fmt.Errorf("GitHub token is required")
-	}
 	if repo == "" {
 		return fmt.Errorf("repository name is required")
 	}
@@ -33,7 +31,17 @@ func CloneRepo(token, repo, dest string) error {
 		return fmt.Errorf("repository must be in format owner/repo, got: %q", repo)
 	}
 
-	// Convert owner/repo to HTTPS URL with PAT as password
+	// Acquire token via GitHub App if not provided
+	if token == "" {
+		parts := strings.Split(repo, "/")
+		tokenFetched, err := githubutil.GetGitHubToken(context.Background(), parts[0], parts[1])
+		if err != nil {
+			return fmt.Errorf("failed to obtain GitHub App installation token: %w", err)
+		}
+		token = tokenFetched
+	}
+
+	// Convert owner/repo to HTTPS URL with token as password
 	// Format: https://x-access-token:<token>@github.com/owner/repo.git
 	u := &url.URL{Scheme: "https", Host: "github.com", Path: fmt.Sprintf("/%s.git", repo)}
 	u.User = url.UserPassword("x-access-token", token)
@@ -206,9 +214,6 @@ func HasChanges(workDir string) (bool, error) {
 // Returns: PR number (existing or newly created)
 func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 	// Validate inputs
-	if token == "" {
-		return 0, fmt.Errorf("GitHub token is required")
-	}
 	if repo == "" {
 		return 0, fmt.Errorf("repository name is required")
 	}
@@ -226,6 +231,15 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 	}
 	owner := repoParts[0]
 	repoName := repoParts[1]
+
+	// Acquire token via GitHub App if not provided
+	if token == "" {
+		t, err := githubutil.GetGitHubToken(context.Background(), owner, repoName)
+		if err != nil {
+			return 0, fmt.Errorf("failed to obtain GitHub App installation token: %w", err)
+		}
+		token = t
+	}
 
 	// Create GitHub API client
 	ctx := context.Background()
@@ -248,8 +262,18 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 
 	prs, resp, err := client.PullRequests.List(ctx, owner, repoName, opts)
 	if err != nil {
+		// 401/403 retry once with refreshed token
+		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+			if t, terr := githubutil.GetGitHubToken(ctx, owner, repoName); terr == nil && t != "" && t != token {
+				token = t
+				ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+				tc = oauth2.NewClient(ctx, ts)
+				client = github.NewClient(tc)
+				prs, resp, err = client.PullRequests.List(ctx, owner, repoName, opts)
+			}
+		}
 		// Check if it's a rate limit error
-		if resp != nil && resp.StatusCode == 403 {
+		if err != nil && resp != nil && resp.StatusCode == 403 {
 			return 0, fmt.Errorf("GitHub API rate limit exceeded")
 		}
 		return 0, fmt.Errorf("failed to list pull requests: %w", err)
@@ -285,6 +309,19 @@ func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
 		// Check if it's a rate limit error
 		if resp != nil && resp.StatusCode == 403 {
 			return 0, fmt.Errorf("GitHub API rate limit exceeded")
+		}
+		// Retry once on 401/403 unauthorized with refreshed token
+		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+			if t, terr := githubutil.GetGitHubToken(ctx, owner, repoName); terr == nil && t != "" && t != token {
+				token = t
+				ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+				tc = oauth2.NewClient(ctx, ts)
+				client = github.NewClient(tc)
+				pr, resp, err = client.PullRequests.Create(ctx, owner, repoName, newPR)
+				if err == nil {
+					// continue to success path
+				}
+			}
 		}
 		// If validation error, try fallback to "main" only if different from current base
 		if resp != nil && resp.StatusCode == 422 && base != "main" {
