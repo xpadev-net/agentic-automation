@@ -4,14 +4,16 @@ import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
+	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
+	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // mockAgentRunRepository is a mock implementation of AgentRunRepository for testing
@@ -97,7 +99,10 @@ func TestNewRetryOrchestrator(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
-	issueContextService := new(mockIssueContextService)
+
+	// Create a real IssueContextService for testing (requires GitHubClient)
+	githubClient := &clients.Client{} // Dummy client for IssueContextService
+	issueContextService := services.NewIssueContextService(githubClient, logger)
 
 	t.Run("nil logger uses default", func(t *testing.T) {
 		orchestrator := services.NewRetryOrchestrator(
@@ -154,7 +159,10 @@ func TestRetryOrchestrator_ShouldRetry(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
-	issueContextService := new(mockIssueContextService)
+
+	// Create a real IssueContextService for testing (requires GitHubClient)
+	githubClient := &clients.Client{} // Dummy client for IssueContextService
+	issueContextService := services.NewIssueContextService(githubClient, logger)
 
 	orchestrator := services.NewRetryOrchestrator(
 		agentRunRepo,
@@ -209,9 +217,6 @@ func TestRetryOrchestrator_ShouldRetry(t *testing.T) {
 func TestRetryOrchestrator_TriggerRetry_Skipped(t *testing.T) {
 	t.Skip("TriggerRetry tests require real IssueContextService - tested in integration tests")
 }
-
-// TriggerRetry tests are skipped - they require real IssueContextService
-// Full integration tests are in tests/integration/check_suite_to_retry_test.go
 
 func TestRetryOrchestrator_HandleMaxRetriesExceeded(t *testing.T) {
 	logger := zaptest.NewLogger(t)
