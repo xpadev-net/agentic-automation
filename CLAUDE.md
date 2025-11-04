@@ -115,7 +115,7 @@ git checkout -b feature/issue-123 master
 GitHub App（必須）:
 - `GITHUB_APP_ID`: GitHub App ID
 - `GITHUB_PRIVATE_KEY`: GitHub App 秘密鍵（PEM 本文、改行含む）
-- `GITHUB_WEBHOOK_SECRET`: Webhook 署名検証シークレット
+- `GITHUB_WEBHOOK_SECRET`: Webhook 署名検証シークレット（Operator のみ保持。agent-runner Pod には注入しない）
 
 **注**: 以前は `OPERATOR_API_URL` を直接設定していましたが、現在は Kubernetes Downward API を利用して自動的に URL を構築します。
 

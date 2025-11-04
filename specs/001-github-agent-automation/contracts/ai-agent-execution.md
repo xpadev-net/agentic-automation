@@ -49,7 +49,6 @@ agent-runner \
 | `WORKSPACE_DIR` | Working directory | `/workspace` (default) |
 | `GITHUB_APP_ID` | GitHub App ID | `123456` |
 | `GITHUB_PRIVATE_KEY` | GitHub App RSA private key (PEM, multi-line) | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n` |
-| `GITHUB_WEBHOOK_SECRET` | Webhook signature verification secret | `xxxx` |
 
 **Note**: The Operator API URL is automatically constructed from `KUBERNETES_NAMESPACE`, `OPERATOR_SERVICE_NAME`, and `OPERATOR_SERVICE_PORT` as: `http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}`
 
@@ -354,11 +353,6 @@ spec:
         secretKeyRef:
           name: operator-secrets
           key: github-private-key
-    - name: GITHUB_WEBHOOK_SECRET
-      valueFrom:
-        secretKeyRef:
-          name: operator-secrets
-          key: github-webhook-secret
     - name: ANTHROPIC_API_KEY
       valueFrom:
         secretKeyRef:
