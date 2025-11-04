@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -114,6 +115,9 @@ func setupTestRouterForCheckSuite(db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 
+	// Set required environment variables for middleware
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+
 	// Apply signature verification and idempotency middleware
 	router.POST("/webhooks/github",
 		middleware.VerifyWebhookSignature(),
@@ -166,6 +170,11 @@ func TestCheckSuite_HandleCheckSuite_NonCompletedAction(t *testing.T) {
 }
 
 func TestCheckSuite_HandleCheckSuite_NoPullRequests(t *testing.T) {
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	t.Cleanup(func() {
+		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+	})
+
 	db := setupTestDBForCheckSuite(t)
 	logger := zaptest.NewLogger(t)
 	router := setupTestRouterForCheckSuite(db, logger)
@@ -201,6 +210,11 @@ func TestCheckSuite_HandleCheckSuite_NoPullRequests(t *testing.T) {
 }
 
 func TestCheckSuite_HandleCheckSuite_PRNotFound(t *testing.T) {
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	t.Cleanup(func() {
+		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+	})
+
 	db := setupTestDBForCheckSuite(t)
 	logger := zaptest.NewLogger(t)
 	router := setupTestRouterForCheckSuite(db, logger)
@@ -223,6 +237,11 @@ func TestCheckSuite_HandleCheckSuite_PRNotFound(t *testing.T) {
 }
 
 func TestCheckSuite_HandleCheckSuite_CISuccess(t *testing.T) {
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	t.Cleanup(func() {
+		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+	})
+
 	db := setupTestDBForCheckSuite(t)
 	logger := zaptest.NewLogger(t)
 	router := setupTestRouterForCheckSuite(db, logger)
@@ -262,6 +281,11 @@ func TestCheckSuite_HandleCheckSuite_CISuccess(t *testing.T) {
 }
 
 func TestCheckSuite_HandleCheckSuite_NoConclusion(t *testing.T) {
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	t.Cleanup(func() {
+		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+	})
+
 	db := setupTestDBForCheckSuite(t)
 	logger := zaptest.NewLogger(t)
 	router := setupTestRouterForCheckSuite(db, logger)
