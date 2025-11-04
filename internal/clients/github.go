@@ -4,7 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"sync"
+	"time"
 
+	ghinstallation "github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v76/github"
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
@@ -597,4 +603,207 @@ func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (stri
 	}
 
 	return *repository.DefaultBranch, nil
+}
+
+// InstallationTokenCache caches installation tokens per installation ID
+type InstallationTokenCache struct {
+	mutex      sync.RWMutex
+	tokens     map[int64]*TokenEntry
+	appID      int64
+	privateKey []byte
+}
+
+// TokenEntry represents a cached token with its expiry
+type TokenEntry struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
+// GitHubClient provides GitHub App based client creation per repository
+type GitHubClient struct {
+	logger     *zap.Logger
+	tokenCache *InstallationTokenCache
+	// test hooks
+	baseURL    *url.URL
+	httpClient *http.Client
+	testMode   bool
+}
+
+// NewGitHubAppClient initializes a GitHubClient using env vars GITHUB_APP_ID and GITHUB_PRIVATE_KEY
+func NewGitHubAppClient(logger *zap.Logger) (*GitHubClient, error) {
+	appIDStr := os.Getenv("GITHUB_APP_ID")
+	privKey := os.Getenv("GITHUB_PRIVATE_KEY")
+	if appIDStr == "" || privKey == "" {
+		return nil, fmt.Errorf("missing GitHub App credentials")
+	}
+	appID, err := strconv.ParseInt(appIDStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid GITHUB_APP_ID: %w", err)
+	}
+	cache := &InstallationTokenCache{
+		mutex:      sync.RWMutex{},
+		tokens:     make(map[int64]*TokenEntry),
+		appID:      appID,
+		privateKey: []byte(privKey),
+	}
+	client := &GitHubClient{logger: logger, tokenCache: cache}
+	if os.Getenv("GITHUB_APP_TEST_MODE") == "1" {
+		client.testMode = true
+	}
+	return client, nil
+}
+
+// ForRepo returns an authenticated *github.Client for the given repository via Installation Token
+func (c *GitHubClient) ForRepo(ctx context.Context, owner, repo string) (*github.Client, error) {
+	installationID, err := c.resolveInstallationID(ctx, owner, repo)
+	if err != nil {
+		return nil, err
+	}
+	token, err := c.getInstallationToken(ctx, installationID)
+	if err != nil {
+		return nil, err
+	}
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	base := http.DefaultTransport
+	if c.httpClient != nil && c.httpClient.Transport != nil {
+		base = c.httpClient.Transport
+	}
+	oauthTr := &oauth2.Transport{Source: ts, Base: base}
+	hc := &http.Client{Transport: oauthTr}
+	if c.httpClient != nil {
+		hc.Timeout = c.httpClient.Timeout
+	}
+	client := github.NewClient(hc)
+	if c.baseURL != nil {
+		client.BaseURL = c.baseURL
+	}
+	return client, nil
+}
+
+// resolveInstallationID finds installation ID for owner/repo using App-scoped transport
+func (c *GitHubClient) resolveInstallationID(ctx context.Context, owner, repo string) (int64, error) {
+	var transport http.RoundTripper = http.DefaultTransport
+	if c.httpClient != nil && c.httpClient.Transport != nil {
+		transport = c.httpClient.Transport
+	}
+	var appHTTP *http.Client
+	if c.testMode {
+		appHTTP = &http.Client{Transport: transport}
+	} else {
+		appsTr, err := ghinstallation.NewAppsTransport(transport, c.tokenCache.appID, c.tokenCache.privateKey)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create apps transport: %w", err)
+		}
+		appHTTP = &http.Client{Transport: appsTr}
+	}
+	if c.httpClient != nil {
+		// copy timeouts from injected client if provided
+		appHTTP.Timeout = c.httpClient.Timeout
+	}
+	appClient := github.NewClient(appHTTP)
+	if c.baseURL != nil {
+		appClient.BaseURL = c.baseURL
+	}
+	inst, _, err := appClient.Apps.FindRepositoryInstallation(ctx, owner, repo)
+	if err != nil {
+		return 0, fmt.Errorf("failed to find installation for %s/%s: %w", owner, repo, err)
+	}
+	if inst == nil || inst.ID == nil {
+		return 0, fmt.Errorf("installation not found for %s/%s", owner, repo)
+	}
+	return *inst.ID, nil
+}
+
+// getInstallationToken returns a cached (or newly issued) installation token string
+func (c *GitHubClient) getInstallationToken(ctx context.Context, installationID int64) (string, error) {
+	// Fast path: read lock
+	c.tokenCache.mutex.RLock()
+	entry, ok := c.tokenCache.tokens[installationID]
+	if ok && entry != nil && time.Until(entry.ExpiresAt) > 2*time.Minute {
+		token := entry.Token
+		c.tokenCache.mutex.RUnlock()
+		return token, nil
+	}
+	c.tokenCache.mutex.RUnlock()
+
+	// Slow path: write lock and refresh
+	c.tokenCache.mutex.Lock()
+	defer c.tokenCache.mutex.Unlock()
+	// Re-check after acquiring lock
+	entry = c.tokenCache.tokens[installationID]
+	if entry != nil && time.Until(entry.ExpiresAt) > 2*time.Minute {
+		return entry.Token, nil
+	}
+
+	var transport http.RoundTripper = http.DefaultTransport
+	if c.httpClient != nil && c.httpClient.Transport != nil {
+		transport = c.httpClient.Transport
+	}
+	var appHTTP *http.Client
+	if c.testMode {
+		appHTTP = &http.Client{Transport: transport}
+	} else {
+		appsTr, err := ghinstallation.NewAppsTransport(transport, c.tokenCache.appID, c.tokenCache.privateKey)
+		if err != nil {
+			return "", fmt.Errorf("failed to create apps transport: %w", err)
+		}
+		appHTTP = &http.Client{Transport: appsTr}
+	}
+	if c.httpClient != nil {
+		appHTTP.Timeout = c.httpClient.Timeout
+	}
+	appClient := github.NewClient(appHTTP)
+	if c.baseURL != nil {
+		appClient.BaseURL = c.baseURL
+	}
+	// Request a new access token for the installation
+	instToken, _, err := appClient.Apps.CreateInstallationToken(ctx, installationID, &github.InstallationTokenOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to create installation token: %w", err)
+	}
+	if instToken == nil || instToken.Token == nil || instToken.ExpiresAt == nil {
+		return "", fmt.Errorf("invalid installation token response")
+	}
+	// Cache the token with expiry
+	c.tokenCache.tokens[installationID] = &TokenEntry{Token: *instToken.Token, ExpiresAt: instToken.ExpiresAt.Time}
+	return *instToken.Token, nil
+}
+
+// invalidateInstallationToken removes a cached token forcing refresh on next use
+func (c *GitHubClient) invalidateInstallationToken(installationID int64) {
+	c.tokenCache.mutex.Lock()
+	delete(c.tokenCache.tokens, installationID)
+	c.tokenCache.mutex.Unlock()
+}
+
+// DoWithClientRetry provides a retry wrapper for a single GitHub API call.
+// If the call returns 401/403, it invalidates the token and retries once.
+func (c *GitHubClient) DoWithClientRetry(
+	ctx context.Context,
+	owner, repo string,
+	call func(*github.Client) (*github.Response, error),
+) error {
+	installationID, err := c.resolveInstallationID(ctx, owner, repo)
+	if err != nil {
+		return err
+	}
+	client, err := c.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return err
+	}
+	resp, err := call(client)
+	if err == nil {
+		return nil
+	}
+	if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		// Token might be expired or revoked; invalidate and retry once
+		c.invalidateInstallationToken(installationID)
+		client, err = c.ForRepo(ctx, owner, repo)
+		if err != nil {
+			return err
+		}
+		_, err = call(client)
+		return err
+	}
+	return err
 }
