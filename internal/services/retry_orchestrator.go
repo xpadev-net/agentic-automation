@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
@@ -85,10 +86,10 @@ func (r *RetryOrchestrator) ShouldRetry(agentRun *models.AgentRun) bool {
 // has already reached or exceeded the maximum, this method returns an error and does
 // not increment the count. This prevents retry_count from exceeding the configured maximum.
 //
-// To avoid race conditions and data loss from stale input, this method reloads the latest
-// AgentRun from the database before incrementing. This ensures that concurrent updates
-// do not result in lost updates or retry_count being incorrectly decreased. The caller's
-// agentRun parameter is updated with the latest data from the database upon return.
+// This method uses an atomic UPDATE query at the repository level to prevent lost increments
+// under concurrent retries. The atomic operation ensures that even if multiple calls happen
+// simultaneously, each increment will be applied correctly without race conditions.
+// The caller's agentRun parameter is updated with the latest data from the database upon return.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control (reserved for future use)
@@ -113,56 +114,58 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 		return errors.New("agentRun.ID must not be zero")
 	}
 
-	// Reload the latest AgentRun from database to avoid overwriting with stale data
-	// This prevents race conditions where concurrent updates may have modified retry_count
-	latestAgentRun, err := r.agentRunRepo.GetByID(agentRun.ID)
-	if err != nil {
-		r.logger.Error("Failed to reload AgentRun from database",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Error(err),
-			zap.String("service", "retry_orchestrator"),
-		)
-		return fmt.Errorf("failed to reload AgentRun: %w", err)
-	}
+	// Get current retry count for logging (before atomic increment)
+	currentRetryCount := agentRun.RetryCount
 
-	// Check if max retries already reached using the latest data
-	if r.IsMaxRetriesReached(latestAgentRun) {
-		err := fmt.Errorf("maximum retry count (%d) already reached, cannot increment", MaxRetryCount)
-		r.logger.Warn("Cannot increment retry count: max retries already reached",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", latestAgentRun.RetryCount),
-			zap.Int("max_retry_count", MaxRetryCount),
-			zap.Error(err),
-			zap.String("service", "retry_orchestrator"),
-		)
-		// Update the caller's agentRun with latest data for consistency
-		*agentRun = *latestAgentRun
-		return err
-	}
-
-	// Log current retry count before increment (using latest data)
-	oldRetryCount := latestAgentRun.RetryCount
-	newRetryCount := oldRetryCount + 1
-
-	r.logger.Info("Incrementing retry count",
+	r.logger.Info("Incrementing retry count atomically",
 		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("old_retry_count", oldRetryCount),
-		zap.Int("new_retry_count", newRetryCount),
+		zap.Int("current_retry_count", currentRetryCount),
+		zap.Int("max_retry_count", MaxRetryCount),
 		zap.String("service", "retry_orchestrator"),
 	)
 
-	// Increment retry count on the latest data
-	latestAgentRun.RetryCount = newRetryCount
+	// Use atomic increment at the repository level to prevent lost increments under concurrent retries
+	// This uses SQL: UPDATE ... SET retry_count = retry_count + 1 WHERE id = ? AND retry_count < ?
+	// which ensures atomicity and prevents race conditions
+	newRetryCount, err := r.agentRunRepo.IncrementRetryCount(agentRun.ID, MaxRetryCount)
+	if err != nil {
+		// Check if error is due to max retries already reached
+		if strings.Contains(err.Error(), "already at or above maximum") {
+			r.logger.Warn("Cannot increment retry count: max retries already reached",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("retry_count", newRetryCount),
+				zap.Int("max_retry_count", MaxRetryCount),
+				zap.Error(err),
+				zap.String("service", "retry_orchestrator"),
+			)
+			// Reload full record to update caller's agentRun with latest data
+			latestAgentRun, reloadErr := r.agentRunRepo.GetByID(agentRun.ID)
+			if reloadErr == nil {
+				*agentRun = *latestAgentRun
+			}
+			return fmt.Errorf("maximum retry count (%d) already reached, cannot increment", MaxRetryCount)
+		}
 
-	// Save to database using the latest data
-	if err := r.agentRunRepo.Update(latestAgentRun); err != nil {
 		r.logger.Error("Failed to increment retry count",
 			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", newRetryCount),
 			zap.Error(err),
 			zap.String("service", "retry_orchestrator"),
 		)
 		return fmt.Errorf("failed to increment retry count: %w", err)
+	}
+
+	// Reload the full AgentRun record to update caller's agentRun with all latest data
+	latestAgentRun, err := r.agentRunRepo.GetByID(agentRun.ID)
+	if err != nil {
+		r.logger.Error("Failed to reload AgentRun after increment",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("new_retry_count", newRetryCount),
+			zap.Error(err),
+			zap.String("service", "retry_orchestrator"),
+		)
+		// Even if reload fails, update retry_count in the caller's struct
+		agentRun.RetryCount = newRetryCount
+		return fmt.Errorf("failed to reload AgentRun after increment: %w", err)
 	}
 
 	// Update the caller's agentRun with the latest data for consistency
@@ -171,7 +174,8 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 	// Log successful update
 	r.logger.Info("Retry count incremented successfully",
 		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", newRetryCount),
+		zap.Int("old_retry_count", currentRetryCount),
+		zap.Int("new_retry_count", newRetryCount),
 		zap.String("service", "retry_orchestrator"),
 	)
 
