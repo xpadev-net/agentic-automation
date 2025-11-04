@@ -139,20 +139,118 @@ func TestContainsCodexReviewTrigger(t *testing.T) {
 		input    string
 		expected bool
 	}{
+		// Basic cases
 		{
-			name:     "ShouldReturnFalseForAnyInput",
+			name:     "ExactMatch",
 			input:    "@codex review",
-			expected: false, // Stub implementation always returns false
+			expected: true,
 		},
 		{
-			name:     "ShouldReturnFalseForEmptyString",
+			name:     "AllUppercase",
+			input:    "@CODEX REVIEW",
+			expected: true,
+		},
+		{
+			name:     "AllLowercase",
+			input:    "@codex review",
+			expected: true,
+		},
+		{
+			name:     "MixedCase1",
+			input:    "@Codex Review",
+			expected: true,
+		},
+		{
+			name:     "MixedCase2",
+			input:    "@CODEX review",
+			expected: true,
+		},
+		{
+			name:     "EmptyString",
 			input:    "",
 			expected: false,
 		},
 		{
-			name:     "ShouldReturnFalseForOtherText",
-			input:    "some other text",
+			name:     "NotContained",
+			input:    "hello world",
 			expected: false,
+		},
+		{
+			name:     "OnlyWhitespace",
+			input:    "   ",
+			expected: false,
+		},
+		// Context cases
+		{
+			name:     "InSentence",
+			input:    "Please @codex review this PR",
+			expected: true,
+		},
+		{
+			name:     "AtStart",
+			input:    "@codex review please",
+			expected: true,
+		},
+		{
+			name:     "AtEnd",
+			input:    "please check @codex review",
+			expected: true,
+		},
+		{
+			name:     "WithWhitespaceAround",
+			input:    "  @codex review  ",
+			expected: true,
+		},
+		{
+			name:     "MultipleOccurrences",
+			input:    "@codex review and @codex review again",
+			expected: true,
+		},
+		{
+			name:     "WithSpecialChars",
+			input:    "Please @codex review now!",
+			expected: true,
+		},
+		{
+			name:     "WithNewlines",
+			input:    "@codex review\nand more",
+			expected: true,
+		},
+		// Edge cases
+		{
+			name:     "PrefixOnly",
+			input:    "@codex",
+			expected: false,
+		},
+		{
+			name:     "SuffixOnly",
+			input:    "review",
+			expected: false,
+		},
+		{
+			name:     "SimilarButDifferent",
+			input:    "@codex review-extra",
+			expected: true, // partial match
+		},
+		{
+			name:     "SimilarButDifferent2",
+			input:    "pre@codex review",
+			expected: true, // partial match
+		},
+		{
+			name:     "WithMarkdown",
+			input:    "`@codex review` in code",
+			expected: true,
+		},
+		{
+			name:     "LongComment",
+			input:    strings.Repeat("text ", 1000) + "@codex review",
+			expected: true,
+		},
+		{
+			name:     "WithUsernameMention",
+			input:    "@user @codex review",
+			expected: true,
 		},
 	}
 
@@ -160,7 +258,7 @@ func TestContainsCodexReviewTrigger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := ContainsCodexReviewTrigger(tt.input)
 			assert.Equal(t, tt.expected, got,
-				"ContainsCodexReviewTrigger(%q) = %v, want %v (stub implementation)",
+				"ContainsCodexReviewTrigger(%q) = %v, want %v",
 				tt.input, got, tt.expected)
 		})
 	}
