@@ -1,9 +1,9 @@
 package services_test
 
 import (
+	"agentic-automation/internal/clients"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -12,8 +12,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
-	batchv1 "k8s.io/api/batch/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // mockAgentRunRepository is a mock implementation of AgentRunRepository for testing
@@ -92,23 +90,8 @@ func (m *mockKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.
 	return args.Get(0).(*batchv1.Job), args.Error(1)
 }
 
-// mockIssueContextService is a mock implementation of IssueContextService for testing
-type mockIssueContextService struct {
-	mock.Mock
-}
-
-func (m *mockIssueContextService) CollectIssueContext(ctx context.Context, owner, repo string, issueNumber int) (*services.IssueContext, error) {
-	args := m.Called(ctx, owner, repo, issueNumber)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*services.IssueContext), args.Error(1)
-}
-
-func (m *mockIssueContextService) FormatPrompt(issueCtx *services.IssueContext) string {
-	args := m.Called(issueCtx)
-	return args.String(0)
-}
+// Note: IssueContextService is a concrete type, not an interface
+// We use real instances in tests, full integration tests are in tests/integration/
 
 func TestNewRetryOrchestrator(t *testing.T) {
 	logger := zaptest.NewLogger(t)
@@ -227,146 +210,17 @@ func TestRetryOrchestrator_TriggerRetry_Skipped(t *testing.T) {
 	t.Skip("TriggerRetry tests require real IssueContextService - tested in integration tests")
 }
 
-func _TestRetryOrchestrator_TriggerRetry(t *testing.T) {
-	ctx := context.Background()
-	logger := zaptest.NewLogger(t)
-
-	t.Run("successful retry", func(t *testing.T) {
-		agentRunRepo := new(mockAgentRunRepository)
-		jobService := new(mockKubernetesJobService)
-		issueContextService := new(mockIssueContextService)
-
-		agentRun := &models.AgentRun{
-			ID:         1,
-			IssueID:    100,
-			RetryCount: 5,
-			State:      "started",
-		}
-		issue := &models.Issue{
-			ID:     100,
-			Repo:   "test/owner",
-			Number: 1,
-		}
-		feedback := &services.AggregatedFeedback{
-			PreviousAttemptsJSON: `[{"retry_count":5,"error":"test error"}]`,
-			CILogs:               "test logs",
-			HasReviewFeedback:    true,
-			HasCIFailure:         true,
-		}
-
-		issueContext := &services.IssueContext{
-			Number: 1,
-			Title:  "Test Issue",
-			Body:   "Test body",
-		}
-
-		// Setup mocks
-		agentRunRepo.On("Update", mock.AnythingOfType("*models.AgentRun")).Return(nil).Once()
-		issueContextService.On("CollectIssueContext", ctx, "test", "owner", 1).Return(issueContext, nil).Once()
-		issueContextService.On("FormatPrompt", issueContext).Return("Test prompt").Once()
-		jobService.On("CreateJobForAgentRunWithFeedback", ctx, mock.AnythingOfType("*models.AgentRun"), issue, "Test prompt", feedback).Return(&batchv1.Job{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-job",
-			},
-		}, nil).Once()
-
-		orchestrator := services.NewRetryOrchestrator(
-			agentRunRepo,
-			jobService,
-			issueContextService,
-			logger,
-		)
-
-		err := orchestrator.TriggerRetry(ctx, agentRun, issue, feedback)
-		require.NoError(t, err)
-		assert.Equal(t, 6, agentRun.RetryCount)
-		assert.Equal(t, "queued", agentRun.State)
-
-		agentRunRepo.AssertExpectations(t)
-		jobService.AssertExpectations(t)
-		issueContextService.AssertExpectations(t)
-	})
-
-	t.Run("max retries exceeded calls HandleMaxRetriesExceeded", func(t *testing.T) {
-		agentRunRepo := new(mockAgentRunRepository)
-		jobService := new(mockKubernetesJobService)
-		issueContextService := new(mockIssueContextService)
-
-		agentRun := &models.AgentRun{
-			ID:         1,
-			IssueID:    100,
-			RetryCount: 49, // Will be incremented to 50
-			State:      "started",
-		}
-		issue := &models.Issue{
-			ID:     100,
-			Repo:   "test/owner",
-			Number: 1,
-		}
-
-		// Setup mocks
-		agentRunRepo.On("Update", mock.AnythingOfType("*models.AgentRun")).Return(nil).Times(2) // Once for retry, once for failed state
-
-		orchestrator := services.NewRetryOrchestrator(
-			agentRunRepo,
-			jobService,
-			issueContextService,
-			logger,
-		)
-
-		err := orchestrator.TriggerRetry(ctx, agentRun, issue, nil)
-		require.NoError(t, err)
-		assert.Equal(t, 50, agentRun.RetryCount)
-		assert.Equal(t, "failed", agentRun.State)
-
-		agentRunRepo.AssertExpectations(t)
-	})
-
-	t.Run("update fails returns error", func(t *testing.T) {
-		agentRunRepo := new(mockAgentRunRepository)
-		jobService := new(mockKubernetesJobService)
-		issueContextService := new(mockIssueContextService)
-
-		agentRun := &models.AgentRun{
-			ID:         1,
-			IssueID:    100,
-			RetryCount: 5,
-			State:      "started",
-		}
-		issue := &models.Issue{
-			ID:     100,
-			Repo:   "test/owner",
-			Number: 1,
-		}
-
-		// Setup mocks
-		agentRunRepo.On("Update", mock.AnythingOfType("*models.AgentRun")).Return(errors.New("update failed")).Once()
-
-		orchestrator := services.NewRetryOrchestrator(
-			agentRunRepo,
-			jobService,
-			issueContextService,
-			logger,
-		)
-
-		err := orchestrator.TriggerRetry(ctx, agentRun, issue, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "update agent run")
-
-		agentRunRepo.AssertExpectations(t)
-	})
-}
-
-// Note: The above _TestRetryOrchestrator_TriggerRetry is not executed (starts with _)
-// It's kept for reference but integration tests should cover TriggerRetry functionality
+// TriggerRetry tests are skipped - they require real IssueContextService
+// Full integration tests are in tests/integration/check_suite_to_retry_test.go
 
 func TestRetryOrchestrator_HandleMaxRetriesExceeded(t *testing.T) {
 	logger := zaptest.NewLogger(t)
+	githubClient := &clients.Client{} // Dummy client for IssueContextService
+	issueContextService := services.NewIssueContextService(githubClient, logger)
 
 	t.Run("successful handling", func(t *testing.T) {
 		agentRunRepo := new(mockAgentRunRepository)
 		jobService := new(mockKubernetesJobService)
-		issueContextService := new(mockIssueContextService)
 
 		agentRun := &models.AgentRun{
 			ID:         1,
@@ -395,7 +249,6 @@ func TestRetryOrchestrator_HandleMaxRetriesExceeded(t *testing.T) {
 	t.Run("update fails returns error", func(t *testing.T) {
 		agentRunRepo := new(mockAgentRunRepository)
 		jobService := new(mockKubernetesJobService)
-		issueContextService := new(mockIssueContextService)
 
 		agentRun := &models.AgentRun{
 			ID:         1,
