@@ -62,14 +62,12 @@ ${CI_LOGS}" \
 **Installation** (in Dockerfile):
 ```dockerfile
 # Cursor CLI installation
-RUN curl -fsSL https://download.cursor.com/install.sh | sh
+RUN curl https://cursor.com/install -fsS | bash
 ```
 
 **Invocation**:
 ```bash
-cursor agent \
-  --cwd /workspace \
-  --prompt "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+cursor-agent -p "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
 Description:
 ${ISSUE_BODY}
@@ -77,9 +75,7 @@ ${ISSUE_BODY}
 Previous Attempts:
 ${PREVIOUS_ATTEMPTS}
 
-Please fix the issue and ensure all tests pass." \
-  --headless \
-  --no-confirm
+Please fix the issue and ensure all tests pass."
 ```
 
 **Environment Variables Required**:
@@ -661,7 +657,7 @@ RUN apk add --no-cache git
 RUN npm install -g @anthropic/claude-code
 
 # Install Cursor CLI
-RUN curl -fsSL https://download.cursor.com/install.sh | sh
+RUN curl https://cursor.com/install -fsS | bash
 
 # Copy agent-runner binary
 COPY --from=builder /build/agent-runner /usr/local/bin/agent-runner

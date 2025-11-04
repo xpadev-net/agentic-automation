@@ -44,9 +44,9 @@ RUN apk add --no-cache git curl bash
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Install Cursor CLI using official installation script
-# Command: cursor agent --cwd /workspace --prompt "..." --headless --no-confirm
+# Command: cursor-agent -p "..."
 # Flags: -f (fail on HTTP errors), -s (silent), -S (show errors), -L (follow redirects)
-RUN curl -fsSL https://download.cursor.com/install.sh | sh
+RUN curl https://cursor.com/install -fsS | bash
 
 # Add Cursor CLI to PATH
 # Cursor CLI installs cursor-agent to $HOME/.local/bin
