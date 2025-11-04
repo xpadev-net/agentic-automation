@@ -135,6 +135,9 @@ func handleGitHubWebhook(c *gin.Context) {
 	case models.EventTypePullRequestReviewComment:
 		handlers.HandlePullRequestReviewComment(c)
 		return
+	case models.EventTypeCheckSuite:
+		handlers.HandleCheckSuite(c)
+		return
 	default:
 		// For unhandled event types, log and return 200 OK
 		// Get payload from context (set by signature middleware)
