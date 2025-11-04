@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/bradleyfalzon/ghinstallation/v2"
+	"github.com/golang-jwt/jwt/v4"
 	gh "github.com/google/go-github/v57/github"
 )
 
@@ -41,10 +42,12 @@ func GetGitHubToken(ctx context.Context, owner, repo string) (string, error) {
 		return "", errors.New("repository owner/name is required")
 	}
 
-	appsTr, err := ghinstallation.NewAppsTransportFromPrivateKey(http.DefaultTransport, appID, []byte(privateKey))
+	rsaKey, err := jwt.ParseRSAPrivateKeyFromPEM([]byte(privateKey))
 	if err != nil {
 		return "", err
 	}
+
+	appsTr := ghinstallation.NewAppsTransportFromPrivateKey(http.DefaultTransport, appID, rsaKey)
 
 	httpClient := &http.Client{Transport: appsTr}
 	ghClient := gh.NewClient(httpClient)
