@@ -197,13 +197,13 @@
 - [ ] T094 [US3] Implement webhook handler for check_suite events (CI results) in internal/webhooks/handlers/check_suite.go
 - [x] T095 [US3] Create CI failure analyzer parsing check logs in internal/services/ci_failure.go
 - [ ] T096 [US3] Implement retry orchestrator managing retry_count (max 50) in internal/services/retry_orchestrator.go
-- [ ] T097 [US3] Create feedback aggregator combining review + CI results in internal/services/feedback_aggregator.go
+- [x] T097 [US3] Create feedback aggregator combining review + CI results in internal/services/feedback_aggregator.go
 - [ ] T098 [US3] Implement K8s Job re-creation with aggregated feedback for AI retry in internal/services/kubernetes_job.go
 - [ ] T099 [US3] Add retry count validation and failure threshold (50) in internal/services/retry_orchestrator.go
 - [ ] T100 [US3] Implement failure notification to GitHub Issue on max retries in internal/services/github_notification.go
 - [ ] T101 [US3] Implement failure notification to Discord webhook on max retries in internal/services/discord_notification.go
 - [ ] T102 [US3] Add GitHub status comment updates for retry progress in internal/services/github_notification.go
-- [ ] T103 [US3] Store ReviewFeedback records for each review cycle in internal/repositories/review_feedback.go
+- [x] T103 [US3] Store ReviewFeedback records for each review cycle in internal/repositories/review_feedback.go
 
 ### Tests for User Story 3 (Test-First Development)
 
