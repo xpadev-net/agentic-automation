@@ -70,6 +70,11 @@ func (m *mockAgentRunRepository) GetByPRID(prID int) ([]*models.AgentRun, error)
 	return args.Get(0).([]*models.AgentRun), args.Error(1)
 }
 
+func (m *mockAgentRunRepository) IncrementRetryCount(agentRunID int, maxRetryCount int) (int, error) {
+	args := m.Called(agentRunID, maxRetryCount)
+	return args.Int(0), args.Error(1)
+}
+
 // mockKubernetesJobService is a mock implementation of KubernetesJobService for testing
 type mockKubernetesJobService struct {
 	mock.Mock
@@ -134,15 +139,16 @@ func TestNewRetryOrchestrator(t *testing.T) {
 		})
 	})
 
-	t.Run("nil jobService panics", func(t *testing.T) {
-		assert.Panics(t, func() {
-			services.NewRetryOrchestrator(
-				agentRunRepo,
-				nil,
-				issueContextService,
-				logger,
-			)
-		})
+	// Note: jobService is now optional (can be nil) - TriggerRetry will fail if called with nil jobService
+	// This allows using RetryOrchestrator for basic retry count operations without Kubernetes dependencies
+	t.Run("nil jobService allowed", func(t *testing.T) {
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			nil, // nil jobService is now allowed
+			issueContextService,
+			logger,
+		)
+		require.NotNil(t, orchestrator)
 	})
 
 	t.Run("nil issueContextService panics", func(t *testing.T) {

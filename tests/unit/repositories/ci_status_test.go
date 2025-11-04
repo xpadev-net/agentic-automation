@@ -190,8 +190,8 @@ func TestCIStatusRepository_FindByCheckSuiteID(t *testing.T) {
 	repo := repositories.NewCIStatusRepositoryWithDB(db)
 
 	// Create test PRs
-	pr1 := createTestPullRequest(t, db, "test/repo", 1)
-	pr2 := createTestPullRequest(t, db, "test/repo", 2)
+	pr1 := createTestPullRequest(t, db, "test/repo", 1, nil)
+	pr2 := createTestPullRequest(t, db, "test/repo", 2, nil)
 
 	// Create CIStatus records
 	now := time.Now()

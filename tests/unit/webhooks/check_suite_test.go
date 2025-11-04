@@ -3,9 +3,13 @@ package webhooks
 import (
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
+	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/webhooks/handlers"
 	"agentic-automation/internal/webhooks/middleware"
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,6 +111,7 @@ func setupTestDBForCheckSuite(t *testing.T) *gorm.DB {
 }
 
 // setupTestRouterForCheckSuite creates a Gin router with signature verification middleware
+// It uses HandleCheckSuiteWithDeps to inject test dependencies
 func setupTestRouterForCheckSuite(db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -118,11 +123,31 @@ func setupTestRouterForCheckSuite(db *gorm.DB, logger *zap.Logger) *gin.Engine {
 	// Set required environment variables for middleware
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 
+	// Initialize repositories
+	prRepo := repositories.NewPullRequestRepository(db)
+	ciStatusRepo := repositories.NewCIStatusRepository()
+	agentRunRepo := repositories.NewAgentRunRepository(db)
+	issueRepo := repositories.NewIssueRepository()
+
+	// Build test dependencies
+	deps := handlers.CheckSuiteDeps{
+		Logger:                logger,
+		PullRequestRepository: prRepo,
+		CIStatusRepository:    ciStatusRepo,
+		AgentRunRepository:    agentRunRepo,
+		IssueRepository:       issueRepo,
+		// KubernetesJobService is nil - handler will skip retry logic that requires it
+		// This is acceptable for tests that don't test retry functionality
+	}
+
 	// Apply signature verification and idempotency middleware
+	// Use HandleCheckSuiteWithDeps to inject test dependencies
 	router.POST("/webhooks/github",
 		middleware.VerifyWebhookSignature(),
 		middleware.IdempotencyMiddleware(),
-		handlers.HandleCheckSuite)
+		func(c *gin.Context) {
+			handlers.HandleCheckSuiteWithDeps(c, deps)
+		})
 
 	return router
 }
@@ -147,7 +172,20 @@ func createTestCheckSuitePayload(action string, conclusion *string, prNumber int
 	}
 }
 
+// generateHMACSignature generates a valid HMAC-SHA256 signature for the given payload and secret
+func generateHMACSignature(payload []byte, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	signature := hex.EncodeToString(mac.Sum(nil))
+	return "sha256=" + signature
+}
+
 func TestCheckSuite_HandleCheckSuite_NonCompletedAction(t *testing.T) {
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	t.Cleanup(func() {
+		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+	})
+
 	db := setupTestDBForCheckSuite(t)
 	logger := zaptest.NewLogger(t)
 	router := setupTestRouterForCheckSuite(db, logger)
@@ -158,7 +196,7 @@ func TestCheckSuite_HandleCheckSuite_NonCompletedAction(t *testing.T) {
 	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(payloadBytes))
 	req.Header.Set("X-GitHub-Event", "check_suite")
 	req.Header.Set("X-GitHub-Delivery", "test-delivery-123")
-	req.Header.Set("X-Hub-Signature-256", "sha256=test-signature")
+	req.Header.Set("X-Hub-Signature-256", generateHMACSignature(payloadBytes, "test-secret"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -198,7 +236,7 @@ func TestCheckSuite_HandleCheckSuite_NoPullRequests(t *testing.T) {
 	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(payloadBytes))
 	req.Header.Set("X-GitHub-Event", "check_suite")
 	req.Header.Set("X-GitHub-Delivery", "test-delivery-123")
-	req.Header.Set("X-Hub-Signature-256", "sha256=test-signature")
+	req.Header.Set("X-Hub-Signature-256", generateHMACSignature(payloadBytes, "test-secret"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -225,7 +263,7 @@ func TestCheckSuite_HandleCheckSuite_PRNotFound(t *testing.T) {
 	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(payloadBytes))
 	req.Header.Set("X-GitHub-Event", "check_suite")
 	req.Header.Set("X-GitHub-Delivery", "test-delivery-123")
-	req.Header.Set("X-Hub-Signature-256", "sha256=test-signature")
+	req.Header.Set("X-Hub-Signature-256", generateHMACSignature(payloadBytes, "test-secret"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -260,7 +298,7 @@ func TestCheckSuite_HandleCheckSuite_CISuccess(t *testing.T) {
 	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(payloadBytes))
 	req.Header.Set("X-GitHub-Event", "check_suite")
 	req.Header.Set("X-GitHub-Delivery", "test-delivery-123")
-	req.Header.Set("X-Hub-Signature-256", "sha256=test-signature")
+	req.Header.Set("X-Hub-Signature-256", generateHMACSignature(payloadBytes, "test-secret"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -274,7 +312,7 @@ func TestCheckSuite_HandleCheckSuite_CISuccess(t *testing.T) {
 	// Verify CIStatus was created
 	var ciStatus models.CIStatus
 	err := db.Where("check_suite_id = ? AND pr_id = ?", "12345", pr.ID).First(&ciStatus).Error
-	require.NoError(t, err)
+	require.NoError(t, err, "CIStatus should be created")
 	assert.Equal(t, "completed", ciStatus.Status)
 	assert.NotNil(t, ciStatus.Conclusion)
 	assert.Equal(t, "success", *ciStatus.Conclusion)
@@ -304,7 +342,7 @@ func TestCheckSuite_HandleCheckSuite_NoConclusion(t *testing.T) {
 	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(payloadBytes))
 	req.Header.Set("X-GitHub-Event", "check_suite")
 	req.Header.Set("X-GitHub-Delivery", "test-delivery-123")
-	req.Header.Set("X-Hub-Signature-256", "sha256=test-signature")
+	req.Header.Set("X-Hub-Signature-256", generateHMACSignature(payloadBytes, "test-secret"))
 
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
