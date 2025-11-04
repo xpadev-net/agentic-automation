@@ -65,6 +65,14 @@ type User struct {
 
 const deliveryHeader = "X-GitHub-Delivery"
 
+// appGitHubClient holds a process-wide GitHub App client (DI from server)
+var appGitHubClient *clients.GitHubClient
+
+// SetAppGitHubClient allows the server to inject a shared GitHub App client
+func SetAppGitHubClient(c *clients.GitHubClient) {
+	appGitHubClient = c
+}
+
 // HandleIssueComment handles GitHub issue_comment webhook events
 // It detects "/run-agent" trigger and initiates AI agent execution
 func HandleIssueComment(c *gin.Context) {
@@ -77,19 +85,23 @@ func HandleIssueComment(c *gin.Context) {
 		Logger: logger,
 	}
 
-	// Initialize GitHub client
-	if token, err := config.GetEnvRequired("GITHUB_TOKEN"); err == nil {
-		if gh, err := clients.NewClient(token, logger); err == nil {
-			deps.GitHubClient = gh
-		} else {
-			logger.Error("Failed to initialize GitHub client", zap.Error(err))
-			c.Error(err)
-			return
+	// テスト互換: 許可フラグがあり token があれば従来の token クライアントを利用
+	if config.GetEnv("GITHUB_APP_TEST_ALLOW_TOKEN", "0") == "1" {
+		if token := config.GetEnv("GITHUB_TOKEN", ""); token != "" {
+			if gh, err := clients.NewClient(token, logger); err == nil {
+				deps.GitHubClient = gh
+			}
 		}
-	} else {
-		logger.Error("Failed to get GitHub token", zap.Error(err))
-		c.Error(err)
-		return
+	}
+	// GitHub App クライアントは DI から取得（なければここで生成）
+	if appGitHubClient == nil {
+		ghApp, err := clients.NewGitHubAppClient(logger)
+		if err != nil {
+			// テスト環境などで資格情報が無い場合でもここではエラーにせず後段で処理
+			logger.Warn("GitHub App client not initialized", zap.Error(err))
+		} else {
+			appGitHubClient = ghApp
+		}
 	}
 
 	// Initialize Kubernetes client
@@ -101,14 +113,13 @@ func HandleIssueComment(c *gin.Context) {
 	}
 	deps.KubernetesClient = k8sClient
 
-	// Initialize services
+	// Initialize services that do not require GitHub client here
 	agentRunRepo := repositories.NewAgentRunRepository(db)
 	deps.TriggerService = services.NewTriggerDetectionService(logger)
-	deps.AuthorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
-	deps.IssueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
 	deps.AgentTypeDetectorService = services.NewAgentTypeDetectorService(logger)
 	deps.StateMachine = services.NewAgentRunStateMachine(agentRunRepo, logger)
-	deps.GitHubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
+	// GitHub 依存サービスの生成は HandleIssueCommentWithDeps 内で
+	// owner/repo 決定後に per-repo クライアントを用意してから行う
 
 	HandleIssueCommentWithDeps(c, deps)
 }
@@ -236,22 +247,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	if triggerService == nil {
 		triggerService = services.NewTriggerDetectionService(logger)
 	}
+	// GitHub 依存サービスは owner/repo 決定後に設定する（まず注入済みを反映）
 	authorizationService := deps.AuthorizationService
-	if authorizationService == nil {
-		if deps.GitHubClient == nil {
-			c.Error(errors.New("github client not provided"))
-			return
-		}
-		authorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
-	}
 	issueContextService := deps.IssueContextService
-	if issueContextService == nil {
-		if deps.GitHubClient == nil {
-			c.Error(errors.New("github client not provided"))
-			return
-		}
-		issueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
-	}
 	agentTypeDetectorService := deps.AgentTypeDetectorService
 	if agentTypeDetectorService == nil {
 		agentTypeDetectorService = services.NewAgentTypeDetectorService(logger)
@@ -261,13 +259,6 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		stateMachine = services.NewAgentRunStateMachine(agentRunRepo, logger)
 	}
 	githubNotificationService := deps.GitHubNotificationService
-	if githubNotificationService == nil {
-		if deps.GitHubClient == nil {
-			c.Error(errors.New("github client not provided"))
-			return
-		}
-		githubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
-	}
 
 	// Initialize Kubernetes job service
 	var jobService services.KubernetesJobService
@@ -339,6 +330,37 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 	owner := repoParts[0]
 	repo := repoParts[1]
+
+	// 依存が未注入の場合のみ、GitHub クライアントとサービスを構築
+	if authorizationService == nil || issueContextService == nil || githubNotificationService == nil {
+		if deps.GitHubClient == nil {
+			if appGitHubClient == nil {
+				c.Error(errors.New("github client not provided"))
+				return
+			}
+			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
+			if err != nil {
+				logger.Error("Failed to init per-repo GitHub client",
+					zap.Error(err),
+					zap.String("owner", owner),
+					zap.String("repo", repo),
+					zap.String("delivery_id", deliveryID),
+				)
+				c.Error(err)
+				return
+			}
+			deps.GitHubClient = clients.NewFromGitHub(rawClient, logger)
+		}
+		if authorizationService == nil {
+			authorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
+		}
+		if issueContextService == nil {
+			issueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
+		}
+		if githubNotificationService == nil {
+			githubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
+		}
+	}
 
 	hasPermission, err := authorizationService.CheckPermission(ctx, owner, repo, payload.Comment.User.Login)
 	if err != nil {

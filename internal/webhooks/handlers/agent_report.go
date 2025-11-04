@@ -327,56 +327,63 @@ func HandleAgentReport(c *gin.Context) {
 			}
 
 			if owner != "" && repo != "" {
-				// Initialize GitHub client and notification service
-				githubToken, tokenErr := config.GetEnvRequired("GITHUB_TOKEN")
-				if tokenErr != nil {
-					logger.Warn("Missing GITHUB_TOKEN; skip PR created notifications", zap.Error(tokenErr))
-				} else {
-					githubClient, cliErr := clients.NewClient(githubToken, logger)
-					if cliErr != nil {
-						logger.Warn("Failed to init GitHub client; skip PR created notifications", zap.Error(cliErr))
+				// Initialize GitHub App client (DI/global), then per-repo client
+				if appGitHubClient == nil {
+					if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+						appGitHubClient = ghApp
 					} else {
-						githubNotification := services.NewGitHubNotificationService(githubClient, logger)
-
-						prNumber := *req.PRNumber
-						prURL := "https://github.com/" + owner + "/" + repo + "/pull/" + strconv.Itoa(prNumber)
-						branch := req.Branch
-						sha := req.CommitSHA
-						idemKey := agentRun.IdempotencyKey
-
-						if err := githubNotification.NotifyPRCreated(
-							c.Request.Context(),
-							owner,
-							repo,
-							issue.Number,
-							prNumber,
-							prURL,
-							branch,
-							sha,
-							idemKey,
-						); err != nil {
-							logger.Warn("Failed to post PR created notifications",
-								zap.Error(err),
-								zap.String("owner", owner),
-								zap.String("repo", repo),
-								zap.Int("issue_number", issue.Number),
-								zap.Int("pr_number", prNumber),
-							)
-						} else {
-							logger.Info("Posted PR created notifications",
-								zap.String("owner", owner),
-								zap.String("repo", repo),
-								zap.Int("issue_number", issue.Number),
-								zap.Int("pr_number", prNumber),
-							)
-						}
+						logger.Warn("Failed to init GitHub App client; skip PR created notifications", zap.Error(err))
+						// Skip notifications safely
+						goto RESP
 					}
+				}
+
+				rawClient, err := appGitHubClient.ForRepo(c.Request.Context(), owner, repo)
+				if err != nil {
+					logger.Warn("Failed to init per-repo GitHub client; skip PR created notifications", zap.Error(err))
+					goto RESP
+				}
+				githubClient := clients.NewFromGitHub(rawClient, logger)
+				githubNotification := services.NewGitHubNotificationService(githubClient, logger)
+
+				prNumber := *req.PRNumber
+				prURL := "https://github.com/" + owner + "/" + repo + "/pull/" + strconv.Itoa(prNumber)
+				branch := req.Branch
+				sha := req.CommitSHA
+				idemKey := agentRun.IdempotencyKey
+
+				if err := githubNotification.NotifyPRCreated(
+					c.Request.Context(),
+					owner,
+					repo,
+					issue.Number,
+					prNumber,
+					prURL,
+					branch,
+					sha,
+					idemKey,
+				); err != nil {
+					logger.Warn("Failed to post PR created notifications",
+						zap.Error(err),
+						zap.String("owner", owner),
+						zap.String("repo", repo),
+						zap.Int("issue_number", issue.Number),
+						zap.Int("pr_number", prNumber),
+					)
+				} else {
+					logger.Info("Posted PR created notifications",
+						zap.String("owner", owner),
+						zap.String("repo", repo),
+						zap.Int("issue_number", issue.Number),
+						zap.Int("pr_number", prNumber),
+					)
 				}
 			}
 		}
 	}
 
 	// Return success response
+RESP:
 	c.JSON(http.StatusOK, ReportResponse{
 		Message:    "Report received, AgentRun #" + idStr + " updated to " + req.Status,
 		AgentRunID: agentRunID,

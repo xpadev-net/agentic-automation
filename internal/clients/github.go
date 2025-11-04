@@ -67,6 +67,19 @@ func NewClient(token string, logger *zap.Logger) (*Client, error) {
 	}, nil
 }
 
+// NewFromGitHub wraps an existing *github.Client with our Client wrapper.
+// Use this when an authenticated client is prepared elsewhere (e.g., via GitHub App installation token).
+func NewFromGitHub(g *github.Client, logger *zap.Logger) *Client {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &Client{
+		Client:      g,
+		logger:      logger,
+		retryConfig: nil,
+	}
+}
+
 // handleRateLimit extracts and logs rate limit information from response
 func (c *Client) handleRateLimit(resp *github.Response) {
 	if resp != nil && resp.Rate.Remaining > 0 {
@@ -633,12 +646,20 @@ type GitHubClient struct {
 func NewGitHubAppClient(logger *zap.Logger) (*GitHubClient, error) {
 	appIDStr := os.Getenv("GITHUB_APP_ID")
 	privKey := os.Getenv("GITHUB_PRIVATE_KEY")
+	testMode := os.Getenv("GITHUB_APP_TEST_MODE") == "1"
+	// In test mode, allow missing credentials to avoid hard dependency on secrets
 	if appIDStr == "" || privKey == "" {
-		return nil, fmt.Errorf("missing GitHub App credentials")
+		if !testMode {
+			return nil, fmt.Errorf("missing GitHub App credentials")
+		}
 	}
-	appID, err := strconv.ParseInt(appIDStr, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid GITHUB_APP_ID: %w", err)
+	var appID int64
+	if appIDStr != "" {
+		var err error
+		appID, err = strconv.ParseInt(appIDStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid GITHUB_APP_ID: %w", err)
+		}
 	}
 	cache := &InstallationTokenCache{
 		mutex:      sync.RWMutex{},
@@ -647,7 +668,7 @@ func NewGitHubAppClient(logger *zap.Logger) (*GitHubClient, error) {
 		privateKey: []byte(privKey),
 	}
 	client := &GitHubClient{logger: logger, tokenCache: cache}
-	if os.Getenv("GITHUB_APP_TEST_MODE") == "1" {
+	if testMode {
 		client.testMode = true
 	}
 	return client, nil
