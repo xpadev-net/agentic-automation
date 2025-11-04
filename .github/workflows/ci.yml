@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: ['**']
 
+# Use minimal default permissions for all jobs
+permissions:
+  contents: read
+
 jobs:
   # 依存関係チェック
   deps:

@@ -68,7 +68,7 @@ ENTRYPOINT ["operator"]
 # Required Environment Variables:
 # - DATABASE_URL: MySQL connection string (mysql://user:pass@tcp(host:port)/db?...)
 # - GITHUB_APP_ID: GitHub App ID
-# - GITHUB_PRIVATE_KEY: GitHub App RSA private key (PEM format, single-line)
+# - GITHUB_PRIVATE_KEY: GitHub App RSA private key (PEM format, multi-line supported)
 # - GITHUB_WEBHOOK_SECRET: Webhook signature verification secret
 # - OPERATOR_API_TOKEN: Bearer token for agent-runner authentication
 # - AGENT_RUNNER_IMAGE: Docker image for agent-runner pods
@@ -87,6 +87,9 @@ ENTRYPOINT ["operator"]
 # - AI_AGENT_TIMEOUT_MINUTES: Pod execution timeout (default: 30)
 # - AI_AGENT_MAX_CONCURRENT_PODS: Max concurrent executions (default: 10)
 # - AI_AGENT_DEFAULT_TYPE: Default agent type (claude-code/cursor-agents)
+#
+# Note: GitHub authentication uses GitHub App installation tokens by default.
+#       Personal Access Tokens (PAT) are not supported.
 # - OPERATOR_SERVICE_NAME: Operator service name (default: agent-operator)
 # - OPERATOR_SERVICE_PORT: Operator service port (default: 3000)
 # - S3_USE_PATH_STYLE: Use path-style URLs (true for MinIO, false for AWS S3)
