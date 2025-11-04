@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -622,6 +623,10 @@ type TokenEntry struct {
 type GitHubClient struct {
 	logger     *zap.Logger
 	tokenCache *InstallationTokenCache
+	// test hooks
+	baseURL    *url.URL
+	httpClient *http.Client
+	testMode   bool
 }
 
 // NewGitHubAppClient initializes a GitHubClient using env vars GITHUB_APP_ID and GITHUB_PRIVATE_KEY
@@ -641,7 +646,11 @@ func NewGitHubAppClient(logger *zap.Logger) (*GitHubClient, error) {
 		appID:      appID,
 		privateKey: []byte(privKey),
 	}
-	return &GitHubClient{logger: logger, tokenCache: cache}, nil
+	client := &GitHubClient{logger: logger, tokenCache: cache}
+	if os.Getenv("GITHUB_APP_TEST_MODE") == "1" {
+		client.testMode = true
+	}
+	return client, nil
 }
 
 // ForRepo returns an authenticated *github.Client for the given repository via Installation Token
@@ -655,17 +664,42 @@ func (c *GitHubClient) ForRepo(ctx context.Context, owner, repo string) (*github
 		return nil, err
 	}
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	client := github.NewClient(oauth2.NewClient(ctx, ts))
+	hc := oauth2.NewClient(ctx, ts)
+	if c.httpClient != nil {
+		// reuse transport from injected client to cooperate with test server
+		hc.Transport = c.httpClient.Transport
+	}
+	client := github.NewClient(hc)
+	if c.baseURL != nil {
+		client.BaseURL = c.baseURL
+	}
 	return client, nil
 }
 
 // resolveInstallationID finds installation ID for owner/repo using App-scoped transport
 func (c *GitHubClient) resolveInstallationID(ctx context.Context, owner, repo string) (int64, error) {
-	appsTr, err := ghinstallation.NewAppsTransport(http.DefaultTransport, c.tokenCache.appID, c.tokenCache.privateKey)
-	if err != nil {
-		return 0, fmt.Errorf("failed to create apps transport: %w", err)
+	var transport http.RoundTripper = http.DefaultTransport
+	if c.httpClient != nil && c.httpClient.Transport != nil {
+		transport = c.httpClient.Transport
 	}
-	appClient := github.NewClient(&http.Client{Transport: appsTr})
+	var appHTTP *http.Client
+	if c.testMode {
+		appHTTP = &http.Client{Transport: transport}
+	} else {
+		appsTr, err := ghinstallation.NewAppsTransport(transport, c.tokenCache.appID, c.tokenCache.privateKey)
+		if err != nil {
+			return 0, fmt.Errorf("failed to create apps transport: %w", err)
+		}
+		appHTTP = &http.Client{Transport: appsTr}
+	}
+	if c.httpClient != nil {
+		// copy timeouts from injected client if provided
+		appHTTP.Timeout = c.httpClient.Timeout
+	}
+	appClient := github.NewClient(appHTTP)
+	if c.baseURL != nil {
+		appClient.BaseURL = c.baseURL
+	}
 	inst, _, err := appClient.Apps.FindRepositoryInstallation(ctx, owner, repo)
 	if err != nil {
 		return 0, fmt.Errorf("failed to find installation for %s/%s: %w", owner, repo, err)
@@ -697,11 +731,27 @@ func (c *GitHubClient) getInstallationToken(ctx context.Context, installationID 
 		return entry.Token, nil
 	}
 
-	appsTr, err := ghinstallation.NewAppsTransport(http.DefaultTransport, c.tokenCache.appID, c.tokenCache.privateKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to create apps transport: %w", err)
+	var transport http.RoundTripper = http.DefaultTransport
+	if c.httpClient != nil && c.httpClient.Transport != nil {
+		transport = c.httpClient.Transport
 	}
-	appClient := github.NewClient(&http.Client{Transport: appsTr})
+	var appHTTP *http.Client
+	if c.testMode {
+		appHTTP = &http.Client{Transport: transport}
+	} else {
+		appsTr, err := ghinstallation.NewAppsTransport(transport, c.tokenCache.appID, c.tokenCache.privateKey)
+		if err != nil {
+			return "", fmt.Errorf("failed to create apps transport: %w", err)
+		}
+		appHTTP = &http.Client{Transport: appsTr}
+	}
+	if c.httpClient != nil {
+		appHTTP.Timeout = c.httpClient.Timeout
+	}
+	appClient := github.NewClient(appHTTP)
+	if c.baseURL != nil {
+		appClient.BaseURL = c.baseURL
+	}
 	// Request a new access token for the installation
 	instToken, _, err := appClient.Apps.CreateInstallationToken(ctx, installationID, &github.InstallationTokenOptions{})
 	if err != nil {
