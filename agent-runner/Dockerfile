@@ -48,6 +48,12 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # Flags: -f (fail on HTTP errors), -s (silent), -S (show errors), -L (follow redirects)
 RUN curl -fsSL https://download.cursor.com/install.sh | sh
 
+# Add Cursor CLI to PATH
+# Cursor CLI installs cursor-agent to $HOME/.local/bin
+# According to https://cursor.com/ja/docs/cli/installation, PATH must include $HOME/.local/bin
+# Note: ENV uses $HOME which will be resolved at runtime, ensuring it works for any user
+ENV PATH="$HOME/.local/bin:$PATH"
+
 # Copy compiled agent-runner binary from builder stage
 COPY --from=builder /build/agent-runner /usr/local/bin/agent-runner
 
