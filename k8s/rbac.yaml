@@ -2,11 +2,13 @@
 # ServiceAccount for agent-runner Pods
 # Used by Pods created by the Operator to execute AI agents
 # Referenced in: internal/clients/kubernetes.go:297
+# Note: This ServiceAccount should be created in the same namespace where Jobs are created
+# (typically the same namespace as the Operator, e.g., agentic-operator)
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: agent-automation
-  namespace: default
+  namespace: agentic-operator
   labels:
     app: agent-runner
     component: agent-runner
@@ -26,7 +28,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: agent-automation-role
-  namespace: default
+  namespace: agentic-operator
   labels:
     app: agent-runner
     component: agent-runner
@@ -38,14 +40,14 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: agent-automation-rolebinding
-  namespace: default
+  namespace: agentic-operator
   labels:
     app: agent-runner
     component: agent-runner
 subjects:
   - kind: ServiceAccount
     name: agent-automation
-    namespace: default
+    namespace: agentic-operator
 roleRef:
   kind: Role
   name: agent-automation-role
