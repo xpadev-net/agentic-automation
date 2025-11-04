@@ -73,3 +73,32 @@ func (s *DiscordNotificationService) NotifyPRCreated(ctx context.Context, pr *mo
 
 	return nil
 }
+
+// NotifyMaxRetries sends a Discord notification when max retries (50) is exceeded.
+// This is a non-blocking method - errors are logged but do not interrupt the flow.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - agentRun: AgentRun model (must not be nil, contains RetryCount and ErrorMessage)
+//   - issue: Issue model (must not be nil, contains Issue number and title)
+//
+// Returns:
+//   - error: Error if notification failed (should be logged but not block execution)
+func (s *DiscordNotificationService) NotifyMaxRetries(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue) error {
+	// Check if discord client is disabled (non-blocking)
+	if s.discordClient == nil {
+		return nil
+	}
+
+	// Send notification
+	err := s.discordClient.SendMaxRetriesNotification(ctx, agentRun, issue)
+	if err != nil {
+		s.logger.Error("Failed to send Discord max retries notification",
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("issue_number", issue.Number))
+		return err
+	}
+
+	return nil
+}
