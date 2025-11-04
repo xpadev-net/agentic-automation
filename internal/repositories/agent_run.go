@@ -47,6 +47,17 @@ type AgentRunRepository interface {
 
 	// GetByPRID retrieves all AgentRuns for a specific PullRequest
 	GetByPRID(prID int) ([]*models.AgentRun, error)
+
+	// IncrementRetryCount atomically increments the retry_count field by 1
+	// This method uses an atomic UPDATE query to prevent lost increments under concurrent retries.
+	// Returns the updated retry_count value and an error if the increment fails or max retries already reached.
+	// Parameters:
+	//   - id: AgentRun ID to update
+	//   - maxRetryCount: Maximum allowed retry count (increment will fail if current count >= maxRetryCount)
+	// Returns:
+	//   - int: New retry_count value after increment
+	//   - error: Error if update fails, record not found, or max retries already reached
+	IncrementRetryCount(id int, maxRetryCount int) (int, error)
 }
 
 // agentRunRepository implements AgentRunRepository using GORM
@@ -273,6 +284,60 @@ func (r *agentRunRepository) GetByPRID(prID int) ([]*models.AgentRun, error) {
 		return nil, err
 	}
 	return runs, nil
+}
+
+// IncrementRetryCount atomically increments the retry_count field by 1
+// This method uses an atomic UPDATE query to prevent lost increments under concurrent retries.
+// The WHERE clause ensures that retry_count is only incremented if it's below the maximum.
+//
+// Parameters:
+//   - id: AgentRun ID to update
+//   - maxRetryCount: Maximum allowed retry count (increment will fail if current count >= maxRetryCount)
+//
+// Returns:
+//   - int: New retry_count value after increment
+//   - error: Error if update fails, record not found, or max retries already reached
+func (r *agentRunRepository) IncrementRetryCount(id int, maxRetryCount int) (int, error) {
+	if id == 0 {
+		return 0, errors.New("cannot increment retry count for AgentRun with zero ID")
+	}
+
+	// Perform atomic increment using SQL: UPDATE ... SET retry_count = retry_count + 1 WHERE id = ? AND retry_count < ?
+	// This ensures that:
+	// 1. The increment is atomic at the database level
+	// 2. Concurrent increments don't overwrite each other
+	// 3. The maximum retry count is enforced atomically
+	result := r.db.Model(&models.AgentRun{}).
+		Where("id = ? AND retry_count < ?", id, maxRetryCount).
+		Update("retry_count", gorm.Expr("retry_count + 1"))
+
+	if result.Error != nil {
+		return 0, fmt.Errorf("failed to increment retry count: %w", result.Error)
+	}
+
+	// Check if the update actually affected any rows
+	if result.RowsAffected == 0 {
+		// Either the record doesn't exist, or retry_count is already at or above maxRetryCount
+		// Check if the record exists
+		run, err := r.GetByID(id)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return 0, fmt.Errorf("AgentRun with ID %d not found", id)
+			}
+			return 0, fmt.Errorf("failed to check AgentRun: %w", err)
+		}
+
+		// Record exists, so retry_count must be at or above maxRetryCount
+		return run.RetryCount, fmt.Errorf("cannot increment retry count: already at or above maximum (%d >= %d)", run.RetryCount, maxRetryCount)
+	}
+
+	// Reload the record to get the updated retry_count value
+	updatedRun, err := r.GetByID(id)
+	if err != nil {
+		return 0, fmt.Errorf("failed to reload AgentRun after increment: %w", err)
+	}
+
+	return updatedRun.RetryCount, nil
 }
 
 // isUniqueConstraintViolation checks if an error is a unique constraint violation

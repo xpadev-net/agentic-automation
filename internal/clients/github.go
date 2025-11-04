@@ -236,6 +236,27 @@ func (c *Client) CreateIssueComment(ctx context.Context, owner, repo string, iss
 	return issueComment, nil
 }
 
+// UpdateIssueComment updates an existing comment on a GitHub issue
+func (c *Client) UpdateIssueComment(ctx context.Context, owner, repo string, commentID int64, body string) (*github.IssueComment, error) {
+	c.logger.Info("Updating GitHub issue comment",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int64("comment_id", commentID),
+	)
+
+	comment := &github.IssueComment{
+		Body: &body,
+	}
+
+	issueComment, resp, err := c.Issues.EditComment(ctx, owner, repo, commentID, comment)
+	if err != nil {
+		return nil, c.handleError(err, resp, "UpdateIssueComment")
+	}
+
+	c.handleRateLimit(resp)
+	return issueComment, nil
+}
+
 // GetPullRequest retrieves a GitHub pull request
 func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, prNumber int) (*github.PullRequest, error) {
 	c.logger.Info("Getting GitHub pull request",
