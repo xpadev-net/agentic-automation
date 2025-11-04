@@ -201,12 +201,12 @@ RUN npm install -g @anthropic/claude-code
 
 **Command**:
 ```bash
-cursor-agent --task "{issue_context}"
+cursor-agent -p "{issue_context}"
 ```
 
 **Installation** (in Dockerfile):
 ```dockerfile
-RUN npm install -g cursor-agents
+RUN curl https://cursor.com/install -fsS | bash
 ```
 
 **Environment**:
