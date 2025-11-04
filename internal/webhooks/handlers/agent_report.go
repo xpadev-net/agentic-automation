@@ -323,6 +323,44 @@ func HandleAgentReport(c *gin.Context) {
 	}
 
 	// ------------------------------------------------------------------
+	// Max retries exceeded notification (US3 T101)
+	// Send Discord notification when max retries (50) is exceeded
+	// ------------------------------------------------------------------
+	if req.Status == "failed" && agentRun.RetryCount >= 50 {
+		// Load Issue for notification context
+		issueRepo := repositories.NewIssueRepository()
+		issue, err := issueRepo.FindByID(agentRun.IssueID)
+		if err != nil {
+			logger.Warn("Failed to load Issue for max retries notification",
+				zap.Error(err),
+				zap.Int("issue_id", agentRun.IssueID),
+				zap.Int("agent_run_id", agentRunID),
+				zap.Int("retry_count", agentRun.RetryCount),
+			)
+		} else {
+			// Initialize Discord client and notification service
+			discordClient := clients.NewDiscordClient("", logger)
+			discordNotification := services.NewDiscordNotificationService(discordClient, logger)
+
+			// Send max retries notification (non-blocking)
+			if err := discordNotification.NotifyMaxRetries(c.Request.Context(), agentRun, issue); err != nil {
+				logger.Warn("Failed to send Discord max retries notification",
+					zap.Error(err),
+					zap.Int("agent_run_id", agentRunID),
+					zap.Int("issue_number", issue.Number),
+					zap.Int("retry_count", agentRun.RetryCount),
+				)
+			} else {
+				logger.Info("Sent Discord max retries notification",
+					zap.Int("agent_run_id", agentRunID),
+					zap.Int("issue_number", issue.Number),
+					zap.Int("retry_count", agentRun.RetryCount),
+				)
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// PR created notification (US2 T083)
 	// Post status comments to both Issue and PR upon success
 	// ------------------------------------------------------------------
