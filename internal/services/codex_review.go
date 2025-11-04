@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-github/v76/github"
 
@@ -13,6 +14,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	codexReviewMarkerPrefix = "<!-- agent:codex-review-request:"
+)
+
 // CodexReviewService provides Codex review request functionality.
 // It handles posting "@codex review" comments to GitHub PRs and creating
 // ReviewFeedback records to track review requests.
@@ -20,6 +25,12 @@ type CodexReviewService struct {
 	githubClient       *clients.Client
 	reviewFeedbackRepo *repositories.ReviewFeedbackRepository
 	logger             *zap.Logger
+}
+
+// makeCodexReviewComment creates a comment body with idempotency marker.
+func makeCodexReviewComment(idempotencyKey string) string {
+	marker := codexReviewMarkerPrefix + idempotencyKey + " -->"
+	return marker + "\n" + utils.CodexReviewTrigger
 }
 
 // NewCodexReviewService creates a new CodexReviewService instance.
@@ -57,8 +68,34 @@ func NewCodexReviewService(
 	}
 }
 
+// hasCommentWithMarker checks if a recent comment contains the given marker.
+// It scans only the last N comments to limit API/CPU usage.
+func (s *CodexReviewService) hasCommentWithMarker(ctx context.Context, owner, repo string, number int, marker string) (bool, error) {
+	comments, err := s.githubClient.ListIssueComments(ctx, owner, repo, number)
+	if err != nil {
+		return false, err
+	}
+	// Scan only the last N comments to limit API/CPU
+	start := 0
+	if len(comments) > maxCommentsToScan {
+		start = len(comments) - maxCommentsToScan
+	}
+	for i := len(comments) - 1; i >= start; i-- { // newest first within the window
+		c := comments[i]
+		if c == nil || c.Body == nil {
+			continue
+		}
+		if *c.Body != "" && marker != "" && strings.Contains(*c.Body, marker) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // RequestReview posts a "@codex review" comment to the specified GitHub PR
 // and creates a ReviewFeedback record with status "requested".
+// It is idempotent per idempotencyKey; if a request already exists, it returns
+// the existing ReviewFeedback record without posting a new comment.
 //
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
@@ -66,14 +103,16 @@ func NewCodexReviewService(
 //   - repo: Repository name (e.g., "hello-world")
 //   - prNumber: GitHub PR number (must be > 0)
 //   - prID: Database PullRequest ID (must be > 0)
+//   - idempotencyKey: Unique key for idempotency (must not be empty)
 //
 // Returns:
-//   - *models.ReviewFeedback: Created ReviewFeedback record (on success)
+//   - *models.ReviewFeedback: Created or existing ReviewFeedback record (on success)
 //   - error: Error if comment posting or record creation failed
 func (s *CodexReviewService) RequestReview(
 	ctx context.Context,
 	owner, repo string,
 	prNumber, prID int,
+	idempotencyKey string,
 ) (*models.ReviewFeedback, error) {
 	// Validate input parameters
 	if prNumber <= 0 {
@@ -82,19 +121,82 @@ func (s *CodexReviewService) RequestReview(
 	if prID <= 0 {
 		return nil, fmt.Errorf("prID must be greater than 0, got: %d", prID)
 	}
+	if idempotencyKey == "" {
+		return nil, fmt.Errorf("idempotencyKey must not be empty")
+	}
 
 	s.logger.Info("Requesting Codex review",
 		zap.String("owner", owner),
 		zap.String("repo", repo),
 		zap.Int("pr_number", prNumber),
 		zap.Int("pr_id", prID),
+		zap.String("idempotency_key", idempotencyKey),
 	)
 
+	// Check for existing ReviewFeedback record with status="requested"
+	existingFeedbacks, err := s.reviewFeedbackRepo.FindByPRIDAndStatus(prID, "requested")
+	if err != nil {
+		s.logger.Warn("Failed to check for existing ReviewFeedback records",
+			zap.Error(err),
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.Int("pr_number", prNumber),
+			zap.Int("pr_id", prID),
+			zap.String("idempotency_key", idempotencyKey),
+		)
+		// Continue processing even if check fails (best effort)
+	} else if len(existingFeedbacks) > 0 {
+		// Existing request found - return the most recent one
+		existingFeedback := existingFeedbacks[0] // Already ordered by created_at DESC
+		s.logger.Info("Existing Codex review request found, returning existing record",
+			zap.Int("feedback_id", existingFeedback.ID),
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.Int("pr_number", prNumber),
+			zap.Int("pr_id", prID),
+			zap.String("idempotency_key", idempotencyKey),
+		)
+		return existingFeedback, nil
+	}
+
+	// Check for existing comment with marker
+	marker := codexReviewMarkerPrefix + idempotencyKey + " -->"
+	hasMarker, err := s.hasCommentWithMarker(ctx, owner, repo, prNumber, marker)
+	if err != nil {
+		s.logger.Warn("Failed to check for existing comment marker",
+			zap.Error(err),
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.Int("pr_number", prNumber),
+			zap.Int("pr_id", prID),
+			zap.String("idempotency_key", idempotencyKey),
+		)
+		// Continue processing even if check fails (best effort)
+	} else if hasMarker {
+		// Comment with marker already exists - check if we have a ReviewFeedback record
+		// If not, create one to maintain consistency
+		existingFeedbacks, err := s.reviewFeedbackRepo.FindByPRIDAndStatus(prID, "requested")
+		if err == nil && len(existingFeedbacks) > 0 {
+			existingFeedback := existingFeedbacks[0]
+			s.logger.Info("Existing Codex review comment found, returning existing record",
+				zap.Int("feedback_id", existingFeedback.ID),
+				zap.String("owner", owner),
+				zap.String("repo", repo),
+				zap.Int("pr_number", prNumber),
+				zap.Int("pr_id", prID),
+				zap.String("idempotency_key", idempotencyKey),
+			)
+			return existingFeedback, nil
+		}
+		// Comment exists but no ReviewFeedback record - continue to create one
+	}
+
 	// Post comment with retry logic
+	commentBody := makeCodexReviewComment(idempotencyKey)
 	var comment *github.IssueComment
-	err := utils.Retry(ctx, func() error {
+	err = utils.Retry(ctx, func() error {
 		var retryErr error
-		comment, retryErr = s.githubClient.CreateIssueComment(ctx, owner, repo, prNumber, utils.CodexReviewTrigger)
+		comment, retryErr = s.githubClient.CreateIssueComment(ctx, owner, repo, prNumber, commentBody)
 		return retryErr
 	}, nil, s.logger)
 	if err != nil {
@@ -104,6 +206,7 @@ func (s *CodexReviewService) RequestReview(
 			zap.String("repo", repo),
 			zap.Int("pr_number", prNumber),
 			zap.Int("pr_id", prID),
+			zap.String("idempotency_key", idempotencyKey),
 		)
 		return nil, fmt.Errorf("failed to post Codex review request comment: %w", err)
 	}
@@ -113,6 +216,7 @@ func (s *CodexReviewService) RequestReview(
 		zap.String("repo", repo),
 		zap.Int("pr_number", prNumber),
 		zap.Int("pr_id", prID),
+		zap.String("idempotency_key", idempotencyKey),
 	}
 	if comment != nil && comment.ID != nil {
 		logFields = append(logFields, zap.Int64("comment_id", *comment.ID))
@@ -138,6 +242,7 @@ func (s *CodexReviewService) RequestReview(
 			zap.String("repo", repo),
 			zap.Int("pr_number", prNumber),
 			zap.Int("pr_id", prID),
+			zap.String("idempotency_key", idempotencyKey),
 		}
 		if comment != nil && comment.ID != nil {
 			warnFields = append(warnFields, zap.Int64("comment_id", *comment.ID))
@@ -152,6 +257,7 @@ func (s *CodexReviewService) RequestReview(
 		zap.String("repo", repo),
 		zap.Int("pr_number", prNumber),
 		zap.Int("pr_id", prID),
+		zap.String("idempotency_key", idempotencyKey),
 	}
 	if comment != nil && comment.ID != nil {
 		successFields = append(successFields, zap.Int64("comment_id", *comment.ID))
