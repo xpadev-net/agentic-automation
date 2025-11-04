@@ -191,7 +191,7 @@
 ### Implementation for User Story 3
 
 - [x] T090 [P] [US3] Implement webhook handler for pull_request_review_comment events in internal/webhooks/handlers/pr_review_comment.go
-- [ ] T091 [P] [US3] Implement Codex review request service (post "@codex review" comment) in internal/services/codex_review.go
+- [x] T091 [P] [US3] Implement Codex review request service (post "@codex review" comment) in internal/services/codex_review.go
 - [x] T092 [US3] Implement "@codex review" comment detection in internal/utils/comment_parser.go
 - [x] T093 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in internal/services/codex_approval.go
 - [ ] T094 [US3] Implement webhook handler for check_suite events (CI results) in internal/webhooks/handlers/check_suite.go
