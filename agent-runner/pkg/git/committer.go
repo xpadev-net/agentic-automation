@@ -1,10 +1,13 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
+
+	githubutil "agent-runner/pkg/github"
 )
 
 // CommitChanges commits all changes with the given message and returns the commit SHA.
@@ -47,6 +50,21 @@ func PushBranch(workDir, branchName, token string) error {
 
 	remoteUrl := strings.TrimSpace(string(remoteUrlOutput))
 
+	// Ensure token is available (fetch via GitHub App if not provided)
+	if token == "" {
+		// Try to derive repo path from remote URL
+		repoPath := extractRepoPath(remoteUrl)
+		if repoPath != "" {
+			parts := strings.SplitN(repoPath, "/", 2)
+			if len(parts) == 2 {
+				t, err := githubutil.GetGitHubToken(context.Background(), parts[0], parts[1])
+				if err == nil {
+					token = t
+				}
+			}
+		}
+	}
+
 	// If token is provided, check if URL needs to be updated
 	// Update if:
 	// 1. Token is not already in the URL (check if token string exists in credential part of URL)
@@ -82,6 +100,29 @@ func PushBranch(workDir, branchName, token string) error {
 	pushCmd := exec.Command("git", "push", "-u", "origin", branchName)
 	pushCmd.Dir = workDir
 	if err := pushCmd.Run(); err != nil {
+		// Retry once with refreshed token and remote URL if possible
+		if token == "" {
+			// Try to refresh token based on remote URL
+			repoPath := extractRepoPath(remoteUrl)
+			if repoPath != "" {
+				parts := strings.SplitN(repoPath, "/", 2)
+				if len(parts) == 2 {
+					if t, terr := githubutil.GetGitHubToken(context.Background(), parts[0], parts[1]); terr == nil && t != "" {
+						token = t
+						newUrl := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", token, repoPath)
+						setUrlCmd := exec.Command("git", "remote", "set-url", "origin", newUrl)
+						setUrlCmd.Dir = workDir
+						_ = setUrlCmd.Run()
+						// Retry push once
+						pushCmd = exec.Command("git", "push", "-u", "origin", branchName)
+						pushCmd.Dir = workDir
+						if rerr := pushCmd.Run(); rerr == nil {
+							return nil
+						}
+					}
+				}
+			}
+		}
 		return fmt.Errorf("git push failed: %w", err)
 	}
 

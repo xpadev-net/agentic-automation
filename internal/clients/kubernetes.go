@@ -268,7 +268,8 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 	}
 
 	// Get Secret names from environment variables with defaults
-	githubTokenSecret := appconfig.GetEnv("GITHUB_TOKEN_SECRET", "github-token")
+	// GitHub App credentials are sourced from operator-secrets by default
+	githubAppSecret := appconfig.GetEnv("OPERATOR_SECRETS_NAME", "operator-secrets")
 	anthropicAPIKeySecret := appconfig.GetEnv("ANTHROPIC_API_KEY_SECRET", "anthropic-api-key")
 	cursorAPIKeySecret := appconfig.GetEnv("CURSOR_API_KEY_SECRET", "cursor-api-key")
 	operatorAPITokenSecret := appconfig.GetEnv("OPERATOR_API_TOKEN_SECRET", "agent-runner-secret")
@@ -276,14 +277,27 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 
 	// Add Secret references for sensitive values
 	envVars = append(envVars, []corev1.EnvVar{
+		// GitHub App ID
 		{
-			Name: "GITHUB_TOKEN",
+			Name: "GITHUB_APP_ID",
 			ValueFrom: &corev1.EnvVarSource{
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{
-						Name: githubTokenSecret,
+						Name: githubAppSecret,
 					},
-					Key: "token",
+					Key: "github-app-id",
+				},
+			},
+		},
+		// GitHub App Private Key (PEM contents)
+		{
+			Name: "GITHUB_PRIVATE_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: githubAppSecret,
+					},
+					Key: "github-private-key",
 				},
 			},
 		},
@@ -347,6 +361,17 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 				},
 			},
 		})
+	}
+
+	// Inject repository owner/name for token acquisition inside the pod
+	if config.Repo != "" {
+		parts := strings.SplitN(config.Repo, "/", 2)
+		if len(parts) == 2 {
+			envVars = append(envVars,
+				corev1.EnvVar{Name: "REPO_OWNER", Value: parts[0]},
+				corev1.EnvVar{Name: "REPO_NAME", Value: parts[1]},
+			)
+		}
 	}
 
 	return envVars
