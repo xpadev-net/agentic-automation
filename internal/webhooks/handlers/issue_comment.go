@@ -113,14 +113,13 @@ func HandleIssueComment(c *gin.Context) {
 	}
 	deps.KubernetesClient = k8sClient
 
-	// Initialize services
+	// Initialize services that do not require GitHub client here
 	agentRunRepo := repositories.NewAgentRunRepository(db)
 	deps.TriggerService = services.NewTriggerDetectionService(logger)
-	deps.AuthorizationService = services.NewAuthorizationService(deps.GitHubClient, logger)
-	deps.IssueContextService = services.NewIssueContextService(deps.GitHubClient, logger)
 	deps.AgentTypeDetectorService = services.NewAgentTypeDetectorService(logger)
 	deps.StateMachine = services.NewAgentRunStateMachine(agentRunRepo, logger)
-	deps.GitHubNotificationService = services.NewGitHubNotificationService(deps.GitHubClient, logger)
+	// GitHub 依存サービスの生成は HandleIssueCommentWithDeps 内で
+	// owner/repo 決定後に per-repo クライアントを用意してから行う
 
 	HandleIssueCommentWithDeps(c, deps)
 }
