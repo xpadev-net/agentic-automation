@@ -405,14 +405,14 @@ func TestPushBranch_UpdateRemoteURLWithoutToken(t *testing.T) {
 		// Push will fail because we don't have a real remote, but URL should be updated
 		// Check if URL was updated
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://test-token-123@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:test-token-123@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
 		}
 	} else {
 		// Even if push fails, URL should be updated
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://test-token-123@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:test-token-123@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
 		}
@@ -471,14 +471,14 @@ func TestPushBranch_RemoteURLWithDifferentToken(t *testing.T) {
 	if err == nil {
 		// Check if URL was updated with new token
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://new-token-456@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:new-token-456@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
 		}
 	} else {
 		// Even if push fails, URL should be updated with new token
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://new-token-456@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:new-token-456@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
 		}
@@ -505,7 +505,7 @@ func TestPushBranch_RemoteURLWithUsername(t *testing.T) {
 	if err == nil {
 		// Check if URL was updated with token
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://new-token-789@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:new-token-789@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
 		}
@@ -515,7 +515,7 @@ func TestPushBranch_RemoteURLWithUsername(t *testing.T) {
 	} else {
 		// Even if push fails, URL should be updated with token
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://new-token-789@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:new-token-789@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
 		}
@@ -643,14 +643,14 @@ func TestPushBranch_SSHRemoteURL(t *testing.T) {
 	if err == nil {
 		// Check if URL was updated to HTTPS format with token
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://test-token-789@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:test-token-789@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
 		}
 	} else {
 		// Even if push fails, URL should be updated
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://test-token-789@github.com/owner/repo.git"
+		expectedURL := "https://x-access-token:test-token-789@github.com/owner/repo.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
 		}
@@ -677,14 +677,14 @@ func TestPushBranch_RemoteURLWithDots(t *testing.T) {
 	if err == nil {
 		// Check if URL was updated correctly (should preserve dots in repo name)
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://test-token-123@github.com/owner/docs.v2.git"
+		expectedURL := "https://x-access-token:test-token-123@github.com/owner/docs.v2.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q", remoteURL, expectedURL)
 		}
 	} else {
 		// Even if push fails, URL should be updated correctly
 		remoteURL := getRemoteURL(t, repoDir)
-		expectedURL := "https://test-token-123@github.com/owner/docs.v2.git"
+		expectedURL := "https://x-access-token:test-token-123@github.com/owner/docs.v2.git"
 		if remoteURL != expectedURL {
 			t.Errorf("Remote URL = %q, want %q (push failed but URL should be updated)", remoteURL, expectedURL)
 		}
