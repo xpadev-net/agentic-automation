@@ -38,6 +38,7 @@
 #   - <s3-endpoint>: S3 endpoint URL (e.g., http://minio:9000 or https://s3.amazonaws.com)
 #   - <s3-region>: S3 region (e.g., us-east-1)
 #   - <s3-bucket>: S3 bucket name (e.g., agent-sessions)
+#   - <image-pull-secret>: ImagePullSecret name(s) for private registry authentication (e.g., ghcr-secret or ghcr-secret,registry-secret for multiple secrets)
 #
 ---
 # Version 1: Complete Job Definition
@@ -70,6 +71,12 @@ spec:
     spec:
       # ServiceAccount from k8s/rbac.yaml
       serviceAccountName: agent-automation
+      
+      # ImagePullSecrets for private registry authentication (optional)
+      # Configure via KUBERNETES_IMAGE_PULL_SECRET environment variable in Operator
+      # Supports comma-separated list: "ghcr-secret,registry-secret"
+      # imagePullSecrets:
+      #   - name: <image-pull-secret>
       
       # Never restart - Job completes once
       restartPolicy: Never
@@ -210,6 +217,11 @@ metadata:
     issue-id: "<issue-id>"
 spec:
   serviceAccountName: agent-automation
+  # ImagePullSecrets for private registry authentication (optional)
+  # Configure via KUBERNETES_IMAGE_PULL_SECRET environment variable in Operator
+  # Supports comma-separated list: "ghcr-secret,registry-secret"
+  # imagePullSecrets:
+  #   - name: <image-pull-secret>
   restartPolicy: Never
   
   containers:
