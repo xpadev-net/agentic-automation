@@ -4,6 +4,7 @@ import (
 	"agentic-automation/internal/services"
 	testmocks "agentic-automation/tests/mocks"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -200,6 +201,221 @@ func TestNotifyPRCreated_NoIssueNumber_PROnly(t *testing.T) {
 
 	ctx := context.Background()
 	err := svc.NotifyPRCreated(ctx, "o", "r", 0, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Equal(t, 20, posts[0].Number)
+}
+
+// -----------------------------------------------------------------------------
+// Retry Progress Notification Tests (US3 T102)
+// -----------------------------------------------------------------------------
+
+func TestTruncateErrorReason_ShortMessage(t *testing.T) {
+	result := services.TruncateErrorReason("Short error", 100)
+	require.Equal(t, "Short error", result)
+}
+
+func TestTruncateErrorReason_LongMessage(t *testing.T) {
+	longMsg := strings.Repeat("a", 150)
+	result := services.TruncateErrorReason(longMsg, 100)
+	require.Len(t, result, 103) // 100 chars + "..."
+	require.Equal(t, strings.Repeat("a", 100)+"...", result)
+}
+
+func TestTruncateErrorReason_EmptyString(t *testing.T) {
+	result := services.TruncateErrorReason("", 100)
+	require.Equal(t, "", result)
+}
+
+func TestTruncateErrorReason_DefaultMaxLength(t *testing.T) {
+	longMsg := strings.Repeat("a", 150)
+	result := services.TruncateErrorReason(longMsg, 0)
+	require.Len(t, result, 103) // 100 chars + "..."
+}
+
+func TestFormatRetryProgressMessage_ProgressBar(t *testing.T) {
+	marker := "<!-- agent:retry-progress:test -->"
+	result := services.FormatRetryProgressMessage(5, 10, "Test error", marker)
+
+	require.Contains(t, result, marker)
+	require.Contains(t, result, "🔄 Retry Progress")
+	require.Contains(t, result, "**Attempt**: 5/10")
+	require.Contains(t, result, "**Progress**: [█████░░░░░] 50%")
+	require.Contains(t, result, "**Reason**: Test error")
+	require.Contains(t, result, "Retrying with feedback...")
+}
+
+func TestFormatRetryProgressMessage_ProgressBar_0Percent(t *testing.T) {
+	marker := "<!-- agent:retry-progress:test -->"
+	result := services.FormatRetryProgressMessage(0, 50, "Error", marker)
+	require.Contains(t, result, "**Progress**: [░░░░░░░░░░] 0%")
+}
+
+func TestFormatRetryProgressMessage_ProgressBar_100Percent(t *testing.T) {
+	marker := "<!-- agent:retry-progress:test -->"
+	result := services.FormatRetryProgressMessage(50, 50, "Error", marker)
+	require.Contains(t, result, "**Progress**: [██████████] 100%")
+}
+
+func TestFormatRetryProgressMessage_TruncatesLongError(t *testing.T) {
+	marker := "<!-- agent:retry-progress:test -->"
+	longError := strings.Repeat("a", 150)
+	result := services.FormatRetryProgressMessage(1, 50, longError, marker)
+
+	// Should contain truncated error (100 chars + "...")
+	require.Contains(t, result, strings.Repeat("a", 100)+"...")
+}
+
+func TestFindCommentWithMarker_Found(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	marker := "<!-- agent:retry-progress:test -->"
+	mock.Seed(100, marker+"\nExisting comment")
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	commentID, found, err := svc.FindCommentWithMarker(ctx, "o", "r", 100, marker)
+
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotNil(t, commentID)
+	require.Equal(t, int64(100), *commentID)
+}
+
+func TestFindCommentWithMarker_NotFound(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	commentID, found, err := svc.FindCommentWithMarker(ctx, "o", "r", 100, "<!-- agent:retry-progress:not-found -->")
+
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Nil(t, commentID)
+}
+
+func TestNotifyRetryProgress_NewPostsToIssueAndPR(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 20, 5, 50, "Test error", "delivery-1")
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 2)
+
+	seenIssue := false
+	seenPR := false
+	for _, p := range posts {
+		if p.Number == 10 {
+			seenIssue = true
+			require.Contains(t, p.Body, "<!-- agent:retry-progress:delivery-1 -->")
+			require.Contains(t, p.Body, "🔄 Retry Progress")
+			require.Contains(t, p.Body, "**Attempt**: 5/50")
+			require.Contains(t, p.Body, "Test error")
+		}
+		if p.Number == 20 {
+			seenPR = true
+			require.Contains(t, p.Body, "<!-- agent:retry-progress:delivery-1 -->")
+		}
+	}
+	require.True(t, seenIssue)
+	require.True(t, seenPR)
+}
+
+func TestNotifyRetryProgress_UpdatesExistingComment(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	idem := "test-key"
+	marker := "<!-- agent:retry-progress:" + idem + " -->"
+	mock.Seed(100, marker+"\nOld comment")
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyRetryProgress(ctx, "o", "r", 100, 0, 3, 50, "New error", idem)
+	require.NoError(t, err)
+
+	// Should have one update (PATCH) call
+	updates := mock.Updates()
+	require.Len(t, updates, 1)
+	require.Equal(t, int64(100), updates[0].CommentID)
+	require.Contains(t, updates[0].Body, "<!-- agent:retry-progress:"+idem+" -->")
+	require.Contains(t, updates[0].Body, "**Attempt**: 3/50")
+	require.Contains(t, updates[0].Body, "New error")
+}
+
+func TestNotifyRetryProgress_InputValidation(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+
+	// Negative retryCount
+	err := svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, -1, 50, "error", "key")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "retryCount must be >= 0")
+
+	// Zero maxRetries
+	err = svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, 5, 0, "error", "key")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "maxRetries must be > 0")
+
+	// Empty idempotencyKey
+	err = svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, 5, 50, "error", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "idempotencyKey must not be empty")
+}
+
+func TestNotifyRetryProgress_IssueOnly(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 0, 2, 50, "Error", "key1")
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Equal(t, 10, posts[0].Number)
+}
+
+func TestNotifyRetryProgress_PROnly(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+	err := svc.NotifyRetryProgress(ctx, "org", "repo", 0, 20, 2, 50, "Error", "key2")
 	require.NoError(t, err)
 
 	posts := mock.Posts()

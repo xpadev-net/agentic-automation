@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -181,5 +182,127 @@ func TestForRepo_MinimalIntegrationWithMockServer(t *testing.T) {
 	}
 	if repository == nil || repository.GetName() != repo {
 		t.Fatalf("unexpected repository response")
+	}
+}
+
+func TestUpdateIssueComment_Success(t *testing.T) {
+	owner := "test-owner"
+	repo := "test-repo"
+	commentID := int64(123)
+	newBody := "Updated comment body"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		expectedPath := "/repos/" + owner + "/" + repo + "/issues/comments/" + strconv.FormatInt(commentID, 10)
+		if r.Method != http.MethodPatch || r.URL.Path != expectedPath {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		var reqBody struct {
+			Body *string `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		if reqBody.Body == nil || *reqBody.Body != newBody {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		response := github.IssueComment{
+			ID:   github.Int64(commentID),
+			Body: github.String(newBody),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t)
+	client, err := NewClient("test-token", logger)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	u, _ := url.Parse(server.URL + "/")
+	client.Client.BaseURL = u
+	client.Client.UploadURL = u
+
+	ctx := context.Background()
+	comment, err := client.UpdateIssueComment(ctx, owner, repo, commentID, newBody)
+	if err != nil {
+		t.Fatalf("UpdateIssueComment error: %v", err)
+	}
+
+	if comment == nil {
+		t.Fatal("expected non-nil comment")
+	}
+	if comment.GetID() != commentID {
+		t.Fatalf("expected comment ID %d, got %d", commentID, comment.GetID())
+	}
+	if comment.GetBody() != newBody {
+		t.Fatalf("expected body %q, got %q", newBody, comment.GetBody())
+	}
+}
+
+func TestUpdateIssueComment_NotFound(t *testing.T) {
+	owner := "test-owner"
+	repo := "test-repo"
+	commentID := int64(999)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(github.ErrorResponse{
+			Message: "Not Found",
+		})
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t)
+	client, err := NewClient("test-token", logger)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	u, _ := url.Parse(server.URL + "/")
+	client.Client.BaseURL = u
+	client.Client.UploadURL = u
+
+	ctx := context.Background()
+	_, err = client.UpdateIssueComment(ctx, owner, repo, commentID, "body")
+	if err == nil {
+		t.Fatal("expected error for not found comment")
+	}
+}
+
+func TestUpdateIssueComment_Unauthorized(t *testing.T) {
+	owner := "test-owner"
+	repo := "test-repo"
+	commentID := int64(123)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(github.ErrorResponse{
+			Message: "Bad credentials",
+		})
+	}))
+	defer server.Close()
+
+	logger := newTestLogger(t)
+	client, err := NewClient("test-token", logger)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	u, _ := url.Parse(server.URL + "/")
+	client.Client.BaseURL = u
+	client.Client.UploadURL = u
+
+	ctx := context.Background()
+	_, err = client.UpdateIssueComment(ctx, owner, repo, commentID, "body")
+	if err == nil {
+		t.Fatal("expected error for unauthorized")
 	}
 }

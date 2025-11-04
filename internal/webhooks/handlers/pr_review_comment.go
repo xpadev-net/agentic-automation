@@ -429,4 +429,22 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		"delivery_id": deliveryID,
 		"pr_number":   payload.PullRequest.Number,
 	})
+
+	// TODO (T096/T098): Add retry progress notification when review feedback triggers retry
+	// When implementing retry orchestrator for review feedback (T096/T098), add NotifyRetryProgress call here:
+	//
+	// 1. After review feedback is detected as non-approval and retry is triggered
+	// 2. Get AgentRun and check retry_count < services.MaxRetryAttempts
+	// 3. Generate review comment summary (use FeedbackAggregator result, reviewComments)
+	// 4. Get Issue and PR information
+	// 5. Call NotifyRetryProgress with:
+	//    - owner, repo: from payload.Repository.FullName
+	//    - issueNumber: from PR's linked Issue
+	//    - prNumber: payload.PullRequest.Number
+	//    - retryCount: agentRun.RetryCount
+	//    - maxRetries: services.MaxRetryAttempts
+	//    - errorReason: review comment summary (truncated to 100 chars, default "Review feedback received" if empty)
+	//    - idempotencyKey: agentRun.IdempotencyKey
+	//
+	// See internal/webhooks/handlers/agent_report.go for reference implementation.
 }
