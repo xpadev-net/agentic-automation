@@ -185,6 +185,24 @@ func HandleAgentReport(c *gin.Context) {
 		// Link PR to AgentRun and build PR URL
 		agentRun.PRID = &savedPR.ID
 		prURL = fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repo, savedPR.Number)
+
+		// Create ReviewFeedback record for review request (US3 T103)
+		reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
+		reviewFeedback, err := reviewFeedbackRepo.CreateRequestedReview(savedPR.ID, nil)
+		if err != nil {
+			logger.Warn("Failed to create ReviewFeedback record for PR",
+				zap.Error(err),
+				zap.Int("pr_id", savedPR.ID),
+				zap.Int("agent_run_id", agentRunID),
+			)
+		} else {
+			logger.Info("Created ReviewFeedback record for review request",
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.Int("pr_id", savedPR.ID),
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("status", reviewFeedback.Status),
+			)
+		}
 	}
 
 	// Validate required fields for succeeded status (after ensuring AgentRun exists)
