@@ -113,7 +113,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	}
 
 	// Create context
-	ctx := c.Request.Context()
+	var ctx context.Context = c.Request.Context()
 
 	// Step 2: Delivery ID取得と検証
 	deliveryID := c.GetHeader(deliveryHeader)
