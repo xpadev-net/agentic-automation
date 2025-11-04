@@ -151,7 +151,7 @@ func TestS3Failure_SaveSessionFailure_Integration(t *testing.T) {
 
 	// Setup environment with invalid S3 endpoint
 	setupS3FailureEnv(t, 1) // MaxRetries=1 to speed up test
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// Verify setup
 	assert.NotNil(t, operatorMock)
@@ -230,7 +230,7 @@ func TestS3Failure_RestoreSessionFailure_Integration(t *testing.T) {
 		}
 	})
 
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// Verify setup
 	assert.NotNil(t, operatorMock)

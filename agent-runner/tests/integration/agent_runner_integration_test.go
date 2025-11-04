@@ -27,7 +27,6 @@ const (
 	testIssueID       = 42
 	testRepo          = "test-org/test-repo"
 	testOperatorToken = "test-operator-token-12345"
-	testGitHubToken   = "test-github-token-ghp_xxxxx"
 	testPrompt        = "Test issue: Add a new feature"
 )
 
@@ -238,32 +237,7 @@ func setupMockGitHubAPI(t *testing.T, nextPRNumber int) (*httptest.Server, *GitH
 		owner := pathParts[1]
 		repo := pathParts[2]
 
-		// Verify Authorization header
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Missing Authorization header"})
-			return
-		}
-
-		if !strings.HasPrefix(authHeader, "token ") && !strings.HasPrefix(authHeader, "Bearer ") {
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid Authorization header format"})
-			return
-		}
-
-		var token string
-		if strings.HasPrefix(authHeader, "token ") {
-			token = strings.TrimPrefix(authHeader, "token ")
-		} else {
-			token = strings.TrimPrefix(authHeader, "Bearer ")
-		}
-
-		if token != testGitHubToken {
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Invalid token"})
-			return
-		}
+		// Note: Token verification removed. In production, GitHub App installation token is used on-demand.
 
 		// Parse request body
 		var prReq struct {
@@ -325,7 +299,7 @@ func setupMockGitHubAPI(t *testing.T, nextPRNumber int) (*httptest.Server, *GitH
 }
 
 // setupTestEnv sets up environment variables for testing
-func setupTestEnv(t *testing.T, operatorAPIURL, operatorToken, githubToken, agentType, workDir string) (cleanup func()) {
+func setupTestEnv(t *testing.T, operatorAPIURL, operatorToken, agentType, workDir string) (cleanup func()) {
 	t.Helper()
 
 	// Store original values
@@ -339,7 +313,6 @@ func setupTestEnv(t *testing.T, operatorAPIURL, operatorToken, githubToken, agen
 		"OPERATOR_API_TOKEN": operatorToken,
 		"AGENT_RUN_ID":       strconv.Itoa(testAgentRunID),
 		"AGENT_TYPE":         agentType,
-		"GITHUB_TOKEN":       githubToken,
 		"RETRY_COUNT":        "0",
 		"WORKSPACE_DIR":      workDir,
 		"ANTHROPIC_API_KEY":  "test-anthropic-key",
@@ -478,7 +451,7 @@ validation:
 	_ = githubServer // Will be used when git functions support configurable API URL
 
 	// Setup environment
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// TODO: Execute main.go's run() function or simulate command execution
 	// Since run() is private, we'll need to either:
@@ -512,7 +485,7 @@ func TestAgentRunnerIntegration_SuccessWithoutManifest(t *testing.T) {
 	_ = githubServer
 
 	// Setup environment
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// Verify setup
 	assert.NotNil(t, operatorMock)
@@ -548,7 +521,7 @@ hooks:
 	operatorServer, operatorMock := setupMockOperatorAPI(t)
 
 	// Setup environment
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// Verify setup
 	assert.NotNil(t, operatorMock)
@@ -580,7 +553,7 @@ validation:
 	operatorServer, operatorMock := setupMockOperatorAPI(t)
 
 	// Setup environment
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// Verify setup
 	assert.NotNil(t, operatorMock)
@@ -603,7 +576,7 @@ func TestAgentRunnerIntegration_NoFileChanges(t *testing.T) {
 	operatorServer, operatorMock := setupMockOperatorAPI(t)
 
 	// Setup environment
-	setupTestEnv(t, operatorServer.URL, testOperatorToken, testGitHubToken, "claude-code", repoDir)
+	setupTestEnv(t, operatorServer.URL, testOperatorToken, "claude-code", repoDir)
 
 	// Create mock agent executor that doesn't create files
 	mockRunner := &MockAgentCommandRunnerNoChanges{

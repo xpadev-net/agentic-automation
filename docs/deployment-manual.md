@@ -1297,7 +1297,6 @@ env:
 | `OPERATOR_API_TOKEN` | はい | - | Bearer トークン |
 | `AGENT_RUN_ID` | はい | - | AgentRun レコード ID |
 | `AGENT_TYPE` | はい | - | エージェント種別（claude-code/cursor-agents） |
-| `GITHUB_TOKEN` | はい | - | GitHub Personal Access Token |
 | `ANTHROPIC_API_KEY` | 条件付き | - | Claude API キー（AGENT_TYPE=claude-code の場合） |
 | `CURSOR_API_KEY` | 条件付き | - | Cursor API キー（AGENT_TYPE=cursor-agents の場合） |
 | `RETRY_COUNT` | いいえ | `0` | 現在のリトライ回数 |

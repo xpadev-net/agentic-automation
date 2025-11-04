@@ -502,3 +502,12 @@ type BlockerGraphEdge struct {
 - Storage: MinIO (S3-compatible) for AI agent session persistence
 - Database: MySQL 8.0+ with goose migrations
 - Testing: Go testing + testify (unit + integration + contract tests)
+
+---
+
+## Maintenance: PAT 廃止対応（GitHub App 統一）
+
+- [x] ドキュメントから `GITHUB_TOKEN` 記述を削除（`docs/deployment-manual.md`, `k8s/pod-template.yaml`, `specs/.../quickstart.md`, CI ワークフロー）
+- [x] `agent-runner/main.go` から GitHubToken フィールドと参照を削除
+- [x] `internal/webhooks/handlers/issue_comment.go` の `GITHUB_APP_TEST_ALLOW_TOKEN` 分岐を削除
+- [x] テストを GitHub App モック前提に移行（PAT 依存除去）

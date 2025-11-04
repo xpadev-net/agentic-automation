@@ -58,7 +58,7 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ steps.meta.outputs.OWNER }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ github.token }}
 
       - name: Build and push ${{ matrix.component.name }} image
         uses: docker/build-push-action@v5

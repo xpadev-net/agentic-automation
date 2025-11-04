@@ -85,14 +85,6 @@ func HandleIssueComment(c *gin.Context) {
 		Logger: logger,
 	}
 
-	// テスト互換: 許可フラグがあり token があれば従来の token クライアントを利用
-	if config.GetEnv("GITHUB_APP_TEST_ALLOW_TOKEN", "0") == "1" {
-		if token := config.GetEnv("GITHUB_TOKEN", ""); token != "" {
-			if gh, err := clients.NewClient(token, logger); err == nil {
-				deps.GitHubClient = gh
-			}
-		}
-	}
 	// GitHub App クライアントは DI から取得（なければここで生成）
 	if appGitHubClient == nil {
 		ghApp, err := clients.NewGitHubAppClient(logger)

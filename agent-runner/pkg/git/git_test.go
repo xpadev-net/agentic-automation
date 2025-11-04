@@ -17,14 +17,6 @@ func TestCloneRepo_InvalidInputs(t *testing.T) {
 		errorMsg    string
 	}{
 		{
-			name:        "empty token",
-			token:       "",
-			repo:        "owner/repo",
-			dest:        "/tmp/test",
-			expectError: true,
-			errorMsg:    "GitHub token is required",
-		},
-		{
 			name:        "empty repo",
 			token:       "test-token",
 			repo:        "",
@@ -282,15 +274,6 @@ func TestCreatePR_InvalidInputs(t *testing.T) {
 		errorMsg    string
 	}{
 		{
-			name:        "empty token",
-			token:       "",
-			repo:        "owner/repo",
-			branchName:  "feature/test",
-			issueNumber: 1,
-			expectError: true,
-			errorMsg:    "GitHub token is required",
-		},
-		{
 			name:        "empty repo",
 			token:       "test-token",
 			repo:        "",
@@ -359,14 +342,11 @@ func TestCreatePR_DefaultBaseDetection_Smoke(t *testing.T) {
 func TestCreatePR_Integration(t *testing.T) {
 	t.Skip("Skipping integration test - requires valid GitHub token and repository access")
 	// To run this test:
-	// 1. Set GITHUB_TOKEN environment variable
+	// 1. Configure GitHub App credentials and obtain an installation token for the target repo
 	// 2. Use a test repository
 	// 3. Remove t.Skip() call
 	//
-	// token := os.Getenv("GITHUB_TOKEN")
-	// if token == "" {
-	// 	t.Skip("GITHUB_TOKEN not set")
-	// }
+	// token := "<installation-token>"
 	// repo := "owner/repo"
 	// branchName := "test-branch"
 	// issueNumber := 1
