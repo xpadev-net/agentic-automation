@@ -166,6 +166,10 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 	// Goroutine to read and parse stdout stream
 	go func() {
 		scanner := bufio.NewScanner(stdout)
+		// Set buffer size to handle large JSON lines (initial 1MB, max 10MB)
+		// This prevents ErrTooLong errors when cursor-agent outputs large messages
+		buf := make([]byte, 0, 1024*1024) // 1MB initial buffer
+		scanner.Buffer(buf, 10*1024*1024) // 10MB max buffer
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			lineCopy := make([]byte, len(line))
