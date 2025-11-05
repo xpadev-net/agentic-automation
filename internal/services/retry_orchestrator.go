@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
@@ -20,20 +21,30 @@ const (
 
 // RetryOrchestrator manages retry count and validation for AgentRun retries
 type RetryOrchestrator struct {
-	agentRunRepo repositories.AgentRunRepository
-	logger       *zap.Logger
+	agentRunRepo        repositories.AgentRunRepository
+	jobService          KubernetesJobService
+	issueContextService *IssueContextService
+	logger              *zap.Logger
 }
 
 // NewRetryOrchestrator creates a new RetryOrchestrator instance.
 // It requires an AgentRunRepository and an optional logger.
+// If jobService and issueContextService are provided, TriggerRetry and HandleMaxRetriesExceeded can be used.
 //
 // Parameters:
 //   - agentRunRepo: AgentRunRepository instance (must not be nil, will panic if nil)
+//   - jobService: KubernetesJobService instance (optional, can be nil if only using basic retry count methods)
+//   - issueContextService: IssueContextService instance (optional, can be nil if only using basic retry count methods)
 //   - logger: Structured logger instance (if nil, uses config.GetLogger())
 //
 // Returns:
 //   - *RetryOrchestrator: Initialized service instance
-func NewRetryOrchestrator(agentRunRepo repositories.AgentRunRepository, logger *zap.Logger) *RetryOrchestrator {
+func NewRetryOrchestrator(
+	agentRunRepo repositories.AgentRunRepository,
+	jobService KubernetesJobService,
+	issueContextService *IssueContextService,
+	logger *zap.Logger,
+) *RetryOrchestrator {
 	if agentRunRepo == nil {
 		panic("agentRunRepo is required for RetryOrchestrator")
 	}
@@ -48,8 +59,10 @@ func NewRetryOrchestrator(agentRunRepo repositories.AgentRunRepository, logger *
 	)
 
 	return &RetryOrchestrator{
-		agentRunRepo: agentRunRepo,
-		logger:       logger,
+		agentRunRepo:        agentRunRepo,
+		jobService:          jobService,
+		issueContextService: issueContextService,
+		logger:              logger,
 	}
 }
 
@@ -182,6 +195,171 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 	return nil
 }
 
+// TriggerRetry triggers a retry for an AgentRun by incrementing retry count,
+// updating the state, and creating a new Kubernetes Job with aggregated feedback.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - agentRun: AgentRun record to retry (must not be nil)
+//   - issue: Issue record associated with the AgentRun (must not be nil)
+//   - feedback: AggregatedFeedback containing review feedback and CI logs (may be nil)
+//
+// Returns:
+//   - error: Error if retry cannot be triggered (e.g., max retries exceeded, Job creation failed)
+func (r *RetryOrchestrator) TriggerRetry(
+	ctx context.Context,
+	agentRun *models.AgentRun,
+	issue *models.Issue,
+	feedback *AggregatedFeedback,
+) error {
+	if r.jobService == nil {
+		return fmt.Errorf("jobService is required for TriggerRetry")
+	}
+	if r.issueContextService == nil {
+		return fmt.Errorf("issueContextService is required for TriggerRetry")
+	}
+
+	if agentRun == nil {
+		return fmt.Errorf("agentRun must not be nil")
+	}
+	if issue == nil {
+		return fmt.Errorf("issue must not be nil")
+	}
+
+	r.logger.Info("Triggering retry for AgentRun",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("current_retry_count", agentRun.RetryCount),
+		zap.Int("issue_id", issue.ID),
+	)
+
+	// Check if retry is allowed
+	if !r.ShouldRetry(agentRun) {
+		r.logger.Warn("Max retry count exceeded, cannot trigger retry",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("retry_count", agentRun.RetryCount),
+			zap.Int("max_retry_count", MaxRetryCount),
+		)
+		return r.HandleMaxRetriesExceeded(agentRun)
+	}
+
+	// Increment retry count atomically
+	if err := r.IncrementRetryCount(ctx, agentRun); err != nil {
+		return fmt.Errorf("failed to increment retry count: %w", err)
+	}
+
+	// Check if max retries exceeded after increment
+	if agentRun.RetryCount >= MaxRetryCount {
+		r.logger.Warn("Max retry count reached after increment",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("retry_count", agentRun.RetryCount),
+		)
+		return r.HandleMaxRetriesExceeded(agentRun)
+	}
+
+	// Update state to queued for retry
+	agentRun.State = "queued"
+	if err := r.agentRunRepo.Update(agentRun); err != nil {
+		r.logger.Error("Failed to update AgentRun state for retry",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to update agent run state: %w", err)
+	}
+
+	// Extract repository info from issue.Repo (format: "owner/repo")
+	repoParts := splitRepo(issue.Repo)
+	if len(repoParts) != 2 {
+		return fmt.Errorf("invalid repo format: %s", issue.Repo)
+	}
+	owner := repoParts[0]
+	repo := repoParts[1]
+
+	// Re-collect Issue context to get updated prompt
+	issueContext, err := r.issueContextService.CollectIssueContext(ctx, owner, repo, issue.Number)
+	if err != nil {
+		r.logger.Error("Failed to collect Issue context for retry",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("issue_id", issue.ID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to collect issue context: %w", err)
+	}
+
+	// Format prompt
+	prompt := r.issueContextService.FormatPrompt(issueContext)
+
+	r.logger.Info("Creating retry Job for AgentRun",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("retry_count", agentRun.RetryCount),
+		zap.Bool("has_feedback", feedback != nil),
+	)
+
+	// Create new Kubernetes Job with feedback
+	_, err = r.jobService.CreateJobForAgentRunWithFeedback(ctx, agentRun, issue, prompt, feedback)
+	if err != nil {
+		r.logger.Error("Failed to create retry Job",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("retry_count", agentRun.RetryCount),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to create retry job: %w", err)
+	}
+
+	r.logger.Info("Retry Job created successfully",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("retry_count", agentRun.RetryCount),
+	)
+
+	return nil
+}
+
+// HandleMaxRetriesExceeded handles the case when max retries have been exceeded.
+// It updates the AgentRun state to "failed" and triggers failure notifications.
+//
+// Parameters:
+//   - agentRun: AgentRun record that exceeded max retries (must not be nil)
+//
+// Returns:
+//   - error: Error if state update fails
+//
+// Note: GitHub and Discord notifications should be triggered by the caller or via
+// a separate notification service (to be implemented in T100, T101).
+func (r *RetryOrchestrator) HandleMaxRetriesExceeded(agentRun *models.AgentRun) error {
+	if agentRun == nil {
+		return fmt.Errorf("agentRun must not be nil")
+	}
+
+	r.logger.Warn("Handling max retries exceeded",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("retry_count", agentRun.RetryCount),
+		zap.Int("max_retry_count", MaxRetryCount),
+	)
+
+	// Update state to failed
+	agentRun.State = "failed"
+	now := time.Now()
+	agentRun.CompletedAt = &now
+
+	// Update AgentRun in database
+	if err := r.agentRunRepo.Update(agentRun); err != nil {
+		r.logger.Error("Failed to update AgentRun state to failed",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to update agent run state: %w", err)
+	}
+
+	r.logger.Info("AgentRun state updated to failed due to max retries",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("retry_count", agentRun.RetryCount),
+	)
+
+	// TODO(T100, T101): Trigger GitHub and Discord notifications for max retries exceeded
+	// This should be handled by the caller or via a separate notification service
+
+	return nil
+}
+
 // GetRetryCount returns the current retry count for an AgentRun.
 // This is a helper method for convenience.
 //
@@ -287,4 +465,9 @@ func (r *RetryOrchestrator) GetRemainingRetries(agentRun *models.AgentRun) int {
 	}
 
 	return remaining
+}
+
+// splitRepo splits a repository full name (format: "owner/repo") into owner and repo parts.
+func splitRepo(repo string) []string {
+	return strings.SplitN(repo, "/", 2)
 }
