@@ -10,9 +10,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -387,22 +389,31 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 				prModel, perr := prRepo.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
 				var issue *models.Issue
 				if perr == nil && prModel != nil && prModel.IssueID != nil {
-					issue, _ = issueRepo.FindByID(*prModel.IssueID)
+					issue, _ = repositories.NewIssueRepository().FindByID(*prModel.IssueID)
 				}
-				if githubNotification != nil && issue != nil {
-					idem := c.GetHeader(deliveryHeader)
-					if idem == "" {
-						idem = fmt.Sprintf("merge-fail-%d-%d", payload.PullRequest.Number, time.Now().Unix())
+				// Build GitHub notification service (best-effort)
+				if issue != nil {
+					if appGitHubClient != nil {
+						if raw, e := appGitHubClient.ForRepo(ctx, owner, repo); e == nil {
+							ghCli := clients.NewFromGitHub(raw, logger)
+							ghNotify := services.NewGitHubNotificationService(ghCli, logger)
+							idem := c.GetHeader(deliveryHeader)
+							if idem == "" {
+								idem = fmt.Sprintf("merge-fail-%d-%d", payload.PullRequest.Number, time.Now().Unix())
+							}
+							_ = ghNotify.NotifyMergeFailure(
+								ctx, owner, repo,
+								issue.Number, payload.PullRequest.Number,
+								res.ErrorType, res.ErrorMessage,
+								idem,
+							)
+						}
 					}
-					_ = githubNotification.NotifyMergeFailure(
-						ctx, owner, repo,
-						issue.Number, payload.PullRequest.Number,
-						res.ErrorType, res.ErrorMessage,
-						idem,
-					)
-				}
-				if discordService != nil && issue != nil && prModel != nil {
-					_ = discordService.NotifyMergeFailure(ctx, prModel, issue, res.ErrorType, res.ErrorMessage)
+					// Discord notification
+					if dc := clients.NewDiscordClient("", logger); dc != nil {
+						dsvc := services.NewDiscordNotificationService(dc, logger)
+						_ = dsvc.NotifyMergeFailure(ctx, prModel, issue, res.ErrorType, res.ErrorMessage)
+					}
 				}
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "merge_attempt_failed",

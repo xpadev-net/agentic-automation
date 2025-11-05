@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,20 +51,21 @@ type CheckSuiteRepository struct {
 
 // CheckSuiteDeps represents injectable dependencies for HandleCheckSuite
 type CheckSuiteDeps struct {
-	Logger                    *zap.Logger
-	GitHubClient              *clients.Client
-	PullRequestRepository     *repositories.PullRequestRepository
-	CIStatusRepository        *repositories.CIStatusRepository
-	CIStatusAggregator        services.CIStatusAggregator
-	CIFailureAnalyzer         *services.CIFailureAnalyzer
-	FeedbackAggregator        *services.FeedbackAggregator
-	RetryOrchestrator         *services.RetryOrchestrator
-	KubernetesJobService      services.KubernetesJobService
-	GitHubNotificationService *services.GitHubNotificationService
-	IssueContextService       *services.IssueContextService
-	AgentRunRepository        repositories.AgentRunRepository
-	IssueRepository           *repositories.IssueRepository
-	AutoMergeService          services.AutoMergeService
+	Logger                     *zap.Logger
+	GitHubClient               *clients.Client
+	PullRequestRepository      *repositories.PullRequestRepository
+	CIStatusRepository         *repositories.CIStatusRepository
+	CIStatusAggregator         services.CIStatusAggregator
+	CIFailureAnalyzer          *services.CIFailureAnalyzer
+	FeedbackAggregator         *services.FeedbackAggregator
+	RetryOrchestrator          *services.RetryOrchestrator
+	KubernetesJobService       services.KubernetesJobService
+	GitHubNotificationService  *services.GitHubNotificationService
+	DiscordNotificationService *services.DiscordNotificationService
+	IssueContextService        *services.IssueContextService
+	AgentRunRepository         repositories.AgentRunRepository
+	IssueRepository            *repositories.IssueRepository
+	AutoMergeService           services.AutoMergeService
 }
 
 // HandleCheckSuite handles GitHub check_suite webhook events
