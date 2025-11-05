@@ -9,6 +9,7 @@ import (
 	"agentic-automation/internal/webhooks/middleware"
 	"agentic-automation/tests/integration/testutils"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -78,9 +79,43 @@ func Test_CheckSuiteThenStatus_Success_TriggersEvaluationPath(t *testing.T) {
             created_at DATETIME,
             updated_at DATETIME
         )`).Error)
+	// add minimal tables for idempotency middleware
+	require.NoError(t, db.Exec(`
+        CREATE TABLE IF NOT EXISTS issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT,
+            number INTEGER,
+            github_issue_id INTEGER,
+            title TEXT,
+            body TEXT,
+            labels TEXT,
+            state TEXT DEFAULT 'open',
+            created_at DATETIME,
+            updated_at DATETIME
+        )`).Error)
+	require.NoError(t, db.Exec(`
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT UNIQUE,
+            issue_id INTEGER,
+            pr_id INTEGER,
+            state TEXT DEFAULT 'queued',
+            agent_type TEXT DEFAULT 'claude-code',
+            input TEXT,
+            output TEXT,
+            retry_count INTEGER DEFAULT 0,
+            error_message TEXT,
+            commit_sha TEXT,
+            s3_session_key TEXT,
+            session_saved_at DATETIME,
+            started_at DATETIME,
+            completed_at DATETIME,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
+        )`).Error)
 
 	// seed PR
-	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open"}
+	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open", Branch: "feature/x"}
 	require.NoError(t, db.Create(pr).Error)
 
 	prRepo := repositories.NewPullRequestRepository(db)
@@ -110,7 +145,7 @@ func Test_CheckSuiteThenStatus_Success_TriggersEvaluationPath(t *testing.T) {
 	// send check_suite success
 	csPayload := handlers.CheckSuitePayload{
 		Action:     "completed",
-		CheckSuite: handlers.CheckSuite{ID: 1001, Status: "completed", Conclusion: stringPtr("success"), HeadBranch: "feature/x", HeadSHA: "abc123", PullRequests: []handlers.CheckSuitePullRequest{{Number: 1}}},
+		CheckSuite: handlers.CheckSuite{ID: 1001, Status: "completed", Conclusion: statusStrPtr("success"), HeadBranch: "feature/x", HeadSHA: "abc123", PullRequests: []handlers.CheckSuitePullRequest{{Number: 1}}},
 		Repository: handlers.CheckSuiteRepository{FullName: "test/owner"},
 	}
 	b1, _ := json.Marshal(csPayload)
@@ -122,8 +157,8 @@ func Test_CheckSuiteThenStatus_Success_TriggersEvaluationPath(t *testing.T) {
 	router.ServeHTTP(w1, req1)
 	assert.Equal(t, http.StatusOK, w1.Code)
 
-	// send status success
-	stPayload := map[string]any{"state": "success", "sha": "abc123", "context": "ci/test", "repository": map[string]any{"full_name": "test/owner"}}
+	// send status success (include branches for PR resolution)
+	stPayload := map[string]any{"state": "success", "sha": "abc123", "context": "ci/test", "repository": map[string]any{"full_name": "test/owner"}, "branches": []map[string]any{{"name": "feature/x"}}}
 	b2, _ := json.Marshal(stPayload)
 	req2 := httptest.NewRequest("POST", "/webhooks/status", bytes.NewBuffer(b2))
 	req2.Header.Set("X-GitHub-Delivery", "int-2")
@@ -136,4 +171,4 @@ func Test_CheckSuiteThenStatus_Success_TriggersEvaluationPath(t *testing.T) {
 	assert.True(t, fakeChecker.called)
 }
 
-func stringPtr(s string) *string { return &s }
+func statusStrPtr(s string) *string { return &s }

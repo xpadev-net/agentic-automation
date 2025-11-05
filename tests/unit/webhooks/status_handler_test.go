@@ -8,6 +8,7 @@ import (
 	"agentic-automation/internal/webhooks/handlers"
 	"agentic-automation/internal/webhooks/middleware"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -60,7 +62,44 @@ func setupTestDBForStatus(t *testing.T) *gorm.DB {
             started_at DATETIME,
             completed_at DATETIME,
             created_at DATETIME,
+            updated_at DATETIME,
+            UNIQUE(check_suite_id, pr_id)
+        )
+    `).Error)
+	// Tables for idempotency middleware path
+	require.NoError(t, db.Exec(`
+        CREATE TABLE IF NOT EXISTS issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT,
+            number INTEGER,
+            github_issue_id INTEGER,
+            title TEXT,
+            body TEXT,
+            labels TEXT,
+            state TEXT DEFAULT 'open',
+            created_at DATETIME,
             updated_at DATETIME
+        )
+    `).Error)
+	require.NoError(t, db.Exec(`
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            idempotency_key TEXT UNIQUE,
+            issue_id INTEGER,
+            pr_id INTEGER,
+            state TEXT DEFAULT 'queued',
+            agent_type TEXT DEFAULT 'claude-code',
+            input TEXT,
+            output TEXT,
+            retry_count INTEGER DEFAULT 0,
+            error_message TEXT,
+            commit_sha TEXT,
+            s3_session_key TEXT,
+            session_saved_at DATETIME,
+            started_at DATETIME,
+            completed_at DATETIME,
+            created_at DATETIME NOT NULL,
+            updated_at DATETIME NOT NULL
         )
     `).Error)
 	return db
@@ -71,7 +110,7 @@ func setupTestRouterForStatus(db *gorm.DB) *gin.Engine {
 	router := gin.New()
 
 	// logger & db
-	logger := zaptest.NewLogger(nil)
+	logger := zap.NewNop()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 
@@ -127,7 +166,7 @@ func TestStatus_Pending_DoesNotEvaluate(t *testing.T) {
 	router := setupTestRouterForStatus(db)
 
 	// Create PR
-	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open"}
+	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open", Branch: "feature/test"}
 	require.NoError(t, db.Create(pr).Error)
 
 	payload := map[string]any{
@@ -135,7 +174,7 @@ func TestStatus_Pending_DoesNotEvaluate(t *testing.T) {
 		"sha":        "abc123",
 		"context":    "ci/test",
 		"repository": map[string]any{"full_name": "test/owner"},
-		"branches":   []map[string]any{{"name": ""}},
+		"branches":   []map[string]any{{"name": "feature/test"}},
 	}
 	b, _ := json.Marshal(payload)
 
@@ -163,7 +202,7 @@ func TestStatus_Success_EvaluatesAndPersists(t *testing.T) {
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 
-	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open"}
+	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open", Branch: "feature/test"}
 	require.NoError(t, db.Create(pr).Error)
 
 	// deps with fake merge checker
@@ -185,7 +224,7 @@ func TestStatus_Success_EvaluatesAndPersists(t *testing.T) {
 		"context":    "ci/test",
 		"target_url": "https://ci.example/run/1",
 		"repository": map[string]any{"full_name": "test/owner"},
-		"branches":   []map[string]any{{"name": ""}},
+		"branches":   []map[string]any{{"name": "feature/test"}},
 	}
 	b, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/webhooks/status", bytes.NewBuffer(b))
@@ -210,7 +249,7 @@ func TestStatus_Idempotency_SameDeliveryProcessedOnce(t *testing.T) {
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 
-	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open"}
+	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open", Branch: "feature/test"}
 	require.NoError(t, db.Create(pr).Error)
 
 	prRepo := repositories.NewPullRequestRepository(db)
@@ -272,7 +311,7 @@ func TestStatus_AggregatorCalled_OnAnyState(t *testing.T) {
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 
-	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open"}
+	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open", Branch: "feature/test"}
 	require.NoError(t, db.Create(pr).Error)
 
 	// deps with fake aggregator
@@ -293,7 +332,7 @@ func TestStatus_AggregatorCalled_OnAnyState(t *testing.T) {
 		"sha":        "abc123",
 		"context":    "ci/test",
 		"repository": map[string]any{"full_name": "test/owner"},
-		"branches":   []map[string]any{{"name": ""}},
+		"branches":   []map[string]any{{"name": "feature/test"}},
 	}
 	b, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/webhooks/status", bytes.NewBuffer(b))
@@ -321,7 +360,7 @@ func TestStatus_Failure_DoesNotEvaluate(t *testing.T) {
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 
-	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open"}
+	pr := &models.PullRequest{Repo: "test/owner", Number: 1, Status: "open", Branch: "feature/test"}
 	require.NoError(t, db.Create(pr).Error)
 
 	prRepo := repositories.NewPullRequestRepository(db)
@@ -341,7 +380,7 @@ func TestStatus_Failure_DoesNotEvaluate(t *testing.T) {
 		"sha":        "abc123",
 		"context":    "ci/test",
 		"repository": map[string]any{"full_name": "test/owner"},
-		"branches":   []map[string]any{{"name": ""}},
+		"branches":   []map[string]any{{"name": "feature/test"}},
 	}
 	b, _ := json.Marshal(payload)
 	req := httptest.NewRequest("POST", "/webhooks/status", bytes.NewBuffer(b))

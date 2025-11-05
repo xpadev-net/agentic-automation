@@ -153,7 +153,7 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	// Resolve PRs by commit SHA using GitHub API (fallback: by branches head if provided)
 	var prNumber int
 	if gh != nil {
-		prs, resp, err := gh.Repositories.ListPullRequestsWithCommit(ctx, owner, repo, payload.Sha, &github.ListOptions{PerPage: 50})
+		prs, resp, err := gh.PullRequests.ListPullRequestsWithCommit(ctx, owner, repo, payload.Sha, &github.ListOptions{PerPage: 50})
 		if err == nil && len(prs) > 0 {
 			prNumber = prs[0].GetNumber()
 			config.GetLogger().Debug("PR resolved from commit",
