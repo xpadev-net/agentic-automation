@@ -91,3 +91,13 @@ func (r *PullRequestRepository) Upsert(pr *models.PullRequest) error {
 		}),
 	}).Create(pr).Error
 }
+
+// FindOpenByRepoAndBranch finds an open PR by repo and head branch name.
+func (r *PullRequestRepository) FindOpenByRepoAndBranch(repo string, branch string) (*models.PullRequest, error) {
+	var pr models.PullRequest
+	err := r.db.Where("repo = ? AND branch = ? AND status = ?", repo, branch, "open").First(&pr).Error
+	if err != nil {
+		return nil, err
+	}
+	return &pr, nil
+}

@@ -17,6 +17,9 @@ type CIStatusAggregator interface {
 	// AggregateAndStore fetches check runs for the given checkSuiteID/headSHA and stores an aggregated record.
 	// It validates that the provided headSHA matches the PR's current head before persisting.
 	AggregateAndStore(ctx context.Context, owner, repo string, prID int, prNumber int, checkSuiteID int64, headSHA string) (*models.CIStatus, error)
+	// AddStatusSignal persists a supplementary status signal (from status webhook) as CIStatus row.
+	// This is treated as auxiliary info; check_suite remains the source of truth for aggregation.
+	AddStatusSignal(ctx context.Context, prID int, name string, state string, targetURL string) error
 }
 
 // GitHubChecks defines the subset of GitHub client methods needed by the aggregator.
@@ -137,6 +140,44 @@ func (s *ciStatusAggregator) AggregateAndStore(ctx context.Context, owner, repo 
 	)
 
 	return ci, nil
+}
+
+// AddStatusSignal stores a supplementary CI status row from status webhook.
+// Mapping:
+//
+//	state: success -> completed/success, failure|error -> completed/failure, pending/other -> in_progress
+func (s *ciStatusAggregator) AddStatusSignal(ctx context.Context, prID int, name string, state string, targetURL string) error {
+	status := "in_progress"
+	var conclusion *string
+	switch state {
+	case "success":
+		status = "completed"
+		v := "success"
+		conclusion = &v
+	case "failure", "error":
+		status = "completed"
+		v := "failure"
+		conclusion = &v
+	default:
+		status = "in_progress"
+		conclusion = nil
+	}
+
+	var logsURL *string
+	if targetURL != "" {
+		u := targetURL
+		logsURL = &u
+	}
+
+	ci := &models.CIStatus{
+		PRID:         prID,
+		CheckSuiteID: "",
+		Name:         name,
+		Status:       status,
+		Conclusion:   conclusion,
+		LogsURL:      logsURL,
+	}
+	return s.repo.CreateOrUpdate(ci)
 }
 
 type aggregationResult struct {
