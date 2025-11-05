@@ -111,8 +111,30 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 
 	// Primary decision by mergeable flag
 	if !*mergeable {
-		d.logger.Info("merge conflict detected via mergeable=false")
-		return MergeConflictStatusHasConflict, nil
+		// When mergeable=false, GitHub indicates PR cannot be merged now for any reason
+		// (e.g., failing checks, review required, draft, behind, or conflicts).
+		// We only classify as conflict when mergeable_state explicitly says "dirty".
+		if state == nil {
+			d.logger.Info("mergeable=false with state=nil -> unknown")
+			return MergeConflictStatusUnknown, nil
+		}
+		s := *state
+		switch s {
+		case "dirty":
+			d.logger.Info("merge conflict detected via mergeable_state=dirty (mergeable=false)")
+			return MergeConflictStatusHasConflict, nil
+		case "blocked", "behind", "unstable", "draft", "has_hooks", "unknown":
+			d.logger.Info("mergeable=false but non-conflict state",
+				zap.String("mergeable_state", s),
+			)
+			return MergeConflictStatusNoConflict, nil
+		default:
+			// Any other undocumented state -> treat as non-conflict blocker
+			d.logger.Info("mergeable=false with unrecognized state treated as non-conflict",
+				zap.String("mergeable_state", s),
+			)
+			return MergeConflictStatusNoConflict, nil
+		}
 	}
 
 	// mergeable == true; refine with state when available
@@ -122,7 +144,7 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 		case "dirty":
 			d.logger.Info("merge conflict detected via mergeable_state=dirty")
 			return MergeConflictStatusHasConflict, nil
-		case "clean", "unstable", "blocked", "unknown":
+		case "clean", "unstable", "blocked", "behind", "draft", "has_hooks", "unknown":
 			d.logger.Info("no merge conflict detected",
 				zap.String("mergeable_state", s),
 			)
