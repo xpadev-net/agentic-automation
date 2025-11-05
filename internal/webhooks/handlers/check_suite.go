@@ -698,6 +698,11 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 
 		// マージ失敗（結果で通知）
 		if mergeRes != nil && !mergeRes.Merged {
+			// Initialize GitHubNotificationService if not already set
+			if deps.GitHubNotificationService == nil && githubClient != nil {
+				deps.GitHubNotificationService = services.NewGitHubNotificationService(githubClient, logger)
+			}
+
 			// Issue 情報取得（通知に使用）
 			var issue *models.Issue
 			if pr.IssueID != nil {
