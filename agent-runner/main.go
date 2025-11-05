@@ -173,6 +173,19 @@ func validateEnv() (*envConfig, error) {
 		cfg.WorkDir = "/workspace"
 	}
 
+	// Cursor agent specific environment variables
+	cfg.CursorModel = os.Getenv("CURSOR_MODEL")
+	if cfg.CursorModel == "" {
+		cfg.CursorModel = "auto" // Default value
+	}
+
+	cursorAllowWriteStr := os.Getenv("CURSOR_ALLOW_WRITE")
+	if cursorAllowWriteStr == "" {
+		cfg.CursorAllowWrite = true // Default value
+	} else {
+		cfg.CursorAllowWrite = strings.ToLower(cursorAllowWriteStr) == "true"
+	}
+
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
@@ -188,6 +201,8 @@ type envConfig struct {
 	AgentType        string
 	RetryCount       int
 	WorkDir          string
+	CursorModel      string
+	CursorAllowWrite bool
 }
 
 // Run executes the agent-runner workflow.

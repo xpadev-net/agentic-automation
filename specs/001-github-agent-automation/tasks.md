@@ -194,7 +194,7 @@
 - [x] T091 [P] [US3] Implement Codex review request service (post "@codex review" comment) in internal/services/codex_review.go
 - [x] T092 [US3] Implement "@codex review" comment detection in internal/utils/comment_parser.go
 - [x] T093 [US3] Create Codex approval detector ("Codex Review: Didn't find any major issues.") in internal/services/codex_approval.go
-- [ ] T094 [US3] Implement webhook handler for check_suite events (CI results) in internal/webhooks/handlers/check_suite.go
+- [x] T094 [US3] Implement webhook handler for check_suite events (CI results) in internal/webhooks/handlers/check_suite.go
 - [x] T095 [US3] Create CI failure analyzer parsing check logs in internal/services/ci_failure.go
 - [x] T096 [US3] Implement retry orchestrator managing retry_count (max 50) in internal/services/retry_orchestrator.go
 - [x] T097 [US3] Create feedback aggregator combining review + CI results in internal/services/feedback_aggregator.go
