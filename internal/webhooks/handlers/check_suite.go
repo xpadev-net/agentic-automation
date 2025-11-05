@@ -343,21 +343,37 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		githubClient := deps.GitHubClient
 		if githubClient == nil {
 			if appGitHubClient == nil {
+				// Fallback: skip re-evaluation (keep legacy behavior for tests/env without credentials)
 				logger.Error("GitHub App client not available",
 					zap.String("delivery_id", deliveryID),
 				)
-				c.Error(errors.New("github client not provided"))
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"action":      "re_eval_skipped",
+					"reason":      "github_client_unavailable",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+					"conclusion":  *conclusion,
+				})
 				return
 			}
 			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 			if err != nil {
+				// Fallback: skip re-evaluation
 				logger.Error("Failed to init per-repo GitHub client",
 					zap.Error(err),
 					zap.String("owner", owner),
 					zap.String("repo", repo),
 					zap.String("delivery_id", deliveryID),
 				)
-				c.Error(err)
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"action":      "re_eval_skipped",
+					"reason":      "github_client_init_failed",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+					"conclusion":  *conclusion,
+				})
 				return
 			}
 			githubClient = clients.NewFromGitHub(rawClient, logger)
