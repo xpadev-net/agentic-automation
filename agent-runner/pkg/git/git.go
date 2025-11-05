@@ -198,9 +198,12 @@ func CreateBranch(workDir, branchName string, retryCount int) error {
 }
 
 // HasChanges checks if there are any file changes in the workspace.
-// Implementation will be added in T036.
 func HasChanges(workDir string) (bool, error) {
-	return false, fmt.Errorf("not implemented: T036")
+	changedFiles, err := GetChangedFiles(workDir)
+	if err != nil {
+		return false, err
+	}
+	return len(changedFiles) > 0, nil
 }
 
 // CommitChanges and PushBranch are implemented in committer.go (T036).
