@@ -103,20 +103,35 @@ func (s *DiscordNotificationService) NotifyMaxRetries(ctx context.Context, agent
 	return nil
 }
 
-func (s *DiscordNotificationService) NotifyMergeFailure(ctx context.Context, pr *models.PullRequest, issue *models.Issue, errorType, errorMessage string) error {
-	// Check if discord client is disabled (non-blocking)
+// NotifyMergeSuccess sends a Discord notification when a PR is auto-merged successfully.
+// This is non-blocking; if the client is nil or sending fails, it only logs.
+func (s *DiscordNotificationService) NotifyMergeSuccess(ctx context.Context, pr *models.PullRequest, issue *models.Issue, retryCount int) error {
 	if s.discordClient == nil {
 		return nil
 	}
-
-	// Send notification
-	err := s.discordClient.SendMergeFailureNotification(ctx, pr, issue, errorType, errorMessage)
-	if err != nil {
-		s.logger.Error("Failed to send Discord merge failure notification",
+	if err := s.discordClient.SendPRMergedNotification(ctx, pr, issue, retryCount); err != nil {
+		s.logger.Warn("Failed to send Discord PR merged notification",
 			zap.Error(err),
-			zap.Int("pr_number", pr.Number))
+			zap.Int("pr_number", pr.Number),
+		)
 		return err
 	}
+	return nil
+}
 
+// NotifyMergeFailure sends a Discord notification when a PR auto-merge fails.
+// This is non-blocking; if the client is nil or sending fails, it only logs.
+func (s *DiscordNotificationService) NotifyMergeFailure(ctx context.Context, pr *models.PullRequest, issue *models.Issue, errorMessage string, errorCode string) error {
+	if s.discordClient == nil {
+		return nil
+	}
+	if err := s.discordClient.SendPRMergeFailureNotification(ctx, pr, issue, errorMessage, errorCode); err != nil {
+		s.logger.Warn("Failed to send Discord PR merge failure notification",
+			zap.Error(err),
+			zap.Int("pr_number", pr.Number),
+			zap.String("error_code", errorCode),
+		)
+		return err
+	}
 	return nil
 }
