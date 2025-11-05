@@ -318,7 +318,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 				)
 				// 成否に関わらず 200 を返す（再試行は他イベントで行われ得る）
 				// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
-				_ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
+				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "merge_attempt_failed",
 					"delivery_id": deliveryID,
@@ -329,7 +329,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 				zap.String("delivery_id", deliveryID),
 			)
 			// 任意通知（軽量）
-			_ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "✅ Auto-merged after Codex approval.")
+			_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "✅ Auto-merged after Codex approval.")
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "merged_or_initiated",
 				"delivery_id": deliveryID,
@@ -338,7 +338,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		}
 
 		// 条件未成立（任意通知：理由を簡易表示）
-		_ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "ℹ️ Merge re-evaluated after Codex approval: not mergeable yet.")
+		_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "ℹ️ Merge re-evaluated after Codex approval: not mergeable yet.")
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "re_evaluated_not_mergeable",
 			"delivery_id": deliveryID,
