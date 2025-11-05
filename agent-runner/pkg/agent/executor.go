@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"agent-runner/pkg/utils"
 )
@@ -209,22 +210,91 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 		}
 	}()
 
+	// Helper function to kill process and wait with timeout
+	killAndWait := func() error {
+		if cmd.Process != nil {
+			// Kill the process to prevent deadlock
+			if killErr := cmd.Process.Kill(); killErr != nil {
+				return fmt.Errorf("failed to kill process: %w", killErr)
+			}
+		}
+
+		// Wait for process to exit with timeout to prevent hanging
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- cmd.Wait()
+		}()
+
+		select {
+		case err := <-waitDone:
+			return err
+		case <-time.After(5 * time.Second):
+			// Process didn't exit within 5 seconds, but we already killed it
+			// This shouldn't happen, but we return an error to be safe
+			return fmt.Errorf("process did not exit within timeout after kill")
+		}
+	}
+
 	// Wait for stdout reading to complete
 	stdoutErr := <-stdoutErrCh
 	if stdoutErr != nil {
-		cmd.Wait() // Clean up
-		return "", stdoutErr
+		// Kill the process to prevent deadlock from pipe filling up
+		killErr := killAndWait()
+
+		// Get any output that was successfully read before the error
+		outputMu.Lock()
+		outputStr := outputBuf.String()
+		outputMu.Unlock()
+
+		if stderrBuf.Len() > 0 {
+			outputStr += stderrBuf.String()
+		}
+
+		if killErr != nil {
+			return outputStr, fmt.Errorf("%v (process kill failed: %v)", stdoutErr, killErr)
+		}
+		return outputStr, fmt.Errorf("%v (process killed due to stream error)", stdoutErr)
 	}
 
 	// Wait for stderr reading to complete
 	stderrErr := <-stderrErrCh
 	if stderrErr != nil {
-		cmd.Wait() // Clean up
-		return "", stderrErr
+		// Kill the process to prevent deadlock from pipe filling up
+		killErr := killAndWait()
+
+		// Get any output that was successfully read before the error
+		outputMu.Lock()
+		outputStr := outputBuf.String()
+		outputMu.Unlock()
+
+		if stderrBuf.Len() > 0 {
+			outputStr += stderrBuf.String()
+		}
+
+		if killErr != nil {
+			return outputStr, fmt.Errorf("%v (process kill failed: %v)", stderrErr, killErr)
+		}
+		return outputStr, fmt.Errorf("%v (process killed due to stream error)", stderrErr)
 	}
 
-	// Wait for command to complete
-	cmdErr := cmd.Wait()
+	// Wait for command to complete with timeout to prevent hanging
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- cmd.Wait()
+	}()
+
+	var cmdErr error
+	select {
+	case cmdErr = <-waitDone:
+		// Process completed normally
+	case <-time.After(1 * time.Hour):
+		// This is a very long timeout for safety, but if it happens something is wrong
+		// Kill the process and return error
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		cmdErr = fmt.Errorf("command did not complete within 1 hour timeout")
+	}
 
 	// Get final output
 	outputMu.Lock()
