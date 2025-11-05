@@ -705,7 +705,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 
 			// Issue 情報取得（通知に使用）
 			var issue *models.Issue
-			if pr.IssueID != nil {
+			if deps.IssueRepository != nil && pr.IssueID != nil {
 				if i, err := deps.IssueRepository.FindByID(*pr.IssueID); err == nil {
 					issue = i
 				} else {
