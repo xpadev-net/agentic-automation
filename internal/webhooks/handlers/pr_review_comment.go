@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -77,35 +78,74 @@ func (a *ciStatusProviderAdapter) GetAggregatedState(_ context.Context, _ string
 	if err != nil {
 		return services.CIStateUnknown, err
 	}
-	// 優先度: failed > pending > success（ci_status_aggregator と整合）
-	// DB返却順に依存せず、最も厳しい状態を保持する
-	pendingSeen := false
-	successSeen := false
-	for _, s := range statuses {
+	// 最新 aggregated を 1 件選定する
+	var latest *models.CIStatus
+	// helper: 比較関数（CompletedAt > UpdatedAt > CheckSuiteID 数値）
+	isNewer := func(a, b *models.CIStatus) bool {
+		// CompletedAt: nil は古い扱い
+		if a.CompletedAt != nil || b.CompletedAt != nil {
+			if a.CompletedAt == nil {
+				return false
+			}
+			if b.CompletedAt == nil {
+				return true
+			}
+			if a.CompletedAt.After(*b.CompletedAt) {
+				return true
+			}
+			if b.CompletedAt.After(*a.CompletedAt) {
+				return false
+			}
+		}
+		// UpdatedAt
+		if a.UpdatedAt.After(b.UpdatedAt) {
+			return true
+		}
+		if b.UpdatedAt.After(a.UpdatedAt) {
+			return false
+		}
+		// CheckSuiteID 数値比較（失敗時は同等扱い）
+		var ai, bi int64
+		if a.CheckSuiteID != "" {
+			if v, err := strconv.ParseInt(a.CheckSuiteID, 10, 64); err == nil {
+				ai = v
+			}
+		}
+		if b.CheckSuiteID != "" {
+			if v, err := strconv.ParseInt(b.CheckSuiteID, 10, 64); err == nil {
+				bi = v
+			}
+		}
+		return ai > bi
+	}
+
+	for i := range statuses {
+		s := &statuses[i]
 		if s.Name != "aggregated" {
 			continue
 		}
-		if s.Conclusion != nil {
-			switch *s.Conclusion {
-			case "failure":
-				return services.CIStateFailed, nil
-			case "success":
-				successSeen = true
-			default:
-				pendingSeen = true
-			}
-		} else {
-			// 結論未設定は進行中とみなす
-			pendingSeen = true
+		if latest == nil || isNewer(s, latest) {
+			latest = s
 		}
 	}
-	if pendingSeen {
-		return services.CIStatePending, nil
+
+	if latest == nil {
+		return services.CIStateUnknown, nil
 	}
-	if successSeen {
-		return services.CIStateSuccess, nil
+
+	// 最新 1 件のみから CIState を決定
+	if latest.Conclusion != nil {
+		switch *latest.Conclusion {
+		case "failure":
+			return services.CIStateFailed, nil
+		case "success":
+			return services.CIStateSuccess, nil
+		default:
+			return services.CIStatePending, nil
+		}
 	}
-	return services.CIStateUnknown, nil
+	// 結論未設定は進行中とみなす
+	return services.CIStatePending, nil
 }
 
 // alwaysApprovedChecker は本イベントで承認検知済みのため常に true を返すアダプタ
