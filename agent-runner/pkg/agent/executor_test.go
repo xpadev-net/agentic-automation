@@ -136,7 +136,7 @@ func TestExecutor_Execute_ClaudeCode_Success(t *testing.T) {
 	}
 }
 
-// TestExecutor_Execute_Cursor_Success tests successful cursor-agent execution.
+// TestExecutor_Execute_Cursor_Success tests successful cursor-agent execution with defaults.
 func TestExecutor_Execute_Cursor_Success(t *testing.T) {
 	cleanup := setupEnvVar(t, "CURSOR_API_KEY", "test-key")
 	defer cleanup()
@@ -158,14 +158,15 @@ func TestExecutor_Execute_Cursor_Success(t *testing.T) {
 		t.Errorf("Execute() output = %q, want %q", output, expectedOutput)
 	}
 
-	// Verify mock was called correctly
+	// Verify mock was called correctly with default values
 	if mockRunner.CallCount != 1 {
 		t.Errorf("Expected CallCount = 1, got %d", mockRunner.CallCount)
 	}
 	if mockRunner.CommandName != "cursor-agent" {
 		t.Errorf("Expected CommandName = 'cursor-agent', got %q", mockRunner.CommandName)
 	}
-	expectedArgs := []string{"-p", prompt}
+	// Default values: model="auto", allowWrite=true
+	expectedArgs := []string{"--model", "auto", "--output-format", "stream-json", "-p", prompt, "--force"}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -283,6 +284,12 @@ func TestExecutor_Execute_Cursor_CommandFailure(t *testing.T) {
 	if output != expectedOutput {
 		t.Errorf("Execute() output = %q, want %q", output, expectedOutput)
 	}
+
+	// Verify command was called with correct arguments
+	expectedArgs := []string{"--model", "auto", "--output-format", "stream-json", "-p", "test prompt", "--force"}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
 }
 
 // TestExecutor_Execute_UnknownAgentType tests error when agent type is unknown.
@@ -368,7 +375,7 @@ func TestExecutor_Execute_Cursor_LongPrompt(t *testing.T) {
 	longPrompt := strings.Repeat("a", 1000)
 	executor.Execute("/tmp/work", longPrompt)
 
-	expectedArgs := []string{"-p", longPrompt}
+	expectedArgs := []string{"--model", "auto", "--output-format", "stream-json", "-p", longPrompt, "--force"}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -399,7 +406,7 @@ func TestExecutor_Execute_Cursor_EmptyPrompt(t *testing.T) {
 
 	executor.Execute("/tmp/work", "")
 
-	expectedArgs := []string{"-p", ""}
+	expectedArgs := []string{"--model", "auto", "--output-format", "stream-json", "-p", "", "--force"}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -419,5 +426,152 @@ func TestExecutor_Execute_ClaudeCode_SpecialCharacters(t *testing.T) {
 	expectedArgs := []string{"-p", specialPrompt}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+}
+
+// TestExecutor_ExecuteWithOptions_Cursor_Success tests successful cursor-agent execution with custom options.
+func TestExecutor_ExecuteWithOptions_Cursor_Success(t *testing.T) {
+	cleanup := setupEnvVar(t, "CURSOR_API_KEY", "test-key")
+	defer cleanup()
+
+	mockOutput := []byte("Cursor agent executed")
+	mockRunner := createMockRunner(mockOutput, nil)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
+
+	workDir := "/tmp/work"
+	prompt := "test prompt"
+	model := "claude-3-5-sonnet-20241022"
+	allowWrite := true
+	output, err := executor.ExecuteWithOptions(workDir, prompt, model, allowWrite)
+
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions() error = %v, want nil", err)
+	}
+
+	expectedOutput := string(mockOutput)
+	if output != expectedOutput {
+		t.Errorf("ExecuteWithOptions() output = %q, want %q", output, expectedOutput)
+	}
+
+	// Verify mock was called correctly with custom options
+	if mockRunner.CallCount != 1 {
+		t.Errorf("Expected CallCount = 1, got %d", mockRunner.CallCount)
+	}
+	if mockRunner.CommandName != "cursor-agent" {
+		t.Errorf("Expected CommandName = 'cursor-agent', got %q", mockRunner.CommandName)
+	}
+	expectedArgs := []string{"--model", model, "--output-format", "stream-json", "-p", prompt, "--force"}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+	if mockRunner.WorkDir != workDir {
+		t.Errorf("Expected WorkDir = %q, got %q", workDir, mockRunner.WorkDir)
+	}
+}
+
+// TestExecutor_ExecuteWithOptions_Cursor_WithoutForce tests cursor-agent execution without --force flag.
+func TestExecutor_ExecuteWithOptions_Cursor_WithoutForce(t *testing.T) {
+	cleanup := setupEnvVar(t, "CURSOR_API_KEY", "test-key")
+	defer cleanup()
+
+	mockOutput := []byte("Cursor agent executed")
+	mockRunner := createMockRunner(mockOutput, nil)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
+
+	workDir := "/tmp/work"
+	prompt := "test prompt"
+	model := "auto"
+	allowWrite := false
+	output, err := executor.ExecuteWithOptions(workDir, prompt, model, allowWrite)
+
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions() error = %v, want nil", err)
+	}
+
+	expectedOutput := string(mockOutput)
+	if output != expectedOutput {
+		t.Errorf("ExecuteWithOptions() output = %q, want %q", output, expectedOutput)
+	}
+
+	// Verify --force flag is not included when allowWrite is false
+	expectedArgs := []string{"--model", model, "--output-format", "stream-json", "-p", prompt}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+}
+
+// TestExecutor_ExecuteWithOptions_Cursor_CustomModel tests cursor-agent execution with custom model.
+func TestExecutor_ExecuteWithOptions_Cursor_CustomModel(t *testing.T) {
+	cleanup := setupEnvVar(t, "CURSOR_API_KEY", "test-key")
+	defer cleanup()
+
+	mockOutput := []byte("Cursor agent executed")
+	mockRunner := createMockRunner(mockOutput, nil)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
+
+	workDir := "/tmp/work"
+	prompt := "test prompt"
+	model := "claude-3-opus-20240229"
+	allowWrite := true
+	_, err := executor.ExecuteWithOptions(workDir, prompt, model, allowWrite)
+
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions() error = %v, want nil", err)
+	}
+
+	// Verify custom model is used
+	expectedArgs := []string{"--model", model, "--output-format", "stream-json", "-p", prompt, "--force"}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+}
+
+// TestExecutor_ExecuteWithOptions_ClaudeCode_Error tests that ExecuteWithOptions returns error for claude-code.
+func TestExecutor_ExecuteWithOptions_ClaudeCode_Error(t *testing.T) {
+	cleanup := setupEnvVar(t, "ANTHROPIC_API_KEY", "test-key")
+	defer cleanup()
+
+	mockRunner := createMockRunner([]byte("output"), nil)
+	executor := NewExecutorWithRunner("claude-code", mockRunner)
+
+	_, err := executor.ExecuteWithOptions("/tmp/work", "test prompt", "auto", true)
+
+	if err == nil {
+		t.Fatal("ExecuteWithOptions() error = nil, want error")
+	}
+
+	expectedError := "ExecuteWithOptions is only supported for cursor-agent, got: claude-code"
+	if err.Error() != expectedError {
+		t.Errorf("ExecuteWithOptions() error = %q, want %q", err.Error(), expectedError)
+	}
+
+	// Verify command was not executed
+	if mockRunner.CallCount != 0 {
+		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
+	}
+}
+
+// TestExecutor_ExecuteWithOptions_Cursor_MissingAPIKey tests error when CURSOR_API_KEY is not set.
+func TestExecutor_ExecuteWithOptions_Cursor_MissingAPIKey(t *testing.T) {
+	cleanup := restoreEnvVar(t, "CURSOR_API_KEY")
+	defer cleanup()
+
+	mockRunner := createMockRunner([]byte("should not be called"), nil)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
+
+	_, err := executor.ExecuteWithOptions("/tmp/work", "test prompt", "auto", true)
+
+	if err == nil {
+		t.Fatal("ExecuteWithOptions() error = nil, want error")
+	}
+
+	expectedError := "CURSOR_API_KEY environment variable is not set"
+	if err.Error() != expectedError {
+		t.Errorf("ExecuteWithOptions() error = %q, want %q", err.Error(), expectedError)
+	}
+
+	// Verify command was not executed
+	if mockRunner.CallCount != 0 {
+		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
 	}
 }

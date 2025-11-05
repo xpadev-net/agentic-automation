@@ -333,7 +333,13 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	// 10. Execute agent
 	fmt.Fprintf(os.Stderr, "Agent execution started\n")
 	executor := agent.NewExecutor(envCfg.AgentType)
-	agentOutput, err := executor.Execute(envCfg.WorkDir, fullPrompt)
+	var agentOutput string
+	var err error
+	if envCfg.AgentType == "cursor-agent" {
+		agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+	} else {
+		agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
+	}
 	if err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Agent execution failed: %v", err),
