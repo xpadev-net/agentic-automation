@@ -334,7 +334,6 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	fmt.Fprintf(os.Stderr, "Agent execution started\n")
 	executor := agent.NewExecutor(envCfg.AgentType)
 	var agentOutput string
-	var err error
 	if envCfg.AgentType == "cursor-agent" {
 		agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
 	} else {
