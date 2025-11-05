@@ -280,7 +280,7 @@ func TestReportFailure_Success(t *testing.T) {
 
 	errorMsg := "test error"
 	logs := "error logs"
-	agentType := "cursor-agents"
+	agentType := "cursor-agent"
 
 	err := client.ReportFailure(errorMsg, logs, agentType)
 	if err != nil {

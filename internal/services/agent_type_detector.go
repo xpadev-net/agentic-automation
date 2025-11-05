@@ -16,12 +16,12 @@ const (
 	// AgentTypeClaudeCode is the agent type for Claude Code
 	AgentTypeClaudeCode = "claude-code"
 	// AgentTypeCursorAgents is the agent type for Cursor Agents
-	AgentTypeCursorAgents = "cursor-agents"
+	AgentTypeCursorAgents = "cursor-agent"
 
 	// LabelAgentClaudeCode is the label that indicates Claude Code agent should be used
 	LabelAgentClaudeCode = "agent:claude-code"
 	// LabelAgentCursorAgents is the label that indicates Cursor Agents should be used
-	LabelAgentCursorAgents = "agent:cursor-agents"
+	LabelAgentCursorAgents = "agent:cursor-agent"
 
 	// EnvKeyAIAgentDefaultType is the environment variable key for default agent type
 	EnvKeyAIAgentDefaultType = "AI_AGENT_DEFAULT_TYPE"
@@ -104,7 +104,7 @@ func findAgentLabel(labels []string) (string, bool) {
 
 // DetectAgentType detects agent type from Issue labels, environment variable, or default.
 // Priority: 1) Issue Label, 2) Environment Variable, 3) Default (claude-code).
-// Returns "claude-code" or "cursor-agents".
+// Returns "claude-code" or "cursor-agent".
 func (s *AgentTypeDetectorService) DetectAgentType(issue *models.Issue) string {
 	// Priority 1: Check Issue labels
 	if issue.Labels != "" {

@@ -32,7 +32,7 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "agent-runner",
 		Short: "Execute AI agent for GitHub Issue automation",
-		Long: `agent-runner executes AI agents (claude-code or cursor-agents) in Kubernetes Pods.
+		Long: `agent-runner executes AI agents (claude-code or cursor-agent) in Kubernetes Pods.
 It processes GitHub Issues, runs lint/typecheck, commits changes, and reports results to the Operator API.`,
 		Version: "0.1.0",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -147,8 +147,8 @@ func validateEnv() (*envConfig, error) {
 
 	if cfg.AgentType = os.Getenv("AGENT_TYPE"); cfg.AgentType == "" {
 		missing = append(missing, "AGENT_TYPE")
-	} else if cfg.AgentType != "claude-code" && cfg.AgentType != "cursor-agents" {
-		return nil, fmt.Errorf("AGENT_TYPE must be 'claude-code' or 'cursor-agents', got: %q", cfg.AgentType)
+	} else if cfg.AgentType != "claude-code" && cfg.AgentType != "cursor-agent" {
+		return nil, fmt.Errorf("AGENT_TYPE must be 'claude-code' or 'cursor-agent', got: %q", cfg.AgentType)
 	}
 
 	// GitHub authentication is handled via GitHub App installation token (on-demand). No PAT support.

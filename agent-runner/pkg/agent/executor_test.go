@@ -74,10 +74,10 @@ func TestNewExecutor_ValidTypes(t *testing.T) {
 		}
 	})
 
-	t.Run("cursor-agents", func(t *testing.T) {
-		executor := NewExecutor("cursor-agents")
-		if executor.agentType != "cursor-agents" {
-			t.Errorf("Expected agentType 'cursor-agents', got %q", executor.agentType)
+	t.Run("cursor-agent", func(t *testing.T) {
+		executor := NewExecutor("cursor-agent")
+		if executor.agentType != "cursor-agent" {
+			t.Errorf("Expected agentType 'cursor-agent', got %q", executor.agentType)
 		}
 		if executor.cmdRunner != nil {
 			t.Error("Expected cmdRunner to be nil for default executor")
@@ -136,14 +136,14 @@ func TestExecutor_Execute_ClaudeCode_Success(t *testing.T) {
 	}
 }
 
-// TestExecutor_Execute_Cursor_Success tests successful cursor-agents execution.
+// TestExecutor_Execute_Cursor_Success tests successful cursor-agent execution.
 func TestExecutor_Execute_Cursor_Success(t *testing.T) {
 	cleanup := setupEnvVar(t, "CURSOR_API_KEY", "test-key")
 	defer cleanup()
 
 	mockOutput := []byte("Cursor agent executed")
 	mockRunner := createMockRunner(mockOutput, nil)
-	executor := NewExecutorWithRunner("cursor-agents", mockRunner)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
 
 	workDir := "/tmp/work"
 	prompt := "test prompt"
@@ -205,7 +205,7 @@ func TestExecutor_Execute_Cursor_MissingAPIKey(t *testing.T) {
 	defer cleanup()
 
 	mockRunner := createMockRunner([]byte("should not be called"), nil)
-	executor := NewExecutorWithRunner("cursor-agents", mockRunner)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
 
 	_, err := executor.Execute("/tmp/work", "test prompt")
 
@@ -265,7 +265,7 @@ func TestExecutor_Execute_Cursor_CommandFailure(t *testing.T) {
 	mockOutput := []byte("Cursor agent failed")
 	mockErr := errors.New("exit status 1")
 	mockRunner := createMockRunner(mockOutput, mockErr)
-	executor := NewExecutorWithRunner("cursor-agents", mockRunner)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
 
 	output, err := executor.Execute("/tmp/work", "test prompt")
 
@@ -328,7 +328,7 @@ func TestExecutor_Execute_Cursor_WorkDirSetting(t *testing.T) {
 	defer cleanup()
 
 	mockRunner := createMockRunner([]byte("output"), nil)
-	executor := NewExecutorWithRunner("cursor-agents", mockRunner)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
 
 	customWorkDir := "/custom/path"
 	executor.Execute(customWorkDir, "test prompt")
@@ -363,7 +363,7 @@ func TestExecutor_Execute_Cursor_LongPrompt(t *testing.T) {
 	defer cleanup()
 
 	mockRunner := createMockRunner([]byte("output"), nil)
-	executor := NewExecutorWithRunner("cursor-agents", mockRunner)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
 
 	longPrompt := strings.Repeat("a", 1000)
 	executor.Execute("/tmp/work", longPrompt)
@@ -395,7 +395,7 @@ func TestExecutor_Execute_Cursor_EmptyPrompt(t *testing.T) {
 	defer cleanup()
 
 	mockRunner := createMockRunner([]byte("output"), nil)
-	executor := NewExecutorWithRunner("cursor-agents", mockRunner)
+	executor := NewExecutorWithRunner("cursor-agent", mockRunner)
 
 	executor.Execute("/tmp/work", "")
 

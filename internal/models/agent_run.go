@@ -1,8 +1,9 @@
 package models
 
 import (
-	"gorm.io/datatypes"
 	"time"
+
+	"gorm.io/datatypes"
 )
 
 // AgentRun represents an execution of an AI agent for an Issue
@@ -12,7 +13,7 @@ type AgentRun struct {
 	IssueID        int            `gorm:"column:issue_id;index"`
 	PRID           *int           `gorm:"column:pr_id;index"`
 	State          string         `gorm:"type:enum('queued','started','succeeded','failed');default:'queued';index"`
-	AgentType      string         `gorm:"column:agent_type;type:enum('claude-code','cursor-agents');default:'claude-code'"`
+	AgentType      string         `gorm:"column:agent_type;type:enum('claude-code','cursor-agent');default:'claude-code'"`
 	Input          datatypes.JSON `gorm:"type:json"`
 	Output         datatypes.JSON `gorm:"type:json"`
 	RetryCount     int            `gorm:"column:retry_count;default:0"`

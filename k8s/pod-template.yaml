@@ -119,7 +119,7 @@ spec:
           - name: AGENT_RUN_ID
             value: "<agent-run-id>"
           - name: AGENT_TYPE
-            value: "claude-code"  # or "cursor-agents"
+            value: "claude-code"  # or "cursor-agent"
           - name: WORKSPACE_DIR
             value: "/workspace"
           
@@ -142,7 +142,7 @@ spec:
               secretKeyRef:
                 name: anthropic-api-key
                 key: api-key
-          # For cursor-agents (use instead of ANTHROPIC_API_KEY):
+          # For cursor-agent (use instead of ANTHROPIC_API_KEY):
           # - name: CURSOR_API_KEY
           #   valueFrom:
           #     secretKeyRef:

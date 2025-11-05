@@ -135,7 +135,7 @@ func setupTestHomeDir(t *testing.T, agentType string) (string, func()) {
 	switch agentType {
 	case "claude-code":
 		sessionDir = filepath.Join(homeDir, ".claude")
-	case "cursor-agents":
+	case "cursor-agent":
 		sessionDir = filepath.Join(homeDir, ".cursor")
 	default:
 		sessionDir = filepath.Join(homeDir, ".claude")
@@ -596,7 +596,7 @@ func TestCopySessionFiles(t *testing.T) {
 		},
 		{
 			name:      "CursorAgents",
-			agentType: "cursor-agents",
+			agentType: "cursor-agent",
 			setupFiles: map[string]testFileInfo{
 				".cursor/session.json": {Content: `{"session": "data"}`, Permissions: 0644},
 			},

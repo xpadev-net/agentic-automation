@@ -91,7 +91,7 @@ OPERATOR_API_TOKEN=your-secret-api-token  # Bearer token for agent-runner authen
 AGENT_RUNNER_IMAGE=ghcr.io/your-org/agent-runner:latest  # Docker image for agent-runner Pod
 AI_AGENT_TIMEOUT_MINUTES=30  # Pod execution timeout
 AI_AGENT_MAX_CONCURRENT_PODS=10  # Max concurrent Pod executions
-AI_AGENT_DEFAULT_TYPE=claude-code  # claude-code | cursor-agents
+AI_AGENT_DEFAULT_TYPE=claude-code  # claude-code | cursor-agent
 
 # Operator API URL auto-construction (replaces OPERATOR_API_URL)
 # http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}
@@ -292,7 +292,7 @@ tail -f logs/app.log
 ### Agent Runner Requirements
 
 - The runner image uses go-github/v62 library for PR creation (no CLI dependencies).
-- Node.js runtime required for claude-code/cursor-agents execution.
+- Node.js runtime required for claude-code/cursor-agent execution.
 
 ### Repository Manifest Configuration (.agent-config.yaml)
 

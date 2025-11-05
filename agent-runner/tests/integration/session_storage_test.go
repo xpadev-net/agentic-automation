@@ -309,7 +309,7 @@ func setupTestHomeDir(t *testing.T, agentType string) (homeDir string, cleanup f
 	switch agentType {
 	case "claude-code":
 		sessionDir = filepath.Join(homeDir, ".claude")
-	case "cursor-agents":
+	case "cursor-agent":
 		sessionDir = filepath.Join(homeDir, ".cursor")
 	default:
 		sessionDir = filepath.Join(homeDir, ".claude")
@@ -486,7 +486,7 @@ func verifyRestoredFiles(t *testing.T, homeDir string, agentType string, origina
 	switch agentType {
 	case "claude-code":
 		sessionDir = filepath.Join(homeDir, ".claude")
-	case "cursor-agents":
+	case "cursor-agent":
 		sessionDir = filepath.Join(homeDir, ".cursor")
 	default:
 		t.Fatalf("unsupported agent type: %s", agentType)
@@ -587,16 +587,16 @@ func TestSessionStorage_SaveAndRestore_ClaudeCode(t *testing.T) {
 	verifyRestoredFiles(t, newHomeDir, agentType, testFiles)
 }
 
-// TestSessionStorage_SaveAndRestore_CursorAgents tests SaveSession and RestoreSession for cursor-agents agent type.
+// TestSessionStorage_SaveAndRestore_CursorAgents tests SaveSession and RestoreSession for cursor-agent agent type.
 func TestSessionStorage_SaveAndRestore_CursorAgents(t *testing.T) {
 	// Setup MinIO server
 	endpoint, bucket, _ := setupMinIOServer(t)
 
-	// Setup test home directory with cursor-agents session files
-	homeDir, _ := setupTestHomeDir(t, "cursor-agents")
+	// Setup test home directory with cursor-agent session files
+	homeDir, _ := setupTestHomeDir(t, "cursor-agent")
 
 	agentRunID := 23456
-	agentType := "cursor-agents"
+	agentType := "cursor-agent"
 
 	// Create test session files
 	testFiles := map[string]testFileInfo{
@@ -605,7 +605,7 @@ func TestSessionStorage_SaveAndRestore_CursorAgents(t *testing.T) {
 			Permissions: 0644,
 		},
 		".cursor/config.yaml": {
-			Content:     `agent: cursor-agents\nversion: 1.0`,
+			Content:     `agent: cursor-agent\nversion: 1.0`,
 			Permissions: 0644,
 		},
 		".cursor/cache/data.bin": {
@@ -652,7 +652,7 @@ func TestSessionStorage_FullLifecycle(t *testing.T) {
 	agentRunID := 34567
 
 	// Test with both agent types
-	agentTypes := []string{"claude-code", "cursor-agents"}
+	agentTypes := []string{"claude-code", "cursor-agent"}
 
 	for _, agentType := range agentTypes {
 		t.Run(agentType, func(t *testing.T) {

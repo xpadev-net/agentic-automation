@@ -181,7 +181,7 @@
 **Architecture**:
 - Operator creates Kubernetes Job with Pod from template (environment variables)
 - Pod runs `agent-runner` Go binary as entrypoint
-- agent-runner executes claude-code or cursor-agents with Issue context
+- agent-runner executes claude-code or cursor-agent with Issue context
 - agent-runner runs lint/typecheck validation (npm run lint, npm run type-check)
 - agent-runner commits and pushes changes, creates PR via gh CLI
 - **Push notification**: agent-runner calls Operator REST API to report result
@@ -189,7 +189,7 @@
 - Operator updates AgentRun state based on report
 
 **Agent Selection**:
-- Issue label: `agent:claude-code` or `agent:cursor-agents`
+- Issue label: `agent:claude-code` or `agent:cursor-agent`
 - Default: claude-code (if no label specified)
 - Detected by AgentTypeDetector service, passed to Pod as AGENT_TYPE env var
 

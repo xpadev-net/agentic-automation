@@ -8,6 +8,7 @@ import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/utils"
+
 	"go.uber.org/zap"
 )
 
@@ -48,7 +49,7 @@ func NewGitHubNotificationService(githubClient *clients.Client, logger *zap.Logg
 // It creates a markdown-formatted message with agent type and run ID.
 //
 // Parameters:
-//   - agentType: Agent type (e.g., "claude-code" or "cursor-agents")
+//   - agentType: Agent type (e.g., "claude-code" or "cursor-agent")
 //   - agentRunID: AgentRun ID (integer)
 //
 // Returns:
@@ -284,7 +285,7 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 //   - owner: Repository owner (e.g., "octocat")
 //   - repo: Repository name (e.g., "hello-world")
 //   - issueNumber: Issue number (integer)
-//   - agentType: Agent type (e.g., "claude-code" or "cursor-agents")
+//   - agentType: Agent type (e.g., "claude-code" or "cursor-agent")
 //   - agentRunID: AgentRun ID (integer)
 //
 // Returns:

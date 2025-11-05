@@ -347,7 +347,7 @@ func copySessionFiles(agentType, homeDir, tmpDir string) error {
 		}
 		return nil
 
-	case "cursor-agents":
+	case "cursor-agent":
 		// Copy ~/.cursor/ to tmpDir/.cursor/
 		srcCursorDir := filepath.Join(homeDir, ".cursor")
 		destCursorDir := filepath.Join(tmpDir, ".cursor")

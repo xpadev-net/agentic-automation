@@ -401,7 +401,7 @@ func TestHandleAgentReport_Success_Failed(t *testing.T) {
 	errorMsg := "Test error message"
 	reqBody := map[string]interface{}{
 		"status":        "failed",
-		"agent_type":    "cursor-agents",
+		"agent_type":    "cursor-agent",
 		"error_message": errorMsg,
 	}
 
@@ -420,7 +420,7 @@ func TestHandleAgentReport_Success_Failed(t *testing.T) {
 	err = db.First(&updatedRun, agentRun.ID).Error
 	require.NoError(t, err)
 	assert.Equal(t, "failed", updatedRun.State)
-	assert.Equal(t, "cursor-agents", updatedRun.AgentType)
+	assert.Equal(t, "cursor-agent", updatedRun.AgentType)
 	assert.NotNil(t, updatedRun.ErrorMessage)
 	assert.Equal(t, errorMsg, *updatedRun.ErrorMessage)
 	assert.NotNil(t, updatedRun.CompletedAt)

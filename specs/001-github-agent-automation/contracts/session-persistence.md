@@ -11,7 +11,7 @@ This document specifies how AI agent session data (conversation history, context
 
 ## Motivation
 
-**Problem**: When an AI agent (claude-code or cursor-agents) fails and the Pod terminates, all session context is lost. The next retry attempt starts from scratch without knowledge of previous conversation history.
+**Problem**: When an AI agent (claude-code or cursor-agent) fails and the Pod terminates, all session context is lost. The next retry attempt starts from scratch without knowledge of previous conversation history.
 
 **Solution**: Before Pod termination, compress and upload session data to S3. On retry, download and restore the session state before agent execution.
 
@@ -86,7 +86,7 @@ This document specifies how AI agent session data (conversation history, context
 - `~/.claude/.credentials.json` - Auth tokens (injected via K8s Secrets)
 - `~/.claude/cache/` - Temporary cache files
 
-### For cursor-agents
+### For cursor-agent
 
 **Session Directory**: `~/.cursor/` (estimated location for headless mode)
 - Session state files
@@ -183,7 +183,7 @@ func SaveSession(agentRunID int, agentType string) error {
         CopyDir("~/.claude/", tmpDir + "/.claude/")
         CopyDir("/workspace/.claude/", tmpDir + "/workspace/.claude/")
         CopyFile("/workspace/CLAUDE.md", tmpDir + "/workspace/CLAUDE.md")
-    } else if agentType == "cursor-agents" {
+    } else if agentType == "cursor-agent" {
         CopyDir("~/.cursor/", tmpDir + "/.cursor/")
     }
 

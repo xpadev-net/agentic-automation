@@ -53,7 +53,7 @@
 - issue_id: INT (FK to Issue.id) - **NEW**: which Issue is being processed
 - pr_id: INT (FK to PullRequest.id, nullable) - PR created by this run
 - state: ENUM(queued/started/succeeded/failed)
-- agent_type: ENUM(claude-code/cursor-agents) - **NEW**: Which AI agent was used
+- agent_type: ENUM(claude-code/cursor-agent) - **NEW**: Which AI agent was used
 - input: JSON (Issue context, comments, dependencies, **manifest config**)
 - output: JSON (AI agent response, changes made)
 - retry_count: INT (default: 0, max: 50)
@@ -449,7 +449,7 @@ type AgentRun struct {
     IssueID        int            `gorm:"column:issue_id;index"`
     PRID           *int           `gorm:"column:pr_id;index"`
     State          string         `gorm:"type:enum('queued','started','succeeded','failed');index"`
-    AgentType      string         `gorm:"column:agent_type;type:enum('claude-code','cursor-agents');index"`
+    AgentType      string         `gorm:"column:agent_type;type:enum('claude-code','cursor-agent');index"`
     Input          datatypes.JSON `gorm:"type:json"`
     Output         datatypes.JSON `gorm:"type:json"`
     RetryCount     int            `gorm:"column:retry_count;default:0"`

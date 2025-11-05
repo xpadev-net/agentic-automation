@@ -5,7 +5,7 @@
 
 ## Overview
 
-This document provides detailed implementation guidance for the agent-runner Go binary, which executes AI agents (claude-code or cursor-agents) inside Kubernetes Pods.
+This document provides detailed implementation guidance for the agent-runner Go binary, which executes AI agents (claude-code or cursor-agent) inside Kubernetes Pods.
 
 ## Agent CLI References
 
@@ -57,7 +57,7 @@ ${CI_LOGS}" \
 
 ---
 
-### 2. Cursor Headless (cursor-agents)
+### 2. Cursor Headless (cursor-agent)
 
 **Installation** (in Dockerfile):
 ```dockerfile
@@ -274,7 +274,7 @@ func (e *Executor) Execute(workDir, prompt string) (string, error) {
 	switch e.agentType {
 	case "claude-code":
 		return e.executeClaudeCode(workDir, prompt)
-	case "cursor-agents":
+	case "cursor-agent":
 		return e.executeCursor(workDir, prompt)
 	default:
 		return "", fmt.Errorf("unknown agent type: %s", e.agentType)
@@ -680,11 +680,11 @@ ENTRYPOINT ["agent-runner"]
 | `OPERATOR_SERVICE_PORT` | Operator service port | Yes | `3000` |
 | `OPERATOR_API_TOKEN` | Bearer token for API auth | Yes | `sk-secret-token-abc123` |
 | `AGENT_RUN_ID` | AgentRun database record ID | Yes | `456` |
-| `AGENT_TYPE` | Agent to execute | Yes | `claude-code` or `cursor-agents` |
+| `AGENT_TYPE` | Agent to execute | Yes | `claude-code` or `cursor-agent` |
 | `GITHUB_APP_ID` | GitHub App ID | Yes | `123456` |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM, multi-line) | Yes | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n` |
 | `ANTHROPIC_API_KEY` | Claude API key | Conditional | Required if `AGENT_TYPE=claude-code` |
-| `CURSOR_API_KEY` | Cursor API key | Conditional | Required if `AGENT_TYPE=cursor-agents` |
+| `CURSOR_API_KEY` | Cursor API key | Conditional | Required if `AGENT_TYPE=cursor-agent` |
 | `WORKSPACE_DIR` | Working directory | No | `/workspace` (default) |
 | `RETRY_COUNT` | Current retry count | Yes | `0` for initial, `>0` for retries |
 | `S3_ENDPOINT` | S3 API endpoint | Yes | `http://minio:9000` or `https://s3.amazonaws.com` |

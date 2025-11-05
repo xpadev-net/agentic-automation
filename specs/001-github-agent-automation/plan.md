@@ -7,7 +7,7 @@
 
 ## Summary
 
-Automated system that responds to GitHub Issue comments with trigger phrase "/run-agent", launches Kubernetes Pod with agent-runner (Go binary) to execute AI agent (claude-code/cursor-agents), creates PR, requests Codex review via GitHub comment, automatically retries based on CI/review feedback (max 50 times), and auto-merges on approval. Pod pushes completion status to Operator REST API. Includes dependency management for blocked tasks.
+Automated system that responds to GitHub Issue comments with trigger phrase "/run-agent", launches Kubernetes Pod with agent-runner (Go binary) to execute AI agent (claude-code/cursor-agent), creates PR, requests Codex review via GitHub comment, automatically retries based on CI/review feedback (max 50 times), and auto-merges on approval. Pod pushes completion status to Operator REST API. Includes dependency management for blocked tasks.
 
 ## Technical Context
 
@@ -25,7 +25,7 @@ Automated system that responds to GitHub Issue comments with trigger phrase "/ru
 **Agent Runner** (Go binary in Pod):
 - Go 1.22+ with cobra CLI framework
 - Runs in Kubernetes Pod
-- Executes claude-code or cursor-agents
+- Executes claude-code or cursor-agent
 - Executes pre-hooks, validations, and post-hooks from `.agent-config.yaml` (see [agent-manifest.md](./contracts/agent-manifest.md))
 - Commits and pushes changes
 - Reports results to Operator REST API

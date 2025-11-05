@@ -86,7 +86,7 @@ ENTRYPOINT ["operator"]
 # - DISCORD_WEBHOOK_URL: Discord webhook for failure notifications
 # - AI_AGENT_TIMEOUT_MINUTES: Pod execution timeout (default: 30)
 # - AI_AGENT_MAX_CONCURRENT_PODS: Max concurrent executions (default: 10)
-# - AI_AGENT_DEFAULT_TYPE: Default agent type (claude-code/cursor-agents)
+# - AI_AGENT_DEFAULT_TYPE: Default agent type (claude-code/cursor-agent)
 #
 # Note: GitHub authentication uses GitHub App installation tokens by default.
 #       Personal Access Tokens (PAT) are not supported.

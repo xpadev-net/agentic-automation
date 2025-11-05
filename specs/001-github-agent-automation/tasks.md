@@ -78,7 +78,7 @@
 - [x] T030 Create agent-runner Go project structure (agent-runner/main.go, pkg/, Dockerfile)
 - [x] T031 Initialize go.mod with dependencies (cobra CLI framework, HTTP client, gopkg.in/yaml.v3)
 - [x] T032 [P] Implement main.go CLI entry point with cobra command structure
-- [x] T033 [P] Implement pkg/agent/executor.go (claude-code/cursor-agents execution)
+- [x] T033 [P] Implement pkg/agent/executor.go (claude-code/cursor-agent execution)
 - [x] T034 [P] Implement pkg/config/loader.go (load and parse .agent-config.yaml, see contracts/agent-manifest.md)
 - [x] T034b [P] Implement pkg/config/types.go (Manifest, Hooks, Command struct definitions)
 - [x] T035 [P] Implement pkg/hooks/runner.go (execute pre/validation/post hooks with timeout and error handling)

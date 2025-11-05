@@ -24,7 +24,7 @@ import (
 // ReportRequest represents the request body for agent execution report
 type ReportRequest struct {
 	Status       string `json:"status" binding:"required,oneof=succeeded failed"`
-	AgentType    string `json:"agent_type" binding:"required,oneof=claude-code cursor-agents"`
+	AgentType    string `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
 	PRNumber     *int   `json:"pr_number,omitempty"`
 	Branch       string `json:"branch,omitempty"`
 	CommitSHA    string `json:"commit_sha,omitempty"`

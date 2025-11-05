@@ -1,13 +1,13 @@
-# AIエージェント実行ガイド（claude-code / cursor-agents）
+# AIエージェント実行ガイド（claude-code / cursor-agent）
 
-このドキュメントは、本リポジトリにおけるエージェント実行方式と運用手順をまとめたものです。現行実装では Kubernetes の Pod 内で Go 製ラッパー `agent-runner` がエージェント（`claude-code` または `cursor-agents`）を起動し、結果を Operator API にプッシュ通知します。
+このドキュメントは、本リポジトリにおけるエージェント実行方式と運用手順をまとめたものです。現行実装では Kubernetes の Pod 内で Go 製ラッパー `agent-runner` がエージェント（`claude-code` または `cursor-agent`）を起動し、結果を Operator API にプッシュ通知します。
 
 ## 概要
 
 - 実行主体: `agent-runner`（Go バイナリ）
 - 実行環境: Kubernetes Pod（Job）
 - 通知方式: Pod → Operator API への Push（REST）
-- サポートエージェント: `claude-code`（Claude Code CLI）, `cursor-agents`（Cursor Headless）
+- サポートエージェント: `claude-code`（Claude Code CLI）, `cursor-agent`（Cursor Headless）
 
 参考仕様:
 - `specs/001-github-agent-automation/contracts/ai-agent-execution.md`
@@ -28,7 +28,7 @@ git checkout -b feature/issue-123 master
 1. 対象リポジトリを `WORKSPACE_DIR` にクローン
 2. `master` から `feature/issue-{番号}` を作成
    - specs以下のタスク以外を依頼された場合はこのブランチの命名規則を無視してよいです
-3. エージェント（`claude-code` または `cursor-agents`）を実行（Issue文脈・過去試行・CIログをプロンプトに付与）
+3. エージェント（`claude-code` または `cursor-agent`）を実行（Issue文脈・過去試行・CIログをプロンプトに付与）
 4. Lint/型チェックを実行
 5. 変更検知（変更があればコミット/Push）
 6. `gh` コマンドで PR 作成（ベース: `master`）
@@ -61,7 +61,7 @@ git checkout -b feature/issue-123 master
 - 必須環境変数:
   - `ANTHROPIC_API_KEY`
 
-### 2) Cursor Headless（`cursor-agents`）
+### 2) Cursor Headless（`cursor-agent`）
 
 - インストール（Dockerfile の例）:
   ```dockerfile
@@ -88,7 +88,7 @@ git checkout -b feature/issue-123 master
 優先度順:
 1. Issue ラベル
    - `agent:claude-code` → `claude-code`
-   - `agent:cursor-agents` → `cursor-agents`
+   - `agent:cursor-agent` → `cursor-agent`
 2. 環境変数 `AI_AGENT_DEFAULT_TYPE`
 3. 何も指定がなければ `claude-code`
 
@@ -101,12 +101,12 @@ git checkout -b feature/issue-123 master
   - これら3つから Operator API URL を自動構築: `http://{service}.{namespace}.svc.cluster.local:{port}`
 - `OPERATOR_API_TOKEN`: API 認証トークン
 - `AGENT_RUN_ID`: AgentRun レコードID
-- `AGENT_TYPE`: `claude-code` または `cursor-agents`
+- `AGENT_TYPE`: `claude-code` または `cursor-agent`
 - `WORKSPACE_DIR`: 作業ディレクトリ（例: `/workspace`）
 
 エージェント別:
 - `ANTHROPIC_API_KEY`（`claude-code` 用）
-- `CURSOR_API_KEY`（`cursor-agents` 用）
+- `CURSOR_API_KEY`（`cursor-agent` 用）
 
 GitHub App（必須）:
 - `GITHUB_APP_ID`: GitHub App ID

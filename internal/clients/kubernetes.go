@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	appconfig "agentic-automation/internal/config"
+
 	"go.uber.org/zap"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -349,7 +350,7 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 				},
 			},
 		})
-	} else if config.AgentType == "cursor-agents" {
+	} else if config.AgentType == "cursor-agent" {
 		envVars = append(envVars, corev1.EnvVar{
 			Name: "CURSOR_API_KEY",
 			ValueFrom: &corev1.EnvVarSource{

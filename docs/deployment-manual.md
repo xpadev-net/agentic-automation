@@ -1296,9 +1296,9 @@ env:
 | `OPERATOR_SERVICE_PORT` | はい | - | Operator サービスポート |
 | `OPERATOR_API_TOKEN` | はい | - | Bearer トークン |
 | `AGENT_RUN_ID` | はい | - | AgentRun レコード ID |
-| `AGENT_TYPE` | はい | - | エージェント種別（claude-code/cursor-agents） |
+| `AGENT_TYPE` | はい | - | エージェント種別（claude-code/cursor-agent） |
 | `ANTHROPIC_API_KEY` | 条件付き | - | Claude API キー（AGENT_TYPE=claude-code の場合） |
-| `CURSOR_API_KEY` | 条件付き | - | Cursor API キー（AGENT_TYPE=cursor-agents の場合） |
+| `CURSOR_API_KEY` | 条件付き | - | Cursor API キー（AGENT_TYPE=cursor-agent の場合） |
 | `RETRY_COUNT` | いいえ | `0` | 現在のリトライ回数 |
 | `WORKSPACE_DIR` | いいえ | `/workspace` | 作業ディレクトリ |
 | `S3_ENDPOINT` | はい | - | S3 API エンドポイント |

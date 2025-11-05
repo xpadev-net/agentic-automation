@@ -12,14 +12,14 @@ type CommandRunner interface {
 	Run(name string, args []string, workDir string) ([]byte, error)
 }
 
-// Executor executes AI agents (claude-code or cursor-agents).
+// Executor executes AI agents (claude-code or cursor-agent).
 type Executor struct {
 	agentType string
 	cmdRunner CommandRunner // Optional command runner for testing (nil uses exec.Command)
 }
 
 // NewExecutor creates a new agent executor for the specified agent type.
-// Valid agent types are "claude-code" and "cursor-agents".
+// Valid agent types are "claude-code" and "cursor-agent".
 func NewExecutor(agentType string) *Executor {
 	return &Executor{agentType: agentType}
 }
@@ -39,7 +39,7 @@ func (e *Executor) Execute(workDir, prompt string) (string, error) {
 	switch e.agentType {
 	case "claude-code":
 		return e.executeClaudeCode(workDir, prompt)
-	case "cursor-agents":
+	case "cursor-agent":
 		return e.executeCursor(workDir, prompt)
 	default:
 		return "", fmt.Errorf("unknown agent type: %s", e.agentType)
@@ -82,7 +82,7 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 	return outputStr, nil
 }
 
-// executeCursor executes the cursor-agents agent.
+// executeCursor executes the cursor-agent agent.
 func (e *Executor) executeCursor(workDir, prompt string) (string, error) {
 	// Check if CURSOR_API_KEY is set
 	if os.Getenv("CURSOR_API_KEY") == "" {

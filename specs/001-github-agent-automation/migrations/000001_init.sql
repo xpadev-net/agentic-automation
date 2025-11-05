@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     issue_id INT NOT NULL,
     pr_id INT,
     state ENUM('queued', 'started', 'succeeded', 'failed') NOT NULL DEFAULT 'queued',
-    agent_type ENUM('claude-code', 'cursor-agents') NOT NULL DEFAULT 'claude-code',
+    agent_type ENUM('claude-code', 'cursor-agent') NOT NULL DEFAULT 'claude-code',
     input JSON,
     output JSON,
     retry_count INT NOT NULL DEFAULT 0,
