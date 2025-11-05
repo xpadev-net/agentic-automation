@@ -123,11 +123,14 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 		case "dirty":
 			d.logger.Info("merge conflict detected via mergeable_state=dirty (mergeable=false)")
 			return MergeConflictStatusHasConflict, nil
-		case "blocked", "behind", "unstable", "draft", "has_hooks", "unknown":
+		case "blocked", "behind", "unstable", "draft", "has_hooks":
 			d.logger.Info("mergeable=false but non-conflict state",
 				zap.String("mergeable_state", s),
 			)
 			return MergeConflictStatusNoConflict, nil
+		case "unknown":
+			d.logger.Info("mergeable=false with state=unknown -> unknown")
+			return MergeConflictStatusUnknown, nil
 		default:
 			// Any other undocumented state -> treat as non-conflict blocker
 			d.logger.Info("mergeable=false with unrecognized state treated as non-conflict",
@@ -144,11 +147,14 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 		case "dirty":
 			d.logger.Info("merge conflict detected via mergeable_state=dirty")
 			return MergeConflictStatusHasConflict, nil
-		case "clean", "unstable", "blocked", "behind", "draft", "has_hooks", "unknown":
+		case "clean", "unstable", "blocked", "behind", "draft", "has_hooks":
 			d.logger.Info("no merge conflict detected",
 				zap.String("mergeable_state", s),
 			)
 			return MergeConflictStatusNoConflict, nil
+		case "unknown":
+			d.logger.Info("mergeable=true with state=unknown -> unknown")
+			return MergeConflictStatusUnknown, nil
 		default:
 			// Any other undocumented state -> treat as no explicit conflict
 			d.logger.Info("no merge conflict detected (unrecognized state treated as non-conflict)",

@@ -261,3 +261,49 @@ func TestDetect_Unknown_WhenMergeableFalse_StateNil(t *testing.T) {
 		t.Fatalf("expected unknown, got %s", status)
 	}
 }
+
+func TestDetect_Unknown_WhenMergeableFalse_StateUnknown(t *testing.T) {
+	responses := []map[string]any{
+		{"mergeable": false, "mergeable_state": "unknown"},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/o/r/pulls/10", prHandler(t, responses))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ghc := newGitHubClientForServer(t, srv)
+	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
+	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+
+	ctx := context.Background()
+	status, err := detector.Detect(ctx, "o", "r", 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != libservices.MergeConflictStatusUnknown {
+		t.Fatalf("expected unknown, got %s", status)
+	}
+}
+
+func TestDetect_Unknown_WhenMergeableTrue_StateUnknown(t *testing.T) {
+	responses := []map[string]any{
+		{"mergeable": true, "mergeable_state": "unknown"},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/o/r/pulls/11", prHandler(t, responses))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ghc := newGitHubClientForServer(t, srv)
+	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
+	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+
+	ctx := context.Background()
+	status, err := detector.Detect(ctx, "o", "r", 11)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != libservices.MergeConflictStatusUnknown {
+		t.Fatalf("expected unknown, got %s", status)
+	}
+}
