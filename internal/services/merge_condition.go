@@ -92,7 +92,8 @@ func (m *mergeConditionChecker) Check(ctx context.Context, owner, repo string, p
 	conflict, err := m.conflicts.Detect(ctx, owner, repo, prNumber)
 	if err != nil {
 		m.logger.Warn("failed to detect merge conflicts", zap.Error(err), zap.String("owner", owner), zap.String("repo", repo), zap.Int("pr_number", prNumber))
-		// keep unknown and add reason
+		// Guard against stale non-conflict status leaking through on error
+		conflict = MergeConflictStatusUnknown
 		result.Reasons = append(result.Reasons, "conflict_detection_error")
 	}
 	if conflict == "" {
