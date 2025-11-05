@@ -91,3 +91,23 @@ func (r *CIStatusRepository) FindByPRIDAndCheckSuiteID(prID int, checkSuiteID st
 	}
 	return &status, nil
 }
+
+// FindByPRIDAndName finds a CIStatus record by pr_id and name (status context)
+func (r *CIStatusRepository) FindByPRIDAndName(prID int, name string) (*models.CIStatus, error) {
+	var status models.CIStatus
+	err := r.db.Where("pr_id = ? AND name = ?", prID, name).First(&status).Error
+	if err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+// Create inserts a new CIStatus row
+func (r *CIStatusRepository) Create(ciStatus *models.CIStatus) error {
+	return r.db.Create(ciStatus).Error
+}
+
+// Update updates an existing CIStatus row
+func (r *CIStatusRepository) Update(ciStatus *models.CIStatus) error {
+	return r.db.Save(ciStatus).Error
+}

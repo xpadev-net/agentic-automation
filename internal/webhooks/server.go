@@ -62,6 +62,12 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 		middleware.IdempotencyMiddleware(),
 		handleGitHubWebhook)
 
+	// Status event dedicated endpoint (optional in addition to generic webhook)
+	router.POST("/webhooks/status",
+		middleware.VerifyWebhookSignature(),
+		middleware.IdempotencyMiddleware(),
+		handlers.HandleStatus)
+
 	// APIルート (Bearer認証)
 	router.POST("/api/agent-runs/:id/report",
 		middleware.VerifyBearerToken(),
