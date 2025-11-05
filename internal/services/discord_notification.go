@@ -102,3 +102,21 @@ func (s *DiscordNotificationService) NotifyMaxRetries(ctx context.Context, agent
 
 	return nil
 }
+
+func (s *DiscordNotificationService) NotifyMergeFailure(ctx context.Context, pr *models.PullRequest, issue *models.Issue, errorType, errorMessage string) error {
+	// Check if discord client is disabled (non-blocking)
+	if s.discordClient == nil {
+		return nil
+	}
+
+	// Send notification
+	err := s.discordClient.SendMergeFailureNotification(ctx, pr, issue, errorType, errorMessage)
+	if err != nil {
+		s.logger.Error("Failed to send Discord merge failure notification",
+			zap.Error(err),
+			zap.Int("pr_number", pr.Number))
+		return err
+	}
+
+	return nil
+}

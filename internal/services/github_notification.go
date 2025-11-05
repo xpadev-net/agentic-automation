@@ -83,10 +83,11 @@ func getErrorMessageForNotification(errorMessage *string) string {
 // -----------------------------------------------------------------------------
 
 const (
-	prCreatedMarkerPrefix  = "<!-- agent:pr-created:"
-	maxRetriesMarkerPrefix = "<!-- agent:max-retries:"
-	prCreatedTemplate      = "PR created: #%d (%s) branch=%s sha=%s"
-	maxCommentsToScan      = 30
+	prCreatedMarkerPrefix   = "<!-- agent:pr-created:"
+	maxRetriesMarkerPrefix  = "<!-- agent:max-retries:"
+	mergeFailedMarkerPrefix = "<!-- agent:merge-failed:"
+	prCreatedTemplate       = "PR created: #%d (%s) branch=%s sha=%s"
+	maxCommentsToScan       = 30
 )
 
 // Retry Progress Notification (US3 T102)
@@ -107,6 +108,49 @@ func shortSHA(sha string) string {
 func makePRCreatedBody(prNumber int, prURL, branch, sha, idempotencyKey string) string {
 	marker := prCreatedMarkerPrefix + idempotencyKey + " -->"
 	return marker + "\n" + fmt.Sprintf(prCreatedTemplate, prNumber, prURL, branch, shortSHA(sha))
+}
+
+// makeMergeFailedBody formats a message body for merge failure notification.
+// Includes an idempotency marker and a human-readable explanation.
+func makeMergeFailedBody(prNumber int, prURL, errorType, errorMessage, idempotencyKey string) string {
+	marker := mergeFailedMarkerPrefix + idempotencyKey + " -->"
+	// Provide brief hints depending on errorType
+	var hint string
+	switch errorType {
+	case "merge_conflict_or_not_mergeable":
+		hint = "This PR has merge conflicts or is not in a mergeable state."
+	case "merge_rejected_by_protection_or_reviews":
+		hint = "Branch protection or required reviews are blocking the merge."
+	case "rate_limited":
+		hint = "GitHub API rate limit exceeded. The merge can be retried later."
+	case "github_server_error":
+		hint = "A GitHub server error occurred. Please try again later."
+	default:
+		hint = ""
+	}
+
+	body := fmt.Sprintf(`%s
+❌ Auto-merge failed for PR #%d
+
+**Error Type**: %s
+**Error Message**: %s
+%s
+
+Please check the PR and resolve the issue.
+[View PR](%s)`,
+		marker,
+		prNumber,
+		errorType,
+		errorMessage,
+		func() string {
+			if hint == "" {
+				return ""
+			}
+			return "\n" + hint
+		}(),
+		prURL,
+	)
+	return body
 }
 
 // makeMaxRetriesBody formats a message body for max retries exceeded notification.
@@ -616,4 +660,57 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 	)
 
 	return nil
+}
+
+// NotifyMergeFailure posts a status comment to Issue and PR when auto-merge fails.
+// It is idempotent per idempotencyKey; if a marker is already present, posting is skipped.
+func (s *GitHubNotificationService) NotifyMergeFailure(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber, prNumber int,
+	errorType, errorMessage, idempotencyKey string,
+) error {
+	if idempotencyKey == "" {
+		return fmt.Errorf("idempotencyKey must not be empty")
+	}
+
+	marker := mergeFailedMarkerPrefix + idempotencyKey + " -->"
+	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
+	body := makeMergeFailedBody(prNumber, prURL, errorType, errorMessage, idempotencyKey)
+
+	var aggErr error
+
+	// Post to Issue thread
+	if issueNumber > 0 {
+		exists, err := s.hasCommentWithMarker(ctx, owner, repo, issueNumber, marker)
+		if err != nil {
+			s.logger.Warn("Failed to scan issue comments for merge-failed marker", zap.Error(err), zap.Int("issue_number", issueNumber))
+			aggErr = err
+		} else if !exists {
+			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
+				s.logger.Warn("Failed to post merge failed issue comment", zap.Error(err), zap.Int("issue_number", issueNumber))
+				aggErr = err
+			}
+		}
+	}
+
+	// Post to PR thread
+	if prNumber > 0 {
+		exists, err := s.hasCommentWithMarker(ctx, owner, repo, prNumber, marker)
+		if err != nil {
+			s.logger.Warn("Failed to scan PR comments for merge-failed marker", zap.Error(err), zap.Int("pr_number", prNumber))
+			if aggErr == nil {
+				aggErr = err
+			}
+		} else if !exists {
+			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
+				s.logger.Warn("Failed to post merge failed PR comment", zap.Error(err), zap.Int("pr_number", prNumber))
+				if aggErr == nil {
+					aggErr = err
+				}
+			}
+		}
+	}
+
+	return aggErr
 }

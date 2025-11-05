@@ -655,7 +655,8 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		}
 		mergeRes, mergeErr := autoMergeSvc.AttemptAutoMerge(ctx, owner, repo, pr.Number)
 		if mergeErr != nil {
-			logger.Error("auto-merge failed",
+			// 予期しないエラー（通常はAutoMergeResultで返却される）
+			logger.Error("auto-merge service returned error",
 				zap.Error(mergeErr),
 				zap.String("delivery_id", deliveryID),
 				zap.Int("pr_id", pr.ID),
@@ -667,6 +668,57 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				"delivery_id": deliveryID,
 				"pr_number":   prNumber,
 				"error":       mergeErr.Error(),
+			})
+			return
+		}
+
+		// マージ失敗（結果で通知）
+		if mergeRes != nil && !mergeRes.Merged {
+			// Issue 情報取得（通知に使用）
+			var issue *models.Issue
+			if pr.IssueID != nil {
+				if i, err := deps.IssueRepository.FindByID(*pr.IssueID); err == nil {
+					issue = i
+				} else {
+					logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+				}
+			}
+
+			// GitHub 通知
+			if deps.GitHubNotificationService != nil && issue != nil {
+				idem := c.GetHeader(deliveryHeader)
+				if idem == "" {
+					idem = fmt.Sprintf("merge-fail-%d-%d", pr.Number, time.Now().Unix())
+				}
+				_ = deps.GitHubNotificationService.NotifyMergeFailure(
+					ctx, owner, repo,
+					issue.Number, pr.Number,
+					mergeRes.ErrorType, mergeRes.ErrorMessage,
+					idem,
+				)
+			}
+
+			// Discord 通知
+			if deps.DiscordNotificationService != nil && issue != nil {
+				_ = deps.DiscordNotificationService.NotifyMergeFailure(
+					ctx, pr, issue,
+					mergeRes.ErrorType, mergeRes.ErrorMessage,
+				)
+			}
+
+			logger.Warn("auto-merge failed",
+				zap.String("error_type", mergeRes.ErrorType),
+				zap.String("error_message", mergeRes.ErrorMessage),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_id", pr.ID),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "processed",
+				"action":      "re_eval",
+				"auto_merge":  "failed",
+				"delivery_id": deliveryID,
+				"pr_number":   prNumber,
+				"error_type":  mergeRes.ErrorType,
 			})
 			return
 		}

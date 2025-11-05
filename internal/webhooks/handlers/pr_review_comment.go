@@ -372,14 +372,38 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 				}
 				am = services.NewAutoMergeService(appGitHubClient, logger)
 			}
-			if _, err := am.AttemptAutoMerge(ctx, owner, repo, payload.PullRequest.Number); err != nil {
-				logger.Warn("auto-merge attempt failed",
+			if res, err := am.AttemptAutoMerge(ctx, owner, repo, payload.PullRequest.Number); err != nil {
+				logger.Warn("auto-merge attempt returned error",
 					zap.Error(err),
 					zap.String("delivery_id", deliveryID),
 				)
-				// 成否に関わらず 200 を返す（再試行は他イベントで行われ得る）
-				// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
-				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "merge_attempt_failed",
+					"delivery_id": deliveryID,
+				})
+				return
+			} else if res != nil && !res.Merged {
+				// Merge failed -> notify
+				prModel, perr := prRepo.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
+				var issue *models.Issue
+				if perr == nil && prModel != nil && prModel.IssueID != nil {
+					issue, _ = issueRepo.FindByID(*prModel.IssueID)
+				}
+				if githubNotification != nil && issue != nil {
+					idem := c.GetHeader(deliveryHeader)
+					if idem == "" {
+						idem = fmt.Sprintf("merge-fail-%d-%d", payload.PullRequest.Number, time.Now().Unix())
+					}
+					_ = githubNotification.NotifyMergeFailure(
+						ctx, owner, repo,
+						issue.Number, payload.PullRequest.Number,
+						res.ErrorType, res.ErrorMessage,
+						idem,
+					)
+				}
+				if discordService != nil && issue != nil && prModel != nil {
+					_ = discordService.NotifyMergeFailure(ctx, prModel, issue, res.ErrorType, res.ErrorMessage)
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "merge_attempt_failed",
 					"delivery_id": deliveryID,
@@ -389,8 +413,6 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			logger.Info("auto-merge succeeded (or treated as succeeded)",
 				zap.String("delivery_id", deliveryID),
 			)
-			// 任意通知（軽量）
-			_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "✅ Auto-merged after Codex approval.")
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "merged_or_initiated",
 				"delivery_id": deliveryID,

@@ -411,12 +411,53 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 			} else if result.Mergeable {
 				autoMerge := deps.AutoMergeService
 				if autoMerge != nil {
-					if _, err := autoMerge.AttemptAutoMerge(ctx, owner, repo, pr.Number); err != nil {
-						logger.Warn("Auto-merge attempt failed",
+					if res, err := autoMerge.AttemptAutoMerge(ctx, owner, repo, pr.Number); err != nil {
+						logger.Warn("Auto-merge attempt returned error",
 							zap.Error(err),
 							zap.String("delivery_id", deliveryID),
 							zap.Int("pr_number", pr.Number),
 						)
+					} else if res != nil && !res.Merged {
+						// Merge failed -> notify (best-effort)
+						issueRepo := repositories.NewIssueRepository()
+						var issue *models.Issue
+						if pr.IssueID != nil {
+							if i, ierr := issueRepo.FindByID(*pr.IssueID); ierr == nil {
+								issue = i
+							} else {
+								logger.Warn("failed to load issue for merge failure notification", zap.Error(ierr))
+							}
+						}
+
+						// GitHub notification
+						if issue != nil {
+							// Build GitHub client and service
+							if appGitHubClient == nil {
+								if ghApp, e := clients.NewGitHubAppClient(logger); e == nil {
+									appGitHubClient = ghApp
+								}
+							}
+							if appGitHubClient != nil {
+								if raw, e := appGitHubClient.ForRepo(ctx, owner, repo); e == nil {
+									ghCli := clients.NewFromGitHub(raw, logger)
+									ghNotify := services.NewGitHubNotificationService(ghCli, logger)
+									idem := c.GetHeader(deliveryHeader)
+									if idem == "" {
+										idem = fmt.Sprintf("merge-fail-%d-%d", pr.Number, time.Now().Unix())
+									}
+									_ = ghNotify.NotifyMergeFailure(ctx, owner, repo, issue.Number, pr.Number, res.ErrorType, res.ErrorMessage, idem)
+								}
+							}
+						}
+
+						// Discord notification
+						if issue != nil {
+							dc := clients.NewDiscordClient("", logger)
+							if dc != nil {
+								dsvc := services.NewDiscordNotificationService(dc, logger)
+								_ = dsvc.NotifyMergeFailure(ctx, pr, issue, res.ErrorType, res.ErrorMessage)
+							}
+						}
 					} else {
 						logger.Info("Auto-merge attempted",
 							zap.Int("pr_number", pr.Number),
