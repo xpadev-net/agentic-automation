@@ -17,6 +17,91 @@ import (
 	"go.uber.org/zap"
 )
 
+// dbCIProvider implements services.CIStatusProvider backed by DB aggregation rows
+type dbCIProvider struct {
+	prRepo *repositories.PullRequestRepository
+	ciRepo *repositories.CIStatusRepository
+	logger *zap.Logger
+}
+
+func (p *dbCIProvider) GetAggregatedState(ctx context.Context, owner, repo string, prNumber int) (services.CIState, error) {
+	repoFull := owner + "/" + repo
+	pr, err := p.prRepo.FindByRepoAndNumber(repoFull, prNumber)
+	if err != nil || pr == nil {
+		return services.CIStateUnknown, err
+	}
+	statuses, err := p.ciRepo.FindByPRID(pr.ID)
+	if err != nil {
+		return services.CIStateUnknown, err
+	}
+	var chosen *models.CIStatus
+	for i := range statuses {
+		s := statuses[i]
+		if s.Name == "aggregated" {
+			chosen = &s
+			break
+		}
+	}
+	if chosen == nil {
+		// fallback aggregation: failed > pending > success > unknown
+		hasFailed := false
+		hasPending := false
+		hasAny := len(statuses) > 0
+		for i := range statuses {
+			s := statuses[i]
+			if s.Conclusion != nil {
+				if *s.Conclusion == "failure" || *s.Conclusion == "cancelled" {
+					hasFailed = true
+				}
+			} else if s.Status == "in_progress" || s.Status == "queued" {
+				hasPending = true
+			}
+		}
+		switch {
+		case hasFailed:
+			return services.CIStateFailed, nil
+		case hasPending:
+			return services.CIStatePending, nil
+		case hasAny:
+			return services.CIStateSuccess, nil
+		default:
+			return services.CIStateUnknown, nil
+		}
+	}
+	if chosen.Conclusion != nil {
+		switch *chosen.Conclusion {
+		case "success":
+			return services.CIStateSuccess, nil
+		case "failure", "cancelled":
+			return services.CIStateFailed, nil
+		}
+	}
+	if chosen.Status == "in_progress" || chosen.Status == "queued" {
+		return services.CIStatePending, nil
+	}
+	return services.CIStateUnknown, nil
+}
+
+// dbCodexChecker implements services.CodexApprovalChecker backed by ReviewFeedback
+type dbCodexChecker struct {
+	prRepo *repositories.PullRequestRepository
+	rfRepo *repositories.ReviewFeedbackRepository
+	logger *zap.Logger
+}
+
+func (c *dbCodexChecker) IsApproved(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
+	repoFull := owner + "/" + repo
+	pr, err := c.prRepo.FindByRepoAndNumber(repoFull, prNumber)
+	if err != nil || pr == nil {
+		return false, err
+	}
+	fbs, err := c.rfRepo.FindByApprovalDetected(pr.ID, true)
+	if err != nil {
+		return false, err
+	}
+	return len(fbs) > 0, nil
+}
+
 // StatusPayload represents GitHub status event payload (subset used by our handler)
 type StatusPayload struct {
 	State      string `json:"state"`
@@ -44,7 +129,31 @@ type StatusDeps struct {
 
 // HandleStatus handles GitHub status webhook events
 func HandleStatus(c *gin.Context) {
-	deps := StatusDeps{Logger: config.GetLogger()}
+	logger := config.GetLogger()
+	db := config.GetDB()
+
+	// Initialize GitHub App client once
+	if appGitHubClient == nil {
+		if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+			appGitHubClient = ghApp
+		} else {
+			logger.Warn("GitHub App client not initialized", zap.Error(err))
+		}
+	}
+
+	// Build repositories
+	prRepo := repositories.NewPullRequestRepository(db)
+	ciRepo := repositories.NewCIStatusRepository()
+
+	// Prepare deps with logger/repos
+	deps := StatusDeps{
+		Logger:          logger,
+		PullRequestRepo: prRepo,
+		CIStatusRepo:    ciRepo,
+		GitHubAppClient: appGitHubClient,
+	}
+
+	// Best-effort aggregator/merge wiring happens inside WithDeps after parsing repo/owner
 	HandleStatusWithDeps(c, deps)
 }
 
@@ -131,6 +240,28 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 		ciRepo = repositories.NewCIStatusRepository()
 	}
 
+	// Initialize per-repo GitHub client if available
+	var perRepoGH *github.Client
+	if deps.GitHubAppClient == nil && appGitHubClient == nil {
+		if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+			appGitHubClient = ghApp
+		} else {
+			logger.Warn("GitHub App client not available", zap.Error(err))
+		}
+	}
+	if appGitHubClient != nil {
+		if g, err := appGitHubClient.ForRepo(ctx, owner, repo); err == nil {
+			perRepoGH = g
+		} else {
+			logger.Warn("Failed to init per-repo GitHub client", zap.Error(err))
+		}
+	}
+
+	// Optional Aggregator wiring (status is補助)
+	if deps.Aggregator == nil && perRepoGH != nil {
+		deps.Aggregator = services.NewCIStatusAggregator(clients.NewFromGitHub(perRepoGH, logger), ciRepo, logger)
+	}
+
 	// Prepare GitHub client for repo
 	ghApp := deps.GitHubAppClient
 	if ghApp == nil {
@@ -196,6 +327,29 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 		)
 		c.Error(err)
 		return
+	}
+
+	// Wire real MergeConditionChecker and AutoMergeService if not provided
+	mergeChecker := deps.MergeChecker
+	if mergeChecker == nil {
+		// CI provider backed by DB aggregated status
+		ciProvider := &dbCIProvider{prRepo: prRepo, ciRepo: ciRepo, logger: logger}
+		rfRepo := repositories.NewReviewFeedbackRepository()
+		codexChecker := &dbCodexChecker{prRepo: prRepo, rfRepo: rfRepo, logger: logger}
+
+		var conflictDetector services.MergeConflictDetector
+		if perRepoGH != nil {
+			conflictDetector = services.NewMergeConflictDetector(clients.NewFromGitHub(perRepoGH, logger), logger)
+		}
+		if conflictDetector != nil {
+			mergeChecker = services.NewMergeConditionChecker(ciProvider, codexChecker, conflictDetector, logger)
+		}
+		deps.MergeChecker = mergeChecker
+	}
+
+	// Wire AutoMergeService if missing
+	if deps.AutoMergeService == nil && appGitHubClient != nil {
+		deps.AutoMergeService = services.NewAutoMergeService(appGitHubClient, logger)
 	}
 
 	// Supplementary CI signal persistence (status as supplementary)
