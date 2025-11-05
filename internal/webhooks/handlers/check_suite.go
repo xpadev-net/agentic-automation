@@ -668,10 +668,11 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				}
 				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
 				// Load PR/Issue models for rich embed
+				repoFullName := owner + "/" + repo
 				prModel, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber)
 				var issueModel *models.Issue
-				if perr == nil && prModel != nil && prModel.IssueID > 0 && deps.IssueRepository != nil {
-					if iss, ierr := deps.IssueRepository.FindByID(prModel.IssueID); ierr == nil {
+				if perr == nil && prModel != nil && prModel.IssueID != nil && *prModel.IssueID > 0 && deps.IssueRepository != nil {
+					if iss, ierr := deps.IssueRepository.FindByID(*prModel.IssueID); ierr == nil {
 						issueModel = iss
 					}
 				}
@@ -705,10 +706,11 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				return
 			}
 			discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+			repoFullName := owner + "/" + repo
 			prModel, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber)
 			var issueModel *models.Issue
-			if perr == nil && prModel != nil && prModel.IssueID > 0 && deps.IssueRepository != nil {
-				if iss, ierr := deps.IssueRepository.FindByID(prModel.IssueID); ierr == nil {
+			if perr == nil && prModel != nil && prModel.IssueID != nil && *prModel.IssueID > 0 && deps.IssueRepository != nil {
+				if iss, ierr := deps.IssueRepository.FindByID(*prModel.IssueID); ierr == nil {
 					issueModel = iss
 				}
 			}
