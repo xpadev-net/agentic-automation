@@ -3,11 +3,17 @@ package testutils
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
+	"strings"
 
+	"agentic-automation/internal/clients"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 
+	"github.com/google/go-github/v76/github"
+	"go.uber.org/zap"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -162,4 +168,42 @@ func (s *StubCIFailureAnalyzer) AnalyzeCIFailure(ctx context.Context, owner stri
 		FailureType:      "test_failure",
 		FailedCheckNames: []string{"test-suite"},
 	}, nil
+}
+
+// --- Dummy GitHub client for IssueContextService/CIFailureAnalyzer ---
+// staticTransport returns a fixed JSON body with 200 OK for any request
+type staticTransport struct{}
+
+func (t *staticTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	path := r.URL.Path
+	var body string
+	switch {
+	case strings.Contains(path, "/issues/") && strings.HasSuffix(path, "/comments"):
+		// Issue comments list
+		body = `[]`
+	case strings.Contains(path, "/repos/") && strings.Contains(path, "/issues/"):
+		// Issue detail
+		body = `{"number":123,"title":"Test","body":"Body","labels":[]}`
+	case strings.Contains(path, "/check-suites/") && strings.HasSuffix(path, "/check-runs"):
+		// List check runs for check suite
+		body = `{"total_count":1,"check_runs":[{"id":1,"name":"test-suite","conclusion":"failure","output":{"text":"Test failed"}}]}`
+	default:
+		body = `{"id":1}`
+	}
+	resp := &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+	resp.Header.Set("Content-Type", "application/json")
+	return resp, nil
+}
+
+// NewDummyGitHubHTTPClient returns an *http.Client suitable for wrapping in a github.Client
+func NewDummyGitHubHTTPClient() *http.Client {
+	return &http.Client{Transport: &staticTransport{}}
+}
+
+// NewDummyGitHubClient returns an internal *clients.Client backed by a github.Client
+// using the static transport so code paths can run deterministically in tests.
+func NewDummyGitHubClient() *clients.Client {
+	httpClient := NewDummyGitHubHTTPClient()
+	gh := github.NewClient(httpClient)
+	return clients.NewFromGitHub(gh, zap.NewNop())
 }

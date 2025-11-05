@@ -114,7 +114,8 @@ func setupDBCheckSuite(t *testing.T) *gorm.DB {
 			started_at DATETIME,
 			completed_at DATETIME,
 			created_at DATETIME,
-			updated_at DATETIME
+			updated_at DATETIME,
+			UNIQUE(pr_id, check_suite_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_ci_status_pr_id ON ci_status(pr_id);
 		CREATE INDEX IF NOT EXISTS idx_ci_status_pr_status ON ci_status(pr_id, status);
@@ -244,12 +245,14 @@ func buildCheckSuitePayload(action string, conclusion *string, checkSuiteID int6
 func Test_CheckSuite_CIFailure_TriggersRetry(t *testing.T) {
 	// Setup environment variables
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
+	os.Setenv("GITHUB_APP_TEST_MODE", "1")
 	os.Setenv("OPERATOR_SERVICE_NAME", "agent-operator")
 	os.Setenv("OPERATOR_SERVICE_PORT", "3000")
 	os.Setenv("AGENT_RUNNER_IMAGE", "test/agent-runner:latest")
 	os.Setenv("AGENT_RUNNER_TIMEOUT_MINUTES", "30")
 	t.Cleanup(func() {
 		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+		os.Unsetenv("GITHUB_APP_TEST_MODE")
 		os.Unsetenv("OPERATOR_SERVICE_NAME")
 		os.Unsetenv("OPERATOR_SERVICE_PORT")
 		os.Unsetenv("AGENT_RUNNER_IMAGE")
@@ -282,7 +285,9 @@ func Test_CheckSuite_CIFailure_TriggersRetry(t *testing.T) {
 	issueRepo := repositories.NewIssueRepository()
 
 	// Setup services
-	issueContextService := services.NewIssueContextService(nil, logger)
+	// Create dummy GitHubClient for IssueContextService (it requires non-nil client)
+	dummyGitHubClient := tu.NewDummyGitHubClient()
+	issueContextService := services.NewIssueContextService(dummyGitHubClient, logger)
 	retryOrchestrator := services.NewRetryOrchestrator(
 		agentRunRepo,
 		k8sJobService,
@@ -293,15 +298,13 @@ func Test_CheckSuite_CIFailure_TriggersRetry(t *testing.T) {
 	feedbackAggregator := services.NewFeedbackAggregator(nil, logger)
 
 	// Build dependencies
-	// Note: CIFailureAnalyzer is nil, handler will create it, but we need to inject stub
-	// For now, we'll use nil and the handler will create a real one, but we can't easily stub it
-	// This is a limitation - we would need to make CIFailureAnalyzer an interface to stub it properly
+	// Inject stubbed CIFailureAnalyzer and dummy GitHub client so handler executes deterministically
 	deps := handlers.CheckSuiteDeps{
 		Logger:                    logger,
-		GitHubClient:              nil, // Not needed for this test
+		GitHubClient:              dummyGitHubClient,
 		PullRequestRepository:     prRepo,
 		CIStatusRepository:        ciStatusRepo,
-		CIFailureAnalyzer:         nil, // Handler will create it, but we can't easily stub it
+		CIFailureAnalyzer:         nil, // Handler will create analyzer using provided GitHubClient
 		FeedbackAggregator:        feedbackAggregator,
 		RetryOrchestrator:         retryOrchestrator,
 		KubernetesJobService:      k8sJobService,
@@ -382,10 +385,12 @@ func createAgentRunWithRetryCount(t *testing.T, db *gorm.DB, issueID int, prID *
 func Test_CheckSuite_CIFailure_MaxRetriesExceeded(t *testing.T) {
 	// Setup environment variables
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
+	os.Setenv("GITHUB_APP_TEST_MODE", "1")
 	os.Setenv("OPERATOR_SERVICE_NAME", "agent-operator")
 	os.Setenv("OPERATOR_SERVICE_PORT", "3000")
 	t.Cleanup(func() {
 		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+		os.Unsetenv("GITHUB_APP_TEST_MODE")
 		os.Unsetenv("OPERATOR_SERVICE_NAME")
 		os.Unsetenv("OPERATOR_SERVICE_PORT")
 	})
@@ -416,7 +421,9 @@ func Test_CheckSuite_CIFailure_MaxRetriesExceeded(t *testing.T) {
 	issueRepo := repositories.NewIssueRepository()
 
 	// Setup services
-	issueContextService := services.NewIssueContextService(nil, logger)
+	// Create dummy GitHubClient for IssueContextService (it requires non-nil client)
+	dummyGitHubClient := tu.NewDummyGitHubClient()
+	issueContextService := services.NewIssueContextService(dummyGitHubClient, logger)
 	retryOrchestrator := services.NewRetryOrchestrator(
 		agentRunRepo,
 		k8sJobService,
@@ -427,12 +434,13 @@ func Test_CheckSuite_CIFailure_MaxRetriesExceeded(t *testing.T) {
 	feedbackAggregator := services.NewFeedbackAggregator(nil, logger)
 
 	// Build dependencies
+	// Inject stubbed CIFailureAnalyzer and dummy GitHub client
 	deps := handlers.CheckSuiteDeps{
 		Logger:                    logger,
-		GitHubClient:              nil,
+		GitHubClient:              dummyGitHubClient, // Required for CIFailureAnalyzer creation
 		PullRequestRepository:     prRepo,
 		CIStatusRepository:        ciStatusRepo,
-		CIFailureAnalyzer:         nil, // Handler will create it
+		CIFailureAnalyzer:         nil, // Handler will create analyzer using provided GitHubClient
 		FeedbackAggregator:        feedbackAggregator,
 		RetryOrchestrator:         retryOrchestrator,
 		KubernetesJobService:      k8sJobService,
@@ -570,12 +578,14 @@ func Test_CheckSuite_CISuccess_RecordsStatus(t *testing.T) {
 func Test_CheckSuite_CIFailure_Retry_Success_Flow(t *testing.T) {
 	// Setup environment variables
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
+	os.Setenv("GITHUB_APP_TEST_MODE", "1")
 	os.Setenv("OPERATOR_SERVICE_NAME", "agent-operator")
 	os.Setenv("OPERATOR_SERVICE_PORT", "3000")
 	os.Setenv("AGENT_RUNNER_IMAGE", "test/agent-runner:latest")
 	os.Setenv("AGENT_RUNNER_TIMEOUT_MINUTES", "30")
 	t.Cleanup(func() {
 		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+		os.Unsetenv("GITHUB_APP_TEST_MODE")
 		os.Unsetenv("OPERATOR_SERVICE_NAME")
 		os.Unsetenv("OPERATOR_SERVICE_PORT")
 		os.Unsetenv("AGENT_RUNNER_IMAGE")
@@ -608,7 +618,9 @@ func Test_CheckSuite_CIFailure_Retry_Success_Flow(t *testing.T) {
 	issueRepo := repositories.NewIssueRepository()
 
 	// Setup services
-	issueContextService := services.NewIssueContextService(nil, logger)
+	// Create dummy GitHubClient for IssueContextService (it requires non-nil client)
+	dummyGitHubClient := tu.NewDummyGitHubClient()
+	issueContextService := services.NewIssueContextService(dummyGitHubClient, logger)
 	retryOrchestrator := services.NewRetryOrchestrator(
 		agentRunRepo,
 		k8sJobService,
@@ -619,12 +631,13 @@ func Test_CheckSuite_CIFailure_Retry_Success_Flow(t *testing.T) {
 	feedbackAggregator := services.NewFeedbackAggregator(nil, logger)
 
 	// Build dependencies
+	// Inject stubbed CIFailureAnalyzer and dummy GitHub client
 	deps := handlers.CheckSuiteDeps{
 		Logger:                    logger,
-		GitHubClient:              nil,
+		GitHubClient:              dummyGitHubClient, // Required for CIFailureAnalyzer creation
 		PullRequestRepository:     prRepo,
 		CIStatusRepository:        ciStatusRepo,
-		CIFailureAnalyzer:         nil, // Handler will create it
+		CIFailureAnalyzer:         nil, // Handler will create analyzer using provided GitHubClient
 		FeedbackAggregator:        feedbackAggregator,
 		RetryOrchestrator:         retryOrchestrator,
 		KubernetesJobService:      k8sJobService,
