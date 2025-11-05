@@ -207,9 +207,9 @@
 
 ### Tests for User Story 3 (Test-First Development)
 
-- [ ] T104 [P] [US3] Write unit tests for CodexApprovalDetector (approval pattern matching)
-- [ ] T105 [P] [US3] Write unit tests for RetryOrchestrator (max 50 retries logic)
-- [ ] T106 [P] [US3] Write unit tests for FeedbackAggregator (review + CI combination)
+- [x] T104 [P] [US3] Write unit tests for CodexApprovalDetector (approval pattern matching)
+- [x] T105 [P] [US3] Write unit tests for RetryOrchestrator (max 50 retries logic)
+- [x] T106 [P] [US3] Write unit tests for FeedbackAggregator (review + CI combination)
 - [ ] T107 [US3] Write integration test for CI failure → retry → success flow
 
 **Checkpoint**: All user stories 1-3 should now be independently functional - quality loop with automatic improvements
