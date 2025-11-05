@@ -9,19 +9,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// ciStatusReader is a narrow interface of CIStatusRepository for easier testing.
-type ciStatusReader interface {
-	FindByPRID(prID int) ([]repositories.CIStatusModel, error)
-}
-
-// prFinder is a narrow interface of PullRequestRepository for easier testing.
-type prFinder interface {
-	FindByRepoAndNumber(repo string, number int) (*repositories.PullRequestModel, error)
-}
-
-// NOTE: We use concrete repositories but access them through helper wrappers
-// because repository packages expose models via internal/models. To avoid
-// importing models here, we define small adapters below.
+// NOTE: We directly use concrete repositories and internal/models here.
 
 type ciStatusProvider struct {
 	ciRepo *repositories.CIStatusRepository
