@@ -634,9 +634,23 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			return
 		}
 
-		// 自動マージ実行
+		// 自動マージ実行（Appクライアント未設定時はスキップしてフォールバック）
 		autoMergeSvc := deps.AutoMergeService
 		if autoMergeSvc == nil {
+			if appGitHubClient == nil {
+				logger.Info("Skipping auto-merge: GitHub App client unavailable",
+					zap.String("delivery_id", deliveryID),
+				)
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"action":      "re_eval",
+					"auto_merge":  "skipped",
+					"reason":      "github_app_client_unavailable",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+				})
+				return
+			}
 			autoMergeSvc = services.NewAutoMergeService(appGitHubClient, logger)
 		}
 		mergeRes, mergeErr := autoMergeSvc.AttemptAutoMerge(ctx, owner, repo, pr.Number)
