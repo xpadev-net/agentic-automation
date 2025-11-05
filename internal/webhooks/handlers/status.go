@@ -411,9 +411,11 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 			} else if result.Mergeable {
 				autoMerge := deps.AutoMergeService
 				if autoMerge != nil {
-					if _, err := autoMerge.AttemptAutoMerge(ctx, owner, repo, pr.Number); err != nil {
+					mergeRes, mergeErr := autoMerge.AttemptAutoMerge(ctx, owner, repo, pr.Number)
+					if mergeErr != nil {
+						// 予期しないエラー（通常はAutoMergeResultで返却される）
 						logger.Warn("Auto-merge attempt returned error",
-							zap.Error(err),
+							zap.Error(mergeErr),
 							zap.String("delivery_id", deliveryID),
 							zap.Int("pr_number", pr.Number),
 						)
@@ -425,12 +427,48 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 							}
 							discordSvc := services.NewDiscordNotificationService(discordClient, logger)
 							prModel, _ := deps.PullRequestRepo.FindByRepoAndNumber(owner+"/"+repo, pr.Number)
-							_ = discordSvc.NotifyMergeFailure(ctx, prModel, nil, err.Error(), services.ClassifyMergeError(err))
+							_ = discordSvc.NotifyMergeFailure(ctx, prModel, nil, mergeErr.Error(), services.ClassifyMergeError(mergeErr))
 						}()
-					} else {
-						logger.Info("Auto-merge attempted",
-							zap.Int("pr_number", pr.Number),
+					} else if mergeRes != nil && !mergeRes.Merged {
+						// マージ失敗（結果で通知）
+						// Issue 情報取得（通知に使用）
+						var issue *models.Issue
+						if pr.IssueID != nil {
+							if i, err := repositories.NewIssueRepository().FindByID(*pr.IssueID); err == nil {
+								issue = i
+							} else {
+								logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+							}
+						}
+
+						// Discord: notify merge failure (best-effort)
+						func() {
+							discordClient := clients.NewDiscordClient("", logger)
+							if discordClient == nil {
+								return
+							}
+							discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+							prModel, _ := deps.PullRequestRepo.FindByRepoAndNumber(owner+"/"+repo, pr.Number)
+							_ = discordSvc.NotifyMergeFailure(ctx, prModel, issue, mergeRes.ErrorMessage, mergeRes.ErrorType)
+						}()
+
+						logger.Warn("auto-merge failed",
+							zap.String("error_type", mergeRes.ErrorType),
+							zap.String("error_message", mergeRes.ErrorMessage),
 							zap.String("delivery_id", deliveryID),
+							zap.Int("pr_number", pr.Number),
+						)
+					} else {
+						logger.Info("Auto-merge succeeded",
+							zap.Bool("merged", mergeRes != nil && mergeRes.Merged),
+							zap.String("merge_sha", func() string {
+								if mergeRes != nil {
+									return mergeRes.MergeSHA
+								}
+								return ""
+							}()),
+							zap.String("delivery_id", deliveryID),
+							zap.Int("pr_number", pr.Number),
 						)
 						// Discord: notify merge success (best-effort)
 						func() {
