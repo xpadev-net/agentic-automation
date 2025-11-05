@@ -54,6 +54,7 @@ type CheckSuiteDeps struct {
 	GitHubClient              *clients.Client
 	PullRequestRepository     *repositories.PullRequestRepository
 	CIStatusRepository        *repositories.CIStatusRepository
+	CIStatusAggregator        services.CIStatusAggregator
 	CIFailureAnalyzer         *services.CIFailureAnalyzer
 	FeedbackAggregator        *services.FeedbackAggregator
 	RetryOrchestrator         *services.RetryOrchestrator
@@ -246,11 +247,21 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Step 7: CIStatus更新
+	// Prepare repositories/services
 	ciStatusRepo := deps.CIStatusRepository
 	if ciStatusRepo == nil {
 		ciStatusRepo = repositories.NewCIStatusRepository()
 	}
+
+	// Prepare optional GitHub client (used by aggregator/analyzer). If not available, we will skip aggregation.
+	githubClient := deps.GitHubClient
+	if githubClient == nil && appGitHubClient != nil {
+		if rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo); err == nil {
+			githubClient = clients.NewFromGitHub(rawClient, logger)
+		}
+	}
+
+	// Step 7: CIStatus更新
 
 	checkSuiteIDStr := strconv.FormatInt(payload.CheckSuite.ID, 10)
 	conclusion := payload.CheckSuite.Conclusion
@@ -280,6 +291,29 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			zap.Int("ci_status_id", ciStatus.ID),
 			zap.Int("pr_id", pr.ID),
 			zap.String("delivery_id", deliveryID),
+		)
+	}
+
+	// Step 7b: 集計（PR単位: 最新HEAD SHA）を保存
+	if githubClient != nil {
+		aggregator := deps.CIStatusAggregator
+		if aggregator == nil {
+			aggregator = services.NewCIStatusAggregator(githubClient, ciStatusRepo, logger)
+		}
+		if _, err := aggregator.AggregateAndStore(ctx, owner, repo, pr.ID, payload.CheckSuite.ID, payload.CheckSuite.HeadSHA); err != nil {
+			logger.Warn("Failed to aggregate CI status",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_id", pr.ID),
+				zap.Int64("check_suite_id", payload.CheckSuite.ID),
+			)
+			// non-fatal
+		}
+	} else {
+		logger.Info("Skipping CI aggregation (GitHub client unavailable)",
+			zap.String("delivery_id", deliveryID),
+			zap.Int("pr_id", pr.ID),
+			zap.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 	}
 
