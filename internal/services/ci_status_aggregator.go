@@ -169,14 +169,19 @@ func (s *ciStatusAggregator) AddStatusSignal(ctx context.Context, prID int, name
 		logsURL = &u
 	}
 
-	ci := &models.CIStatus{
-		PRID:         prID,
-		CheckSuiteID: "",
-		Name:         name,
-		Status:       status,
-		Conclusion:   conclusion,
-		LogsURL:      logsURL,
+	// Prefer updating per-context row to avoid clobbering other contexts
+	if saver, ok := s.repo.(*repositories.CIStatusRepository); ok {
+		if existing, err := saver.FindByPRIDAndName(prID, name); err == nil && existing != nil {
+			existing.Status = status
+			existing.Conclusion = conclusion
+			existing.LogsURL = logsURL
+			return saver.Update(existing)
+		}
+		ci := &models.CIStatus{PRID: prID, CheckSuiteID: "", Name: name, Status: status, Conclusion: conclusion, LogsURL: logsURL}
+		return saver.Create(ci)
 	}
+	// Fallback to generic upsert
+	ci := &models.CIStatus{PRID: prID, CheckSuiteID: "", Name: name, Status: status, Conclusion: conclusion, LogsURL: logsURL}
 	return s.repo.CreateOrUpdate(ci)
 }
 
