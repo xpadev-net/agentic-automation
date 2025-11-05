@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -58,6 +59,100 @@ type PullRequestReviewCommentDeps struct {
 	CodexReviewService       CodexReviewService
 	PullRequestRepository    *repositories.PullRequestRepository
 	ReviewFeedbackRepository *repositories.ReviewFeedbackRepository
+	// Optional DI for US4 merge re-evaluation
+	MergeConditionChecker services.MergeConditionChecker
+	AutoMergeService      services.AutoMergeService
+}
+
+// ciStatusProviderAdapter は PR に紐づく最新の aggregated CI 状態を返す軽量アダプタ
+type ciStatusProviderAdapter struct {
+	repo *repositories.CIStatusRepository
+	prID int
+}
+
+func (a *ciStatusProviderAdapter) GetAggregatedState(_ context.Context, _ string, _ string, _ int) (services.CIState, error) {
+	if a.repo == nil || a.prID == 0 {
+		return services.CIStateUnknown, nil
+	}
+	statuses, err := a.repo.FindByPRID(a.prID)
+	if err != nil {
+		return services.CIStateUnknown, err
+	}
+	// 最新 aggregated を 1 件選定する
+	var latest *models.CIStatus
+	// helper: 比較関数（CompletedAt > UpdatedAt > CheckSuiteID 数値）
+	isNewer := func(a, b *models.CIStatus) bool {
+		// CompletedAt: nil は古い扱い
+		if a.CompletedAt != nil || b.CompletedAt != nil {
+			if a.CompletedAt == nil {
+				return false
+			}
+			if b.CompletedAt == nil {
+				return true
+			}
+			if a.CompletedAt.After(*b.CompletedAt) {
+				return true
+			}
+			if b.CompletedAt.After(*a.CompletedAt) {
+				return false
+			}
+		}
+		// UpdatedAt
+		if a.UpdatedAt.After(b.UpdatedAt) {
+			return true
+		}
+		if b.UpdatedAt.After(a.UpdatedAt) {
+			return false
+		}
+		// CheckSuiteID 数値比較（失敗時は同等扱い）
+		var ai, bi int64
+		if a.CheckSuiteID != "" {
+			if v, err := strconv.ParseInt(a.CheckSuiteID, 10, 64); err == nil {
+				ai = v
+			}
+		}
+		if b.CheckSuiteID != "" {
+			if v, err := strconv.ParseInt(b.CheckSuiteID, 10, 64); err == nil {
+				bi = v
+			}
+		}
+		return ai > bi
+	}
+
+	for i := range statuses {
+		s := &statuses[i]
+		if s.Name != "aggregated" {
+			continue
+		}
+		if latest == nil || isNewer(s, latest) {
+			latest = s
+		}
+	}
+
+	if latest == nil {
+		return services.CIStateUnknown, nil
+	}
+
+	// 最新 1 件のみから CIState を決定
+	if latest.Conclusion != nil {
+		switch *latest.Conclusion {
+		case "failure":
+			return services.CIStateFailed, nil
+		case "success":
+			return services.CIStateSuccess, nil
+		default:
+			return services.CIStatePending, nil
+		}
+	}
+	// 結論未設定は進行中とみなす
+	return services.CIStatePending, nil
+}
+
+// alwaysApprovedChecker は本イベントで承認検知済みのため常に true を返すアダプタ
+type alwaysApprovedChecker struct{}
+
+func (a *alwaysApprovedChecker) IsApproved(_ context.Context, _ string, _ string, _ int) (bool, error) {
+	return true, nil
 }
 
 // HandlePullRequestReviewComment handles GitHub pull_request_review_comment webhook events
@@ -150,6 +245,166 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			"status":      "ignored",
 			"action":      payload.Action,
 			"delivery_id": deliveryID,
+		})
+		return
+	}
+
+	// Step 4.5: Codex 承認コメント検知 → マージ条件再評価（@codex review トリガーと独立に実行）
+	detector := services.NewCodexApprovalDetector(logger)
+	if detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login) {
+		logger.Info("Codex approval detected; re-evaluating merge conditions",
+			zap.String("delivery_id", deliveryID),
+			zap.Int("pr_number", payload.PullRequest.Number),
+			zap.String("repo", payload.Repository.FullName),
+		)
+
+		// リポジトリ情報抽出
+		repoParts := strings.Split(payload.Repository.FullName, "/")
+		if len(repoParts) != 2 {
+			logger.Error("Invalid repository full name format",
+				zap.String("full_name", payload.Repository.FullName),
+				zap.String("delivery_id", deliveryID),
+			)
+			c.Error(errors.New("invalid repository full name format"))
+			return
+		}
+		owner := repoParts[0]
+		repo := repoParts[1]
+
+		// GitHub クライアント初期化（repo 単位）
+		githubClient := deps.GitHubClient
+		if githubClient == nil {
+			if appGitHubClient == nil {
+				logger.Error("GitHub App client not available",
+					zap.String("delivery_id", deliveryID),
+				)
+				c.Error(errors.New("github client not provided"))
+				return
+			}
+			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
+			if err != nil {
+				logger.Error("Failed to init per-repo GitHub client",
+					zap.Error(err),
+					zap.String("owner", owner),
+					zap.String("repo", repo),
+					zap.String("delivery_id", deliveryID),
+				)
+				c.Error(err)
+				return
+			}
+			githubClient = clients.NewFromGitHub(rawClient, logger)
+		}
+
+		// PR 取得
+		prRepo := deps.PullRequestRepository
+		if prRepo == nil {
+			prRepo = repositories.NewPullRequestRepository(config.GetDB())
+		}
+		pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.PullRequest.Number)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Error("PullRequest not found for merge re-evaluation",
+					zap.Error(err),
+					zap.String("delivery_id", deliveryID),
+					zap.Int("pr_number", payload.PullRequest.Number),
+					zap.String("repo", payload.Repository.FullName),
+				)
+				c.Error(errors.New("pull request not found"))
+				return
+			}
+			logger.Error("Failed to get PullRequest for merge re-evaluation",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+				zap.String("repo", payload.Repository.FullName),
+			)
+			c.Error(err)
+			return
+		}
+
+		// CIStatusProvider/CodexApprovalChecker はファイル先頭のアダプタを利用
+
+		var checker services.MergeConditionChecker
+		if deps.MergeConditionChecker != nil {
+			checker = deps.MergeConditionChecker
+		} else {
+			ciRepo := repositories.NewCIStatusRepository()
+			ciProvider := &ciStatusProviderAdapter{repo: ciRepo, prID: pr.ID}
+			conflictDetector := services.NewMergeConflictDetector(githubClient, logger)
+			checker = services.NewMergeConditionChecker(ciProvider, &alwaysApprovedChecker{}, conflictDetector, logger)
+		}
+
+		res, err := checker.Check(ctx, owner, repo, payload.PullRequest.Number)
+		if err != nil {
+			logger.Error("merge condition check failed",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+				zap.String("repo", payload.Repository.FullName),
+			)
+			c.Error(err)
+			return
+		}
+
+		logger.Info("merge condition evaluated",
+			zap.Bool("mergeable", res.Mergeable),
+			zap.String("ci_state", string(res.CIState)),
+			zap.String("conflict", string(res.Conflict)),
+			zap.Int("reasons_count", len(res.Reasons)),
+			zap.String("delivery_id", deliveryID),
+		)
+
+		if res.Mergeable {
+			am := deps.AutoMergeService
+			if am == nil {
+				// GitHub App クライアント未設定時はフォールバック生成をスキップして安全に抜ける
+				if appGitHubClient == nil {
+					logger.Warn("auto-merge skipped: GitHub App client not available",
+						zap.String("delivery_id", deliveryID),
+					)
+					// 任意通知（軽量）
+					_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "ℹ️ Mergeable, but auto-merge skipped (app client unavailable).")
+					c.JSON(http.StatusOK, gin.H{
+						"status":      "merge_skipped_no_app_client",
+						"delivery_id": deliveryID,
+					})
+					return
+				}
+				am = services.NewAutoMergeService(appGitHubClient, logger)
+			}
+			if _, err := am.AttemptAutoMerge(ctx, owner, repo, payload.PullRequest.Number); err != nil {
+				logger.Warn("auto-merge attempt failed",
+					zap.Error(err),
+					zap.String("delivery_id", deliveryID),
+				)
+				// 成否に関わらず 200 を返す（再試行は他イベントで行われ得る）
+				// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
+				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "merge_attempt_failed",
+					"delivery_id": deliveryID,
+				})
+				return
+			}
+			logger.Info("auto-merge succeeded (or treated as succeeded)",
+				zap.String("delivery_id", deliveryID),
+			)
+			// 任意通知（軽量）
+			_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "✅ Auto-merged after Codex approval.")
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "merged_or_initiated",
+				"delivery_id": deliveryID,
+			})
+			return
+		}
+
+		// 条件未成立（任意通知：理由を簡易表示）
+		_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "ℹ️ Merge re-evaluated after Codex approval: not mergeable yet.")
+		c.JSON(http.StatusOK, gin.H{
+			"status":      "re_evaluated_not_mergeable",
+			"delivery_id": deliveryID,
+			"ci_state":    string(res.CIState),
+			"conflict":    string(res.Conflict),
 		})
 		return
 	}
