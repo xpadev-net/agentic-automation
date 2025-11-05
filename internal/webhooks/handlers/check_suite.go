@@ -63,6 +63,7 @@ type CheckSuiteDeps struct {
 	IssueContextService       *services.IssueContextService
 	AgentRunRepository        repositories.AgentRunRepository
 	IssueRepository           *repositories.IssueRepository
+	AutoMergeService          services.AutoMergeService
 }
 
 // HandleCheckSuite handles GitHub check_suite webhook events
@@ -342,21 +343,33 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		githubClient := deps.GitHubClient
 		if githubClient == nil {
 			if appGitHubClient == nil {
-				logger.Error("GitHub App client not available",
+				// Fallback: skip re-evaluation (legacy-compatible minimal response)
+				logger.Info("GitHub App client not available; skipping re-evaluation",
 					zap.String("delivery_id", deliveryID),
 				)
-				c.Error(errors.New("github client not provided"))
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+					"conclusion":  *conclusion,
+				})
 				return
 			}
 			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 			if err != nil {
-				logger.Error("Failed to init per-repo GitHub client",
+				// Fallback: skip re-evaluation
+				logger.Info("Failed to init per-repo GitHub client; skipping re-evaluation",
 					zap.Error(err),
 					zap.String("owner", owner),
 					zap.String("repo", repo),
 					zap.String("delivery_id", deliveryID),
 				)
-				c.Error(err)
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+					"conclusion":  *conclusion,
+				})
 				return
 			}
 			githubClient = clients.NewFromGitHub(rawClient, logger)
@@ -527,7 +540,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		return
 	}
 
-	// Step 8b: CI成功時の処理
+	// Step 8b: CI成功時の処理（マージ条件再評価 + 自動マージ）
 	if *conclusion == models.CheckSuiteConclusionSuccess {
 		logger.Info("CI success detected",
 			zap.String("delivery_id", deliveryID),
@@ -535,19 +548,151 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			zap.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 
-		// TODO(US4): Implement MergeConditionChecker and auto-merge logic
-		// For now, just log that CI success was detected and merge condition re-evaluation is needed
-		logger.Info("CI success detected, merge condition re-evaluation needed (US4 to be implemented)",
+		// GitHub client（競合検出・自動マージ用）
+		githubClient := deps.GitHubClient
+		if githubClient == nil {
+			if appGitHubClient == nil {
+				// テスト/資格情報なし環境では従来レスポンスで終了
+				logger.Info("GitHub App client unavailable; skipping re-evaluation",
+					zap.String("delivery_id", deliveryID),
+				)
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+					"conclusion":  *conclusion,
+				})
+				return
+			}
+			raw, err := appGitHubClient.ForRepo(ctx, owner, repo)
+			if err != nil {
+				logger.Info("Failed to init per-repo GitHub client; skipping re-evaluation",
+					zap.Error(err),
+					zap.String("owner", owner),
+					zap.String("repo", repo),
+					zap.String("delivery_id", deliveryID),
+				)
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+					"conclusion":  *conclusion,
+				})
+				return
+			}
+			githubClient = clients.NewFromGitHub(raw, logger)
+		}
+
+		// Repositories / Services 準備
+		prRepo := deps.PullRequestRepository
+		if prRepo == nil {
+			prRepo = repositories.NewPullRequestRepository(config.GetDB())
+		}
+		ciRepo := deps.CIStatusRepository
+		if ciRepo == nil {
+			ciRepo = repositories.NewCIStatusRepository()
+		}
+		reviewRepo := repositories.NewReviewFeedbackRepository()
+
+		// Provider/Checker 構築
+		ciProvider := services.NewCIStatusProvider(ciRepo, prRepo, logger)
+		approvalChecker := services.NewCodexApprovalChecker(reviewRepo, prRepo, logger)
+		conflictDetector := services.NewMergeConflictDetector(githubClient, logger)
+		checker := services.NewMergeConditionChecker(ciProvider, approvalChecker, conflictDetector, logger)
+
+		// 再評価実行
+		result, err := checker.Check(ctx, owner, repo, pr.Number)
+		if err != nil {
+			logger.Error("merge condition check failed",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_id", pr.ID),
+			)
+			c.Error(err)
+			return
+		}
+
+		logger.Info("merge condition evaluated",
+			zap.String("ci_state", string(result.CIState)),
+			zap.Bool("codex_approved", result.CodexApproved),
+			zap.String("conflict", string(result.Conflict)),
+			zap.Bool("mergeable", result.Mergeable),
 			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_id", pr.ID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 
+		if !result.Mergeable {
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "processed",
+				"action":      "re_eval",
+				"mergeable":   false,
+				"delivery_id": deliveryID,
+				"pr_number":   prNumber,
+				"ci_state":    string(result.CIState),
+				"conclusion":  *conclusion,
+				"reasons":     result.Reasons,
+			})
+			return
+		}
+
+		// 自動マージ実行（Appクライアント未設定時はスキップしてフォールバック）
+		autoMergeSvc := deps.AutoMergeService
+		if autoMergeSvc == nil {
+			if appGitHubClient == nil {
+				logger.Info("Skipping auto-merge: GitHub App client unavailable",
+					zap.String("delivery_id", deliveryID),
+				)
+				c.JSON(http.StatusOK, gin.H{
+					"status":      "processed",
+					"action":      "re_eval",
+					"auto_merge":  "skipped",
+					"reason":      "github_app_client_unavailable",
+					"delivery_id": deliveryID,
+					"pr_number":   prNumber,
+				})
+				return
+			}
+			autoMergeSvc = services.NewAutoMergeService(appGitHubClient, logger)
+		}
+		mergeRes, mergeErr := autoMergeSvc.AttemptAutoMerge(ctx, owner, repo, pr.Number)
+		if mergeErr != nil {
+			logger.Error("auto-merge failed",
+				zap.Error(mergeErr),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_id", pr.ID),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "processed",
+				"action":      "re_eval",
+				"auto_merge":  "failed",
+				"delivery_id": deliveryID,
+				"pr_number":   prNumber,
+				"error":       mergeErr.Error(),
+			})
+			return
+		}
+
+		logger.Info("auto-merge succeeded",
+			zap.Bool("merged", mergeRes != nil && mergeRes.Merged),
+			zap.String("merge_sha", func() string {
+				if mergeRes != nil {
+					return mergeRes.MergeSHA
+				}
+				return ""
+			}()),
+			zap.String("delivery_id", deliveryID),
+		)
 		c.JSON(http.StatusOK, gin.H{
-			"status":      "processed",
+			"status":     "processed",
+			"action":     "re_eval",
+			"auto_merge": "succeeded",
+			"merge_sha": func() string {
+				if mergeRes != nil {
+					return mergeRes.MergeSHA
+				}
+				return ""
+			}(),
 			"delivery_id": deliveryID,
 			"pr_number":   prNumber,
-			"conclusion":  *conclusion,
 		})
 		return
 	}
