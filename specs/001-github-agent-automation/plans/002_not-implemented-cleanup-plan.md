@@ -144,39 +144,59 @@ func RunLint(workDir string) error {
 
 ## 調査結果（Phase 1 完了後に記入）
 
-### HasChanges() (`agent-runner/pkg/git/git.go:203`)
+### HasChanges() (`agent-runner/pkg/git/git.go:200-204`)
 
 **調査結果**:
-- [ ] 呼び出し箇所: （ここに記入）
-- [ ] 代替実装: （ここに記入）
-- [ ] 判断: □ 削除 / □ 実装 / □ リダイレクト
+- [x] 呼び出し箇所: `agent-runner/main.go:337` で使用されている
+- [x] 代替実装: `pkg/git/diff.go` の `GetChangedFiles()` を使用可能
+- [x] 判断: ☑ 実装
 
 **理由**:
-（ここに記入）
+- `main.go` で実際に使用されているため、実装が必要
+- `GetChangedFiles()` を呼び出して `len(changedFiles) > 0` で判定する実装を追加
+
+**実装完了**: ✅ `GetChangedFiles()` を使用して実装完了
 
 ---
 
 ### RunLint() / RunTypeCheck() (`agent-runner/pkg/lint/lint.go`)
 
 **調査結果**:
-- [ ] 呼び出し箇所: （ここに記入）
-- [ ] T034 の実装内容: （ここに記入）
-- [ ] 判断: □ 削除 / □ 実装 / □ リダイレクト
+- [x] 呼び出し箇所: なし（使用されていない）
+- [x] T034 の実装内容: `pkg/config/loader.go` で `.agent-config.yaml` の読み込み機能が実装済み。Lint/TypeCheck は Validation フックで実装済み
+- [x] 判断: ☑ 削除
 
 **理由**:
-（ここに記入）
+- 呼び出し箇所がなく、機能は `.agent-config.yaml` の Validation フックで実装済み
+- スタブファイルのみのため削除
+
+**削除完了**: ✅ `agent-runner/pkg/lint/lint.go` を削除
 
 ---
 
 ### LoadConfig() / BuildPrompt() (`agent-runner/pkg/context/context.go`)
 
 **調査結果**:
-- [ ] 呼び出し箇所: （ここに記入）
-- [ ] T037 の実装内容: （ここに記入）
-- [ ] 判断: □ 削除 / □ 実装 / □ リダイレクト
+- [x] 呼び出し箇所: 
+  - `LoadConfig()`: なし（使用されていない）
+  - `BuildPrompt()`: `agent-runner/main.go:290` で使用されている
+- [x] T037 の実装内容: 
+  - T037は `pkg/git/diff.go` の実装で完了済み
+  - `main.go` では `validateEnv()` で直接環境変数を読み込んでいる
+- [x] 判断: 
+  - `LoadConfig()`: ☑ 削除
+  - `BuildPrompt()`: ☑ 実装
+  - `Config` 型: 保持（`reporter.Config` のエイリアスとして使用されているため）
 
 **理由**:
-（ここに記入）
+- `LoadConfig()` は使用されておらず、`main.go` で直接環境変数を読み込んでいるため削除
+- `BuildPrompt()` は `main.go` で使用されているため、`previousAttempts` と `ciLogs` を組み合わせて実装
+- `Config` 型は `reporter.Config` のコメントで参照されているため保持
+
+**実装/削除完了**: 
+- ✅ `LoadConfig()` を削除
+- ✅ `BuildPrompt()` を実装（`previousAttempts` と `ciLogs` を組み合わせてプロンプトを構築）
+- ✅ `Config` 型を保持（後方互換性のため）
 
 ---
 
