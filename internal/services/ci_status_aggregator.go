@@ -15,12 +15,24 @@ import (
 // CIStatusAggregator provides CI aggregation per PR at latest head SHA.
 type CIStatusAggregator interface {
 	// AggregateAndStore fetches check runs for the given checkSuiteID/headSHA and stores an aggregated record.
-	AggregateAndStore(ctx context.Context, owner, repo string, prID int, checkSuiteID int64, headSHA string) (*models.CIStatus, error)
+	// It validates that the provided headSHA matches the PR's current head before persisting.
+	AggregateAndStore(ctx context.Context, owner, repo string, prID int, prNumber int, checkSuiteID int64, headSHA string) (*models.CIStatus, error)
+}
+
+// GitHubChecks defines the subset of GitHub client methods needed by the aggregator.
+type GitHubChecks interface {
+	GetPullRequest(ctx context.Context, owner, repo string, prNumber int) (*github.PullRequest, error)
+	ListCheckRunsForCheckSuite(ctx context.Context, owner, repo string, checkSuiteID int64) ([]*github.CheckRun, error)
+}
+
+// CIStatusSaver abstracts persistence for easier testing.
+type CIStatusSaver interface {
+	CreateOrUpdate(ciStatus *models.CIStatus) error
 }
 
 type ciStatusAggregator struct {
-	gh     *clients.Client
-	repo   *repositories.CIStatusRepository
+	gh     GitHubChecks
+	repo   CIStatusSaver
 	logger *zap.Logger
 }
 
@@ -28,11 +40,51 @@ func NewCIStatusAggregator(gh *clients.Client, repo *repositories.CIStatusReposi
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &ciStatusAggregator{gh: gh, repo: repo, logger: logger}
+	// clients.Client and repositories.CIStatusRepository satisfy the interfaces
+	return &ciStatusAggregator{gh: GitHubChecks(gh), repo: CIStatusSaver(repo), logger: logger}
 }
 
-func (s *ciStatusAggregator) AggregateAndStore(ctx context.Context, owner, repo string, prID int, checkSuiteID int64, headSHA string) (*models.CIStatus, error) {
-	// Retrieve all check runs for the check suite (headSHA is informational here)
+// NewCIStatusAggregatorWithDeps allows injecting interface-based dependencies (for tests).
+func NewCIStatusAggregatorWithDeps(gh GitHubChecks, saver CIStatusSaver, logger *zap.Logger) CIStatusAggregator {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	return &ciStatusAggregator{gh: gh, repo: saver, logger: logger}
+}
+
+func (s *ciStatusAggregator) AggregateAndStore(ctx context.Context, owner, repo string, prID int, prNumber int, checkSuiteID int64, headSHA string) (*models.CIStatus, error) {
+	// Validate head SHA matches current PR head
+	pr, err := s.gh.GetPullRequest(ctx, owner, repo, prNumber)
+	if err != nil {
+		s.logger.Warn("Failed to get PR for head SHA validation; skip aggregation",
+			zap.Error(err),
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.Int("pr_number", prNumber),
+		)
+		return nil, nil
+	}
+	if pr == nil || pr.Head == nil || pr.Head.SHA == nil {
+		s.logger.Warn("PR head SHA not available; skip aggregation",
+			zap.String("owner", owner),
+			zap.String("repo", repo),
+			zap.Int("pr_number", prNumber),
+		)
+		return nil, nil
+	}
+	current := *pr.Head.SHA
+	if current != headSHA {
+		s.logger.Info("Stale check_suite ignored due to head SHA mismatch",
+			zap.Int("pr_id", prID),
+			zap.Int("pr_number", prNumber),
+			zap.Int64("check_suite_id", checkSuiteID),
+			zap.String("suite_head_sha", headSHA),
+			zap.String("current_pr_head_sha", current),
+		)
+		return nil, nil
+	}
+
+	// Retrieve all check runs for the (validated) check suite
 	runs, err := s.gh.ListCheckRunsForCheckSuite(ctx, owner, repo, checkSuiteID)
 	if err != nil {
 		return nil, err

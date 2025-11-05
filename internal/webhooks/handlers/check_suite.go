@@ -300,7 +300,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		if aggregator == nil {
 			aggregator = services.NewCIStatusAggregator(githubClient, ciStatusRepo, logger)
 		}
-		if _, err := aggregator.AggregateAndStore(ctx, owner, repo, pr.ID, payload.CheckSuite.ID, payload.CheckSuite.HeadSHA); err != nil {
+		if _, err := aggregator.AggregateAndStore(ctx, owner, repo, pr.ID, pr.Number, payload.CheckSuite.ID, payload.CheckSuite.HeadSHA); err != nil {
 			logger.Warn("Failed to aggregate CI status",
 				zap.Error(err),
 				zap.String("delivery_id", deliveryID),
