@@ -83,10 +83,11 @@ func getErrorMessageForNotification(errorMessage *string) string {
 // -----------------------------------------------------------------------------
 
 const (
-	prCreatedMarkerPrefix  = "<!-- agent:pr-created:"
-	maxRetriesMarkerPrefix = "<!-- agent:max-retries:"
-	prCreatedTemplate      = "PR created: #%d (%s) branch=%s sha=%s"
-	maxCommentsToScan      = 30
+	prCreatedMarkerPrefix   = "<!-- agent:pr-created:"
+	maxRetriesMarkerPrefix  = "<!-- agent:max-retries:"
+	mergeStatusMarkerPrefix = "<!-- agent:merge-status:"
+	prCreatedTemplate       = "PR created: #%d (%s) branch=%s sha=%s"
+	maxCommentsToScan       = 30
 )
 
 // Retry Progress Notification (US3 T102)
@@ -133,6 +134,29 @@ func makeMaxRetriesBody(agentRun *models.AgentRun, idempotencyKey string) string
 	}
 
 	return marker + "\n" + message
+}
+
+// makeMergeSuccessBody formats a message body for merge success notification.
+// It includes an idempotency marker and the merge SHA (shortened).
+func makeMergeSuccessBody(mergeSHA, idempotencyKey string) string {
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+	message := fmt.Sprintf("✅ Auto-merge succeeded\n\n**Merge SHA**: %s\n\nPR has been successfully merged.", shortSHA(mergeSHA))
+	return marker + "\n" + message
+}
+
+// makeMergeFailureBody formats a message body for merge failure notification.
+// It includes an idempotency marker, error classification, and the error message.
+func makeMergeFailureBody(errorMessage, errorClassification, idempotencyKey string) string {
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+
+	content := "❌ Auto-merge failed\n\n"
+	if errorClassification != "" {
+		content += fmt.Sprintf("**Error Classification**: %s\n\n", errorClassification)
+	}
+	if em := getErrorMessageForNotification(&errorMessage); em != "" {
+		content += fmt.Sprintf("**Error**: %s", em)
+	}
+	return marker + "\n" + content
 }
 
 // hasCommentWithMarker checks if a recent comment contains the given marker.
@@ -615,5 +639,109 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 		zap.Int("agent_run_id", agentRun.ID),
 	)
 
+	return nil
+}
+
+// NotifyMergeStatus posts a status comment to both the Issue and the PR to report
+// merge success or failure. It is idempotent per idempotencyKey; if a marker is
+// already present, the existing comment is updated.
+func (s *GitHubNotificationService) NotifyMergeStatus(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber, prNumber int,
+	merged bool,
+	mergeSHA string,
+	errorMessage string,
+	idempotencyKey string,
+) error {
+	// Input validation
+	if idempotencyKey == "" {
+		return fmt.Errorf("idempotencyKey must not be empty")
+	}
+
+	s.logger.Info("Posting merge status notifications",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("issue_number", issueNumber),
+		zap.Int("pr_number", prNumber),
+		zap.Bool("merged", merged),
+		zap.String("idempotency_key", idempotencyKey),
+	)
+
+	// Prepare body and marker
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+	var body string
+	if merged {
+		if mergeSHA == "" {
+			s.logger.Warn("merge succeeded but mergeSHA is empty")
+		}
+		body = makeMergeSuccessBody(mergeSHA, idempotencyKey)
+	} else {
+		classification := ClassifyMergeError(fmt.Errorf(errorMessage))
+		body = makeMergeFailureBody(errorMessage, classification, idempotencyKey)
+	}
+
+	var aggErr error
+
+	// Post to Issue thread
+	if issueNumber > 0 {
+		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, issueNumber, marker)
+		if err != nil {
+			s.logger.Warn("Failed to scan issue comments for merge marker", zap.Error(err), zap.Int("issue_number", issueNumber))
+			aggErr = err
+		} else if found && commentID != nil {
+			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
+				s.logger.Warn("Failed to update issue comment for merge status", zap.Error(err), zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
+				aggErr = err
+			} else {
+				s.logger.Info("Updated issue comment for merge status", zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
+			}
+		} else {
+			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
+				s.logger.Warn("Failed to post issue comment for merge status", zap.Error(err), zap.Int("issue_number", issueNumber))
+				aggErr = err
+			} else {
+				s.logger.Info("Posted issue comment for merge status", zap.Int("issue_number", issueNumber))
+			}
+		}
+	}
+
+	// Post to PR thread
+	if prNumber > 0 {
+		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, prNumber, marker)
+		if err != nil {
+			s.logger.Warn("Failed to scan PR comments for merge marker", zap.Error(err), zap.Int("pr_number", prNumber))
+			if aggErr == nil {
+				aggErr = err
+			}
+		} else if found && commentID != nil {
+			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
+				s.logger.Warn("Failed to update PR comment for merge status", zap.Error(err), zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
+				if aggErr == nil {
+					aggErr = err
+				}
+			} else {
+				s.logger.Info("Updated PR comment for merge status", zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
+			}
+		} else {
+			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
+				s.logger.Warn("Failed to post PR comment for merge status", zap.Error(err), zap.Int("pr_number", prNumber))
+				if aggErr == nil {
+					aggErr = err
+				}
+			} else {
+				s.logger.Info("Posted PR comment for merge status", zap.Int("pr_number", prNumber))
+			}
+		}
+	}
+
+	if aggErr != nil {
+		return aggErr
+	}
+
+	s.logger.Info("Merge status notifications posted (or updated)",
+		zap.Int("issue_number", issueNumber),
+		zap.Int("pr_number", prNumber),
+	)
 	return nil
 }
