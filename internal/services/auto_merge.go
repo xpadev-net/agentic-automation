@@ -88,9 +88,43 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 			return resp, err
 		}
 		if pr == nil || pr.Head == nil || pr.Head.Ref == nil {
+			s.logger.Info("skip branch delete: missing PR head ref")
 			return resp, nil
 		}
-		ref := fmt.Sprintf("heads/%s", pr.GetHead().GetRef())
+
+		// Guard: only delete when head repo is the same as base owner/repo (avoid fork branch deletion)
+		head := pr.GetHead()
+		headRepo := head.GetRepo()
+		baseFullName := fmt.Sprintf("%s/%s", owner, repo)
+		isSameRepo := false
+		if headRepo != nil {
+			if headRepo.GetFullName() == baseFullName {
+				isSameRepo = true
+			} else if headRepo.GetOwner() != nil && headRepo.GetOwner().GetLogin() == owner && headRepo.GetName() == repo {
+				isSameRepo = true
+			}
+		}
+		if !isSameRepo {
+			s.logger.Info("skip branch delete: head repo differs (likely fork)",
+				zap.String("base", baseFullName),
+				zap.String("head_full_name", func() string {
+					if headRepo != nil {
+						return headRepo.GetFullName()
+					}
+					return ""
+				}()),
+			)
+			return resp, nil
+		}
+
+		// Extra safety: never delete protected branch names
+		headRef := head.GetRef()
+		if headRef == "main" || headRef == "master" {
+			s.logger.Info("skip branch delete: protected branch name", zap.String("ref", headRef))
+			return resp, nil
+		}
+
+		ref := fmt.Sprintf("heads/%s", headRef)
 		delResp, delErr := c.Git.DeleteRef(ctx, owner, repo, ref)
 		if delErr != nil {
 			s.logger.Warn("branch delete failed", zap.String("ref", ref), zap.Error(delErr))
