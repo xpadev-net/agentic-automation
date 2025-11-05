@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -677,7 +678,7 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 		}
 		body = makeMergeSuccessBody(mergeSHA, idempotencyKey)
 	} else {
-		classification := ClassifyMergeError(fmt.Errorf(errorMessage))
+		classification := ClassifyMergeError(errors.New(errorMessage))
 		body = makeMergeFailureBody(errorMessage, classification, idempotencyKey)
 	}
 
