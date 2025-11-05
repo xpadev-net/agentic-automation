@@ -377,6 +377,19 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 					zap.Error(err),
 					zap.String("delivery_id", deliveryID),
 				)
+				// Discord: notify merge failure (best-effort)
+				func() {
+					discordClient := clients.NewDiscordClient("", logger)
+					if discordClient == nil {
+						return
+					}
+					discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+					var prModel *models.PullRequest
+					if deps.PullRequestRepository != nil {
+						prModel, _ = deps.PullRequestRepository.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
+					}
+					_ = discordSvc.NotifyMergeFailure(ctx, prModel, nil, err.Error(), services.ClassifyMergeError(err))
+				}()
 				// 成否に関わらず 200 を返す（再試行は他イベントで行われ得る）
 				// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
 				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
@@ -389,6 +402,19 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			logger.Info("auto-merge succeeded (or treated as succeeded)",
 				zap.String("delivery_id", deliveryID),
 			)
+			// Discord: notify merge success (best-effort)
+			func() {
+				discordClient := clients.NewDiscordClient("", logger)
+				if discordClient == nil {
+					return
+				}
+				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+				var prModel *models.PullRequest
+				if deps.PullRequestRepository != nil {
+					prModel, _ = deps.PullRequestRepository.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
+				}
+				_ = discordSvc.NotifyMergeSuccess(ctx, prModel, nil, 0)
+			}()
 			// 任意通知（軽量）
 			_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "✅ Auto-merged after Codex approval.")
 			c.JSON(http.StatusOK, gin.H{

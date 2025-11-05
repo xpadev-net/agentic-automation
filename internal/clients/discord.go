@@ -425,6 +425,12 @@ func (c *DiscordClient) SendPRMergedNotification(ctx context.Context, pr *models
 		return nil
 	}
 
+	// Guard against nil PR (best-effort notification should not crash)
+	if pr == nil {
+		c.logger.Warn("Skipping PR merged notification: PR model is nil (repository lookup may have failed)")
+		return nil
+	}
+
 	var issueDescription string
 	if issue != nil {
 		issueDescription = sanitizeMessage(fmt.Sprintf("**Issue #%d**: %s", issue.Number, issue.Title))
@@ -470,6 +476,93 @@ func (c *DiscordClient) SendPRMergedNotification(ctx context.Context, pr *models
 
 	c.logger.Info("Sending Discord PR merged notification",
 		zap.Int("pr_number", pr.Number))
+
+	return c.send(ctx, payload)
+}
+
+// SendPRMergeFailureNotification sends a PR auto-merge failure notification
+// Always attempts to send (non-blocking semantics: returns nil but logs errors)
+// errorCode is a short classifier (e.g., merge_conflict_or_not_mergeable)
+func (c *DiscordClient) SendPRMergeFailureNotification(ctx context.Context, pr *models.PullRequest, issue *models.Issue, errorMessage string, errorCode string) error {
+	if c == nil {
+		return nil // Client is disabled
+	}
+
+	// Guard against nil PR (best-effort notification should not crash)
+	if pr == nil {
+		c.logger.Warn("Skipping PR merge failure notification: PR model is nil (repository lookup may have failed)")
+		return nil
+	}
+
+	var issueDescription string
+	if issue != nil {
+		issueDescription = sanitizeMessage(fmt.Sprintf("**Issue #%d**: %s", issue.Number, issue.Title))
+	} else {
+		issueDescription = sanitizeMessage(fmt.Sprintf("**PR #%d**: %s", pr.Number, pr.Branch))
+	}
+
+	fields := []DiscordEmbedField{
+		{
+			Name:   "Repository",
+			Value:  sanitizeMessage(pr.Repo),
+			Inline: true,
+		},
+		{
+			Name:   "PR Number",
+			Value:  fmt.Sprintf("#%d", pr.Number),
+			Inline: true,
+		},
+	}
+
+	if errorCode != "" {
+		fields = append(fields, DiscordEmbedField{
+			Name:   "Error Code",
+			Value:  sanitizeMessage(errorCode),
+			Inline: true,
+		})
+	}
+
+	if errorMessage != "" {
+		fields = append(fields, DiscordEmbedField{
+			Name:   "Error Message",
+			Value:  sanitizeMessage(truncateErrorMessage(errorMessage)),
+			Inline: false,
+		})
+	}
+
+	// PR URL
+	fields = append(fields, DiscordEmbedField{
+		Name:   "PR URL",
+		Value:  fmt.Sprintf("[View PR](%s)", formatGitHubURL(pr.Repo, pr.Number, true)),
+		Inline: false,
+	})
+
+	// Issue URL if available
+	if issue != nil {
+		fields = append(fields, DiscordEmbedField{
+			Name:   "Issue URL",
+			Value:  fmt.Sprintf("[View Issue](%s)", formatGitHubURL(issue.Repo, issue.Number, false)),
+			Inline: false,
+		})
+	}
+
+	embed := DiscordEmbed{
+		Title:       sanitizeMessage("❌ PR Auto-Merge Failed"),
+		Description: issueDescription,
+		Color:       ColorError,
+		Fields:      fields,
+		Timestamp:   time.Now().UTC().Format(time.RFC3339),
+		Footer: &DiscordEmbedFooter{
+			Text: "GitHub Agent Automation",
+		},
+	}
+
+	payload := DiscordPayload{Embeds: []DiscordEmbed{embed}}
+
+	c.logger.Info("Sending Discord PR merge failure notification",
+		zap.Int("pr_number", pr.Number),
+		zap.String("error_code", errorCode),
+	)
 
 	return c.send(ctx, payload)
 }

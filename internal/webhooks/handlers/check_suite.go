@@ -660,6 +660,28 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				zap.String("delivery_id", deliveryID),
 				zap.Int("pr_id", pr.ID),
 			)
+			// Discord: notify merge failure (best-effort)
+			func() {
+				discordClient := clients.NewDiscordClient("", logger)
+				if discordClient == nil {
+					return
+				}
+				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+				var prModel *models.PullRequest
+				var issueModel *models.Issue
+				if deps.PullRequestRepository != nil {
+					repoFullName := owner + "/" + repo
+					if pm, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber); perr == nil {
+						prModel = pm
+						if deps.IssueRepository != nil && pm != nil && pm.IssueID != nil && *pm.IssueID > 0 {
+							if iss, ierr := deps.IssueRepository.FindByID(*pm.IssueID); ierr == nil {
+								issueModel = iss
+							}
+						}
+					}
+				}
+				_ = discordSvc.NotifyMergeFailure(ctx, prModel, issueModel, mergeErr.Error(), services.ClassifyMergeError(mergeErr))
+			}()
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "processed",
 				"action":      "re_eval",
@@ -681,6 +703,29 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			}()),
 			zap.String("delivery_id", deliveryID),
 		)
+		// Discord: notify merge success (best-effort)
+		func() {
+			discordClient := clients.NewDiscordClient("", logger)
+			if discordClient == nil {
+				return
+			}
+			discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+			var prModel *models.PullRequest
+			var issueModel *models.Issue
+			if deps.PullRequestRepository != nil {
+				repoFullName := owner + "/" + repo
+				if pm, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber); perr == nil {
+					prModel = pm
+					if deps.IssueRepository != nil && pm != nil && pm.IssueID != nil && *pm.IssueID > 0 {
+						if iss, ierr := deps.IssueRepository.FindByID(*pm.IssueID); ierr == nil {
+							issueModel = iss
+						}
+					}
+				}
+			}
+			// retryCount is not tracked here; pass 0
+			_ = discordSvc.NotifyMergeSuccess(ctx, prModel, issueModel, 0)
+		}()
 		c.JSON(http.StatusOK, gin.H{
 			"status":     "processed",
 			"action":     "re_eval",
