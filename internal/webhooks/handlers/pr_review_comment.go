@@ -78,26 +78,34 @@ func (a *ciStatusProviderAdapter) GetAggregatedState(_ context.Context, _ string
 		return services.CIStateUnknown, err
 	}
 	// 優先度: failed > pending > success（ci_status_aggregator と整合）
-	ciState := services.CIStateUnknown
+	// DB返却順に依存せず、最も厳しい状態を保持する
+	pendingSeen := false
+	successSeen := false
 	for _, s := range statuses {
-		// aggregated レコードがあればそれを優先
-		if s.Name == "aggregated" {
-			if s.Conclusion != nil {
-				switch *s.Conclusion {
-				case "success":
-					ciState = services.CIStateSuccess
-				case "failure":
-					return services.CIStateFailed, nil
-				default:
-					ciState = services.CIStatePending
-				}
-			} else {
-				// 結論未設定は進行中とみなす
-				ciState = services.CIStatePending
+		if s.Name != "aggregated" {
+			continue
+		}
+		if s.Conclusion != nil {
+			switch *s.Conclusion {
+			case "failure":
+				return services.CIStateFailed, nil
+			case "success":
+				successSeen = true
+			default:
+				pendingSeen = true
 			}
+		} else {
+			// 結論未設定は進行中とみなす
+			pendingSeen = true
 		}
 	}
-	return ciState, nil
+	if pendingSeen {
+		return services.CIStatePending, nil
+	}
+	if successSeen {
+		return services.CIStateSuccess, nil
+	}
+	return services.CIStateUnknown, nil
 }
 
 // alwaysApprovedChecker は本イベントで承認検知済みのため常に true を返すアダプタ
