@@ -98,7 +98,7 @@ func (e *Executor) executeCursor(workDir, prompt string) (string, error) {
 	} else {
 		// Build command: cursor-agent -p "<prompt>"
 		// Additional flags for working directory and headless mode may be needed
-		cmd := exec.Command("cursor-agent", "-p", prompt)
+		cmd := exec.Command("cursor-agent", "--model", "auto", "-p", prompt)
 		cmd.Dir = workDir
 
 		// Preserve existing environment and ensure CURSOR_API_KEY is set
