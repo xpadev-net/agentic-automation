@@ -704,24 +704,24 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			}
 
 			// Issue 情報取得（通知に使用）
-			var issue *models.Issue
+			var issueNumber int
 			if deps.IssueRepository != nil && pr.IssueID != nil {
 				if i, err := deps.IssueRepository.FindByID(*pr.IssueID); err == nil {
-					issue = i
+					issueNumber = i.Number
 				} else {
 					logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
 				}
 			}
 
-			// GitHub 通知
-			if deps.GitHubNotificationService != nil && issue != nil {
+			// GitHub 通知（Issueが存在しない場合でもPRには通知を送信）
+			if deps.GitHubNotificationService != nil {
 				idem := c.GetHeader(deliveryHeader)
 				if idem == "" {
 					idem = fmt.Sprintf("merge-fail-%d-%d", pr.Number, time.Now().Unix())
 				}
 				_ = deps.GitHubNotificationService.NotifyMergeFailure(
 					ctx, owner, repo,
-					issue.Number, pr.Number,
+					issueNumber, pr.Number,
 					mergeRes.ErrorType, mergeRes.ErrorMessage,
 					idem,
 				)
