@@ -403,6 +403,7 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 	cpuLimit := appconfig.GetEnv("AGENT_RUNNER_CPU_LIMIT", "2000m")
 
 	jobSpec := &batchv1.JobSpec{
+		BackoffLimit: int32Ptr(0), // No retries at Job level (handled by Operator)
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: map[string]string{
@@ -477,6 +478,11 @@ func parseQuantity(qty string) resource.Quantity {
 
 // int64Ptr returns a pointer to an int64
 func int64Ptr(i int64) *int64 {
+	return &i
+}
+
+// int32Ptr returns a pointer to an int32
+func int32Ptr(i int32) *int32 {
 	return &i
 }
 
