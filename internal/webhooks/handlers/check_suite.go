@@ -723,12 +723,27 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			}
 
 			// Discord 通知
-			if deps.DiscordNotificationService != nil && issue != nil {
-				_ = deps.DiscordNotificationService.NotifyMergeFailure(
-					ctx, pr, issue,
-					mergeRes.ErrorType, mergeRes.ErrorMessage,
-				)
-			}
+			func() {
+				discordClient := clients.NewDiscordClient("", logger)
+				if discordClient == nil {
+					return
+				}
+				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+				var prModel *models.PullRequest
+				var issueModel *models.Issue
+				if deps.PullRequestRepository != nil {
+					repoFullName := owner + "/" + repo
+					if pm, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber); perr == nil {
+						prModel = pm
+						if deps.IssueRepository != nil && pm != nil && pm.IssueID != nil && *pm.IssueID > 0 {
+							if iss, ierr := deps.IssueRepository.FindByID(*pm.IssueID); ierr == nil {
+								issueModel = iss
+							}
+						}
+					}
+				}
+				_ = discordSvc.NotifyMergeFailure(ctx, prModel, issueModel, mergeRes.ErrorMessage, mergeRes.ErrorType)
+			}()
 
 			logger.Warn("auto-merge failed",
 				zap.String("error_type", mergeRes.ErrorType),

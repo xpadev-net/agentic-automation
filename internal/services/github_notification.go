@@ -654,6 +654,7 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 	mergeSHA string,
 	errorMessage string,
 	idempotencyKey string,
+	errorType string, // Optional: pre-classified error type. If empty, will be classified from errorMessage.
 ) error {
 	// Input validation
 	if idempotencyKey == "" {
@@ -678,7 +679,10 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 		}
 		body = makeMergeSuccessBody(mergeSHA, idempotencyKey)
 	} else {
-		classification := ClassifyMergeError(errors.New(errorMessage))
+		classification := errorType
+		if classification == "" {
+			classification = ClassifyMergeError(errors.New(errorMessage))
+		}
 		body = makeMergeFailureBody(errorMessage, classification, idempotencyKey)
 	}
 
@@ -747,5 +751,5 @@ func (s *GitHubNotificationService) NotifyMergeFailure(
 	issueNumber, prNumber int,
 	errorType, errorMessage, idempotencyKey string,
 ) error {
-	return s.NotifyMergeStatus(ctx, owner, repo, issueNumber, prNumber, false, "", errorMessage, idempotencyKey)
+	return s.NotifyMergeStatus(ctx, owner, repo, issueNumber, prNumber, false, "", errorMessage, idempotencyKey, errorType)
 }
