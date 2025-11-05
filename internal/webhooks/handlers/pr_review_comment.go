@@ -384,8 +384,10 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 						return
 					}
 					discordSvc := services.NewDiscordNotificationService(discordClient, logger)
-					// We may not have PR model handy here; look it up best-effort
-					prModel, _ := deps.PullRequestRepository.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
+					var prModel *models.PullRequest
+					if deps.PullRequestRepository != nil {
+						prModel, _ = deps.PullRequestRepository.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
+					}
 					_ = discordSvc.NotifyMergeFailure(ctx, prModel, nil, err.Error(), services.ClassifyMergeError(err))
 				}()
 				// 成否に関わらず 200 を返す（再試行は他イベントで行われ得る）
@@ -407,7 +409,10 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 					return
 				}
 				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
-				prModel, _ := deps.PullRequestRepository.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
+				var prModel *models.PullRequest
+				if deps.PullRequestRepository != nil {
+					prModel, _ = deps.PullRequestRepository.FindByRepoAndNumber(owner+"/"+repo, payload.PullRequest.Number)
+				}
 				_ = discordSvc.NotifyMergeSuccess(ctx, prModel, nil, 0)
 			}()
 			// 任意通知（軽量）

@@ -667,13 +667,17 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 					return
 				}
 				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
-				// Load PR/Issue models for rich embed
-				repoFullName := owner + "/" + repo
-				prModel, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber)
+				var prModel *models.PullRequest
 				var issueModel *models.Issue
-				if perr == nil && prModel != nil && prModel.IssueID != nil && *prModel.IssueID > 0 && deps.IssueRepository != nil {
-					if iss, ierr := deps.IssueRepository.FindByID(*prModel.IssueID); ierr == nil {
-						issueModel = iss
+				if deps.PullRequestRepository != nil {
+					repoFullName := owner + "/" + repo
+					if pm, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber); perr == nil {
+						prModel = pm
+						if deps.IssueRepository != nil && pm != nil && pm.IssueID != nil && *pm.IssueID > 0 {
+							if iss, ierr := deps.IssueRepository.FindByID(*pm.IssueID); ierr == nil {
+								issueModel = iss
+							}
+						}
 					}
 				}
 				_ = discordSvc.NotifyMergeFailure(ctx, prModel, issueModel, mergeErr.Error(), services.ClassifyMergeError(mergeErr))
@@ -706,12 +710,17 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				return
 			}
 			discordSvc := services.NewDiscordNotificationService(discordClient, logger)
-			repoFullName := owner + "/" + repo
-			prModel, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber)
+			var prModel *models.PullRequest
 			var issueModel *models.Issue
-			if perr == nil && prModel != nil && prModel.IssueID != nil && *prModel.IssueID > 0 && deps.IssueRepository != nil {
-				if iss, ierr := deps.IssueRepository.FindByID(*prModel.IssueID); ierr == nil {
-					issueModel = iss
+			if deps.PullRequestRepository != nil {
+				repoFullName := owner + "/" + repo
+				if pm, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber); perr == nil {
+					prModel = pm
+					if deps.IssueRepository != nil && pm != nil && pm.IssueID != nil && *pm.IssueID > 0 {
+						if iss, ierr := deps.IssueRepository.FindByID(*pm.IssueID); ierr == nil {
+							issueModel = iss
+						}
+					}
 				}
 			}
 			// retryCount is not tracked here; pass 0
