@@ -309,6 +309,19 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		if res.Mergeable {
 			am := deps.AutoMergeService
 			if am == nil {
+				// GitHub App クライアント未設定時はフォールバック生成をスキップして安全に抜ける
+				if appGitHubClient == nil {
+					logger.Warn("auto-merge skipped: GitHub App client not available",
+						zap.String("delivery_id", deliveryID),
+					)
+					// 任意通知（軽量）
+					_, _ = githubClient.CreateIssueComment(ctx, owner, repo, payload.PullRequest.Number, "ℹ️ Mergeable, but auto-merge skipped (app client unavailable).")
+					c.JSON(http.StatusOK, gin.H{
+						"status":      "merge_skipped_no_app_client",
+						"delivery_id": deliveryID,
+					})
+					return
+				}
 				am = services.NewAutoMergeService(appGitHubClient, logger)
 			}
 			if _, err := am.AttemptAutoMerge(ctx, owner, repo, payload.PullRequest.Number); err != nil {
