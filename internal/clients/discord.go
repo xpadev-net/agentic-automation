@@ -425,6 +425,12 @@ func (c *DiscordClient) SendPRMergedNotification(ctx context.Context, pr *models
 		return nil
 	}
 
+	// Guard against nil PR (best-effort notification should not crash)
+	if pr == nil {
+		c.logger.Warn("Skipping PR merged notification: PR model is nil (repository lookup may have failed)")
+		return nil
+	}
+
 	var issueDescription string
 	if issue != nil {
 		issueDescription = sanitizeMessage(fmt.Sprintf("**Issue #%d**: %s", issue.Number, issue.Title))
@@ -480,6 +486,12 @@ func (c *DiscordClient) SendPRMergedNotification(ctx context.Context, pr *models
 func (c *DiscordClient) SendPRMergeFailureNotification(ctx context.Context, pr *models.PullRequest, issue *models.Issue, errorMessage string, errorCode string) error {
 	if c == nil {
 		return nil // Client is disabled
+	}
+
+	// Guard against nil PR (best-effort notification should not crash)
+	if pr == nil {
+		c.logger.Warn("Skipping PR merge failure notification: PR model is nil (repository lookup may have failed)")
+		return nil
 	}
 
 	var issueDescription string
