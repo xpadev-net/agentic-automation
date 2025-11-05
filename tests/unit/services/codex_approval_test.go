@@ -281,7 +281,7 @@ func TestCodexApprovalDetector_DetectApproval(t *testing.T) {
 			name:             "newlines in review body with exact",
 			reviewBody:       "Codex Review:\nDidn't find any major issues.",
 			reviewerUsername: "codex-bot",
-			expected:         true, // 正規表現がマッチするため（.* は改行を含む任意の文字にマッチ）
+			expected:         true, // 正規表現がマッチする（"didn't find" と "major issues" の間に改行がないため、.* がマッチ可能）
 		},
 	}
 
