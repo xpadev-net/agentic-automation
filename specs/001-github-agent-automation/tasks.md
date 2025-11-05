@@ -225,8 +225,8 @@
 ### Implementation for User Story 4
 
 - [ ] T108 [P] [US4] Implement merge condition checker (CI + Codex + conflicts) in internal/services/merge_condition.go
-- [ ] T109 [P] [US4] Create CI status aggregator from check_suite events in internal/services/ci_status_aggregator.go
-- [ ] T110 [US4] Implement merge conflict detector via GitHub API in internal/services/merge_conflict_detector.go
+- [x] T109 [P] [US4] Create CI status aggregator from check_suite events in internal/services/ci_status_aggregator.go
+- [x] T110 [US4] Implement merge conflict detector via GitHub API in internal/services/merge_conflict_detector.go
 - [ ] T111 [US4] Create auto-merge service with merge API call in internal/services/auto_merge.go
 - [ ] T112 [US4] Implement webhook handler for status events (CI completion) in internal/webhooks/handlers/status.go
 - [ ] T113 [US4] Add merge condition re-evaluation on Codex approval comment in internal/webhooks/handlers/pr_review_comment.go
