@@ -138,7 +138,7 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 }
 
 // classifyMergeError は GitHub API からのエラーをユーザ向けに分類する
-func classifyMergeError(err error) string {
+func ClassifyMergeError(err error) string {
 	if err == nil {
 		return ""
 	}

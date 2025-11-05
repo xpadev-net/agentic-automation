@@ -417,11 +417,31 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 							zap.String("delivery_id", deliveryID),
 							zap.Int("pr_number", pr.Number),
 						)
+						// Discord: notify merge failure (best-effort)
+						func() {
+							discordClient := clients.NewDiscordClient("", logger)
+							if discordClient == nil {
+								return
+							}
+							discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+							prModel, _ := deps.PullRequestRepo.FindByRepoAndNumber(owner+"/"+repo, pr.Number)
+							_ = discordSvc.NotifyMergeFailure(ctx, prModel, nil, err.Error(), services.ClassifyMergeError(err))
+						}()
 					} else {
 						logger.Info("Auto-merge attempted",
 							zap.Int("pr_number", pr.Number),
 							zap.String("delivery_id", deliveryID),
 						)
+						// Discord: notify merge success (best-effort)
+						func() {
+							discordClient := clients.NewDiscordClient("", logger)
+							if discordClient == nil {
+								return
+							}
+							discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+							prModel, _ := deps.PullRequestRepo.FindByRepoAndNumber(owner+"/"+repo, pr.Number)
+							_ = discordSvc.NotifyMergeSuccess(ctx, prModel, nil, 0)
+						}()
 					}
 				} else {
 					logger.Info("Auto-merge service not configured; skipping merge attempt",

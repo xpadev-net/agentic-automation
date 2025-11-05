@@ -660,6 +660,23 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				zap.String("delivery_id", deliveryID),
 				zap.Int("pr_id", pr.ID),
 			)
+			// Discord: notify merge failure (best-effort)
+			func() {
+				discordClient := clients.NewDiscordClient("", logger)
+				if discordClient == nil {
+					return
+				}
+				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+				// Load PR/Issue models for rich embed
+				prModel, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber)
+				var issueModel *models.Issue
+				if perr == nil && prModel != nil && prModel.IssueID > 0 && deps.IssueRepository != nil {
+					if iss, ierr := deps.IssueRepository.FindByID(prModel.IssueID); ierr == nil {
+						issueModel = iss
+					}
+				}
+				_ = discordSvc.NotifyMergeFailure(ctx, prModel, issueModel, mergeErr.Error(), services.ClassifyMergeError(mergeErr))
+			}()
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "processed",
 				"action":      "re_eval",
@@ -681,6 +698,23 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			}()),
 			zap.String("delivery_id", deliveryID),
 		)
+		// Discord: notify merge success (best-effort)
+		func() {
+			discordClient := clients.NewDiscordClient("", logger)
+			if discordClient == nil {
+				return
+			}
+			discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+			prModel, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber)
+			var issueModel *models.Issue
+			if perr == nil && prModel != nil && prModel.IssueID > 0 && deps.IssueRepository != nil {
+				if iss, ierr := deps.IssueRepository.FindByID(prModel.IssueID); ierr == nil {
+					issueModel = iss
+				}
+			}
+			// retryCount is not tracked here; pass 0
+			_ = discordSvc.NotifyMergeSuccess(ctx, prModel, issueModel, 0)
+		}()
 		c.JSON(http.StatusOK, gin.H{
 			"status":     "processed",
 			"action":     "re_eval",
