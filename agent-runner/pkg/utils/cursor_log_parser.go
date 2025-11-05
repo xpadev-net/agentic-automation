@@ -252,6 +252,8 @@ func ParseLogEntry(line []byte) (LogEntry, error) {
 // It processes each line and writes formatted output to stderr.
 func ParseAndFormatOutput(output string) {
 	lines := strings.Split(output, "\n")
+	// sessionID -> last formatted line, used to suppress duplicate thinking progress logs
+	lastFormattedBySession := make(map[string]string)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -265,7 +267,21 @@ func ParseAndFormatOutput(output string) {
 			continue
 		}
 
-		// Format and output the parsed entry
-		fmt.Fprintf(os.Stderr, "%s\n", entry.Format())
+		// Format and output the parsed entry with suppression of duplicate thinking progress logs
+		formatted := entry.Format()
+		sessionID := entry.GetSessionID()
+
+		if te, ok := entry.(*ThinkingEntry); ok {
+			// Only suppress when it's a processing (non-completed) thinking log
+			if te.Subtype != "completed" && formatted == "[THINKING] processing..." {
+				if last, ok := lastFormattedBySession[sessionID]; ok && last == formatted {
+					// skip duplicate consecutive processing log for the same session
+					continue
+				}
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "%s\n", formatted)
+		lastFormattedBySession[sessionID] = formatted
 	}
 }
