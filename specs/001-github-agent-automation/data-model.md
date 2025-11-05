@@ -103,7 +103,7 @@
 - INDEX(pr_id) - for finding runs by PR
 
 **Validation**:
-- retry_count MUST be <= 50
+- retry_count MUST be < 50 (0-49 allowed, max 50 attempts)
 - state=succeeded requires pr_id to be non-null
 
 ### ReviewFeedback
@@ -401,7 +401,7 @@ A PR can be auto-merged when ALL of the following are true:
 - CIStatus.conclusion: success, failure, cancelled, skipped, neutral
 
 ### Check Constraints (application-level)
-- AgentRun.retry_count <= 50
+- AgentRun.retry_count < 50 (0-49 allowed, max 50 attempts)
 - AgentRun.state=succeeded implies pr_id IS NOT NULL
 - CIStatus.status=completed implies conclusion IS NOT NULL
 

@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     FOREIGN KEY fk_agent_run_issue (issue_id) REFERENCES issues(id) ON DELETE CASCADE,
     FOREIGN KEY fk_agent_run_pr (pr_id) REFERENCES pull_requests(id) ON DELETE SET NULL,
 
-    CONSTRAINT chk_retry_count CHECK (retry_count <= 50)
+    CONSTRAINT chk_retry_count CHECK (retry_count < 50) -- 0-49 allowed (max 50 attempts)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Table: review_feedback

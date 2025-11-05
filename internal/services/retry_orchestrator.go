@@ -15,7 +15,9 @@ import (
 )
 
 const (
-	// MaxRetryCount is the maximum number of retry attempts allowed for an AgentRun
+	// MaxRetryCount is the maximum number of retry attempts allowed for an AgentRun.
+	// Valid retry_count range: 0-49 (exactly 50 attempts total).
+	// Database constraint: retry_count < 50
 	MaxRetryCount = 50
 )
 
