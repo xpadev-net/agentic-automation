@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -85,7 +86,7 @@ func getErrorMessageForNotification(errorMessage *string) string {
 const (
 	prCreatedMarkerPrefix   = "<!-- agent:pr-created:"
 	maxRetriesMarkerPrefix  = "<!-- agent:max-retries:"
-	mergeFailedMarkerPrefix = "<!-- agent:merge-failed:"
+	mergeStatusMarkerPrefix = "<!-- agent:merge-status:"
 	prCreatedTemplate       = "PR created: #%d (%s) branch=%s sha=%s"
 	maxCommentsToScan       = 30
 )
@@ -110,47 +111,27 @@ func makePRCreatedBody(prNumber int, prURL, branch, sha, idempotencyKey string) 
 	return marker + "\n" + fmt.Sprintf(prCreatedTemplate, prNumber, prURL, branch, shortSHA(sha))
 }
 
-// makeMergeFailedBody formats a message body for merge failure notification.
-// Includes an idempotency marker and a human-readable explanation.
-func makeMergeFailedBody(prNumber int, prURL, errorType, errorMessage, idempotencyKey string) string {
-	marker := mergeFailedMarkerPrefix + idempotencyKey + " -->"
-	// Provide brief hints depending on errorType
-	var hint string
-	switch errorType {
-	case "merge_conflict_or_not_mergeable":
-		hint = "This PR has merge conflicts or is not in a mergeable state."
-	case "merge_rejected_by_protection_or_reviews":
-		hint = "Branch protection or required reviews are blocking the merge."
-	case "rate_limited":
-		hint = "GitHub API rate limit exceeded. The merge can be retried later."
-	case "github_server_error":
-		hint = "A GitHub server error occurred. Please try again later."
-	default:
-		hint = ""
+// makeMergeSuccessBody formats a message body for merge success notification.
+// It includes an idempotency marker and the merge SHA (shortened).
+func makeMergeSuccessBody(mergeSHA, idempotencyKey string) string {
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+	message := fmt.Sprintf("✅ Auto-merge succeeded\n\n**Merge SHA**: %s\n\nPR has been successfully merged.", shortSHA(mergeSHA))
+	return marker + "\n" + message
+}
+
+// makeMergeFailureBody formats a message body for merge failure notification.
+// It includes an idempotency marker, error classification, and the error message.
+func makeMergeFailureBody(errorMessage, errorClassification, idempotencyKey string) string {
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+
+	content := "❌ Auto-merge failed\n\n"
+	if errorClassification != "" {
+		content += fmt.Sprintf("**Error Classification**: %s\n\n", errorClassification)
 	}
-
-	body := fmt.Sprintf(`%s
-❌ Auto-merge failed for PR #%d
-
-**Error Type**: %s
-**Error Message**: %s
-%s
-
-Please check the PR and resolve the issue.
-[View PR](%s)`,
-		marker,
-		prNumber,
-		errorType,
-		errorMessage,
-		func() string {
-			if hint == "" {
-				return ""
-			}
-			return "\n" + hint
-		}(),
-		prURL,
-	)
-	return body
+	if em := getErrorMessageForNotification(&errorMessage); em != "" {
+		content += fmt.Sprintf("**Error**: %s", em)
+	}
+	return marker + "\n" + content
 }
 
 // makeMaxRetriesBody formats a message body for max retries exceeded notification.
@@ -662,55 +643,109 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 	return nil
 }
 
-// NotifyMergeFailure posts a status comment to Issue and PR when auto-merge fails.
-// It is idempotent per idempotencyKey; if a marker is already present, posting is skipped.
-func (s *GitHubNotificationService) NotifyMergeFailure(
+// NotifyMergeStatus posts a status comment to both the Issue and the PR to report
+// merge success or failure. It is idempotent per idempotencyKey; if a marker is
+// already present, the existing comment is updated.
+func (s *GitHubNotificationService) NotifyMergeStatus(
 	ctx context.Context,
 	owner, repo string,
 	issueNumber, prNumber int,
-	errorType, errorMessage, idempotencyKey string,
+	merged bool,
+	mergeSHA string,
+	errorMessage string,
+	idempotencyKey string,
 ) error {
+	// Input validation
 	if idempotencyKey == "" {
 		return fmt.Errorf("idempotencyKey must not be empty")
 	}
 
-	marker := mergeFailedMarkerPrefix + idempotencyKey + " -->"
-	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, prNumber)
-	body := makeMergeFailedBody(prNumber, prURL, errorType, errorMessage, idempotencyKey)
+	s.logger.Info("Posting merge status notifications",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("issue_number", issueNumber),
+		zap.Int("pr_number", prNumber),
+		zap.Bool("merged", merged),
+		zap.String("idempotency_key", idempotencyKey),
+	)
+
+	// Prepare body and marker
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+	var body string
+	if merged {
+		if mergeSHA == "" {
+			s.logger.Warn("merge succeeded but mergeSHA is empty")
+		}
+		body = makeMergeSuccessBody(mergeSHA, idempotencyKey)
+	} else {
+		classification := ClassifyMergeError(errors.New(errorMessage))
+		body = makeMergeFailureBody(errorMessage, classification, idempotencyKey)
+	}
 
 	var aggErr error
 
 	// Post to Issue thread
 	if issueNumber > 0 {
-		exists, err := s.hasCommentWithMarker(ctx, owner, repo, issueNumber, marker)
+		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, issueNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan issue comments for merge-failed marker", zap.Error(err), zap.Int("issue_number", issueNumber))
+			s.logger.Warn("Failed to scan issue comments for merge marker", zap.Error(err), zap.Int("issue_number", issueNumber))
 			aggErr = err
-		} else if !exists {
-			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
-				s.logger.Warn("Failed to post merge failed issue comment", zap.Error(err), zap.Int("issue_number", issueNumber))
+		} else if found && commentID != nil {
+			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
+				s.logger.Warn("Failed to update issue comment for merge status", zap.Error(err), zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
 				aggErr = err
+			} else {
+				s.logger.Info("Updated issue comment for merge status", zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
+			}
+		} else {
+			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
+				s.logger.Warn("Failed to post issue comment for merge status", zap.Error(err), zap.Int("issue_number", issueNumber))
+				aggErr = err
+			} else {
+				s.logger.Info("Posted issue comment for merge status", zap.Int("issue_number", issueNumber))
 			}
 		}
 	}
 
 	// Post to PR thread
 	if prNumber > 0 {
-		exists, err := s.hasCommentWithMarker(ctx, owner, repo, prNumber, marker)
+		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, prNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan PR comments for merge-failed marker", zap.Error(err), zap.Int("pr_number", prNumber))
+			s.logger.Warn("Failed to scan PR comments for merge marker", zap.Error(err), zap.Int("pr_number", prNumber))
 			if aggErr == nil {
 				aggErr = err
 			}
-		} else if !exists {
-			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
-				s.logger.Warn("Failed to post merge failed PR comment", zap.Error(err), zap.Int("pr_number", prNumber))
+		} else if found && commentID != nil {
+			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
+				s.logger.Warn("Failed to update PR comment for merge status", zap.Error(err), zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
 				if aggErr == nil {
 					aggErr = err
 				}
+			} else {
+				s.logger.Info("Updated PR comment for merge status", zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
+			}
+		} else {
+			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
+				s.logger.Warn("Failed to post PR comment for merge status", zap.Error(err), zap.Int("pr_number", prNumber))
+				if aggErr == nil {
+					aggErr = err
+				}
+			} else {
+				s.logger.Info("Posted PR comment for merge status", zap.Int("pr_number", prNumber))
 			}
 		}
 	}
 
 	return aggErr
+}
+
+// NotifyMergeFailure posts a status comment to Issue and PR when auto-merge fails.
+// It is a convenience wrapper around NotifyMergeStatus for backward compatibility.
+func (s *GitHubNotificationService) NotifyMergeFailure(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber, prNumber int,
+	errorType, errorMessage, idempotencyKey string,
+) error {
+	return s.NotifyMergeStatus(ctx, owner, repo, issueNumber, prNumber, false, "", errorMessage, idempotencyKey)
 }

@@ -72,7 +72,7 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 			mergeResult = &github.PullRequestMergeResult{}
 		} else {
 			// 未マージ → エラーを分類して結果として返却（上位で通知・ハンドリング）
-			classified := classifyMergeError(mergeErr)
+			classified := ClassifyMergeError(mergeErr)
 			return &AutoMergeResult{
 				Merged:       false,
 				MergeSHA:     "",
@@ -146,8 +146,9 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 	return result, nil
 }
 
-// classifyMergeError は GitHub API からのエラーをユーザ向けに分類する
-func classifyMergeError(err error) string {
+// ClassifyMergeError は GitHub API からのエラーをユーザ向けに分類する
+// ステータスコードに応じて代表的な分類名を返す。該当しない場合は err.Error() を返す。
+func ClassifyMergeError(err error) string {
 	if err == nil {
 		return ""
 	}
