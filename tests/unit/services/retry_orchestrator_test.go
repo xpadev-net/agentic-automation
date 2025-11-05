@@ -283,3 +283,406 @@ func TestRetryOrchestrator_HandleMaxRetriesExceeded(t *testing.T) {
 		agentRunRepo.AssertExpectations(t)
 	})
 }
+
+func TestRetryOrchestrator_IncrementRetryCount(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	githubClient := &clients.Client{}
+	issueContextService := services.NewIssueContextService(githubClient, logger)
+	ctx := context.Background()
+
+	t.Run("正常系: リトライカウントが0から1に増加", func(t *testing.T) {
+		agentRunRepo := new(mockAgentRunRepository)
+		jobService := new(mockKubernetesJobService)
+
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 0,
+		}
+
+		// Setup mocks
+		agentRunRepo.On("IncrementRetryCount", 1, 50).Return(1, nil).Once()
+		agentRunRepo.On("GetByID", 1).Return(&models.AgentRun{
+			ID:         1,
+			RetryCount: 1,
+			State:      "started",
+		}, nil).Once()
+
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			jobService,
+			issueContextService,
+			logger,
+		)
+
+		err := orchestrator.IncrementRetryCount(ctx, agentRun)
+		require.NoError(t, err)
+		assert.Equal(t, 1, agentRun.RetryCount)
+
+		agentRunRepo.AssertExpectations(t)
+	})
+
+	t.Run("正常系: リトライカウントが49から50に増加（境界値）", func(t *testing.T) {
+		agentRunRepo := new(mockAgentRunRepository)
+		jobService := new(mockKubernetesJobService)
+
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 49,
+		}
+
+		// Setup mocks
+		agentRunRepo.On("IncrementRetryCount", 1, 50).Return(50, nil).Once()
+		agentRunRepo.On("GetByID", 1).Return(&models.AgentRun{
+			ID:         1,
+			RetryCount: 50,
+			State:      "started",
+		}, nil).Once()
+
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			jobService,
+			issueContextService,
+			logger,
+		)
+
+		err := orchestrator.IncrementRetryCount(ctx, agentRun)
+		require.NoError(t, err)
+		assert.Equal(t, 50, agentRun.RetryCount)
+
+		agentRunRepo.AssertExpectations(t)
+	})
+
+	t.Run("異常系: リトライカウントが50の時は増加できない（最大値到達）", func(t *testing.T) {
+		agentRunRepo := new(mockAgentRunRepository)
+		jobService := new(mockKubernetesJobService)
+
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 50,
+		}
+
+		// Setup mocks
+		maxErr := errors.New("cannot increment retry count: already at or above maximum (50 >= 50)")
+		agentRunRepo.On("IncrementRetryCount", 1, 50).Return(50, maxErr).Once()
+		agentRunRepo.On("GetByID", 1).Return(&models.AgentRun{
+			ID:         1,
+			RetryCount: 50,
+		}, nil).Once()
+
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			jobService,
+			issueContextService,
+			logger,
+		)
+
+		err := orchestrator.IncrementRetryCount(ctx, agentRun)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "maximum retry count (50) already reached")
+		assert.Equal(t, 50, agentRun.RetryCount)
+
+		agentRunRepo.AssertExpectations(t)
+	})
+
+	t.Run("異常系: agentRunがnilの場合", func(t *testing.T) {
+		agentRunRepo := new(mockAgentRunRepository)
+		jobService := new(mockKubernetesJobService)
+
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			jobService,
+			issueContextService,
+			logger,
+		)
+
+		err := orchestrator.IncrementRetryCount(ctx, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "agentRun must not be nil")
+	})
+
+	t.Run("異常系: agentRun.IDが0の場合", func(t *testing.T) {
+		agentRunRepo := new(mockAgentRunRepository)
+		jobService := new(mockKubernetesJobService)
+
+		agentRun := &models.AgentRun{
+			ID:         0,
+			RetryCount: 0,
+		}
+
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			jobService,
+			issueContextService,
+			logger,
+		)
+
+		err := orchestrator.IncrementRetryCount(ctx, agentRun)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "agentRun.ID must not be zero")
+	})
+
+	t.Run("異常系: リポジトリのIncrementRetryCountが一般的なエラーを返す", func(t *testing.T) {
+		agentRunRepo := new(mockAgentRunRepository)
+		jobService := new(mockKubernetesJobService)
+
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 10,
+		}
+
+		// Setup mocks
+		agentRunRepo.On("IncrementRetryCount", 1, 50).Return(0, errors.New("database connection failed")).Once()
+
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			jobService,
+			issueContextService,
+			logger,
+		)
+
+		err := orchestrator.IncrementRetryCount(ctx, agentRun)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to increment retry count")
+
+		agentRunRepo.AssertExpectations(t)
+	})
+
+	t.Run("異常系: GetByIDのリロードが失敗する", func(t *testing.T) {
+		agentRunRepo := new(mockAgentRunRepository)
+		jobService := new(mockKubernetesJobService)
+
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 10,
+		}
+
+		// Setup mocks
+		agentRunRepo.On("IncrementRetryCount", 1, 50).Return(11, nil).Once()
+		agentRunRepo.On("GetByID", 1).Return(nil, errors.New("record not found")).Once()
+
+		orchestrator := services.NewRetryOrchestrator(
+			agentRunRepo,
+			jobService,
+			issueContextService,
+			logger,
+		)
+
+		err := orchestrator.IncrementRetryCount(ctx, agentRun)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to reload AgentRun after increment")
+		assert.Equal(t, 11, agentRun.RetryCount) // リロード失敗でもカウントは更新される
+
+		agentRunRepo.AssertExpectations(t)
+	})
+}
+
+func TestRetryOrchestrator_IsMaxRetriesReached(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	agentRunRepo := new(mockAgentRunRepository)
+	jobService := new(mockKubernetesJobService)
+	githubClient := &clients.Client{}
+	issueContextService := services.NewIssueContextService(githubClient, logger)
+	orchestrator := services.NewRetryOrchestrator(agentRunRepo, jobService, issueContextService, logger)
+
+	t.Run("retry_count < 50 の場合、false を返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 10,
+		}
+		result := orchestrator.IsMaxRetriesReached(agentRun)
+		assert.False(t, result)
+	})
+
+	t.Run("retry_count == 49 の場合、false を返す（境界値）", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 49,
+		}
+		result := orchestrator.IsMaxRetriesReached(agentRun)
+		assert.False(t, result)
+	})
+
+	t.Run("retry_count == 50 の場合、true を返す（境界値）", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 50,
+		}
+		result := orchestrator.IsMaxRetriesReached(agentRun)
+		assert.True(t, result)
+	})
+
+	t.Run("retry_count > 50 の場合、true を返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 51,
+		}
+		result := orchestrator.IsMaxRetriesReached(agentRun)
+		assert.True(t, result)
+	})
+
+	t.Run("agentRunがnilの場合、true を返す（安全のため）", func(t *testing.T) {
+		result := orchestrator.IsMaxRetriesReached(nil)
+		assert.True(t, result)
+	})
+}
+
+func TestRetryOrchestrator_GetRemainingRetries(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	agentRunRepo := new(mockAgentRunRepository)
+	jobService := new(mockKubernetesJobService)
+	githubClient := &clients.Client{}
+	issueContextService := services.NewIssueContextService(githubClient, logger)
+	orchestrator := services.NewRetryOrchestrator(agentRunRepo, jobService, issueContextService, logger)
+
+	t.Run("retry_count == 0 の場合、50 を返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 0,
+		}
+		remaining := orchestrator.GetRemainingRetries(agentRun)
+		assert.Equal(t, 50, remaining)
+	})
+
+	t.Run("retry_count == 25 の場合、25 を返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 25,
+		}
+		remaining := orchestrator.GetRemainingRetries(agentRun)
+		assert.Equal(t, 25, remaining)
+	})
+
+	t.Run("retry_count == 49 の場合、1 を返す（境界値）", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 49,
+		}
+		remaining := orchestrator.GetRemainingRetries(agentRun)
+		assert.Equal(t, 1, remaining)
+	})
+
+	t.Run("retry_count == 50 の場合、0 を返す（境界値）", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 50,
+		}
+		remaining := orchestrator.GetRemainingRetries(agentRun)
+		assert.Equal(t, 0, remaining)
+	})
+
+	t.Run("retry_count > 50 の場合、0 を返す（負の値は返さない）", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 51,
+		}
+		remaining := orchestrator.GetRemainingRetries(agentRun)
+		assert.Equal(t, 0, remaining)
+	})
+
+	t.Run("agentRunがnilの場合、0 を返す", func(t *testing.T) {
+		remaining := orchestrator.GetRemainingRetries(nil)
+		assert.Equal(t, 0, remaining)
+	})
+}
+
+func TestRetryOrchestrator_ValidateRetryCount(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	agentRunRepo := new(mockAgentRunRepository)
+	jobService := new(mockKubernetesJobService)
+	githubClient := &clients.Client{}
+	issueContextService := services.NewIssueContextService(githubClient, logger)
+	orchestrator := services.NewRetryOrchestrator(agentRunRepo, jobService, issueContextService, logger)
+
+	t.Run("retry_count == 0 の場合、エラーなし", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 0,
+		}
+		err := orchestrator.ValidateRetryCount(agentRun)
+		require.NoError(t, err)
+	})
+
+	t.Run("retry_count == 25 の場合、エラーなし", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 25,
+		}
+		err := orchestrator.ValidateRetryCount(agentRun)
+		require.NoError(t, err)
+	})
+
+	t.Run("retry_count == 50 の場合、エラーなし（警告のみ）", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 50,
+		}
+		err := orchestrator.ValidateRetryCount(agentRun)
+		require.NoError(t, err)
+	})
+
+	t.Run("retry_count > 50 の場合、エラーなし（警告のみ、既存データを許容）", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 51,
+		}
+		err := orchestrator.ValidateRetryCount(agentRun)
+		require.NoError(t, err)
+	})
+
+	t.Run("retry_count < 0 の場合、エラーを返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: -1,
+		}
+		err := orchestrator.ValidateRetryCount(agentRun)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "retry_count must be non-negative")
+	})
+
+	t.Run("agentRunがnilの場合、エラーを返す", func(t *testing.T) {
+		err := orchestrator.ValidateRetryCount(nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "agentRun must not be nil")
+	})
+}
+
+func TestRetryOrchestrator_GetRetryCount(t *testing.T) {
+	logger := zaptest.NewLogger(t)
+	agentRunRepo := new(mockAgentRunRepository)
+	jobService := new(mockKubernetesJobService)
+	githubClient := &clients.Client{}
+	issueContextService := services.NewIssueContextService(githubClient, logger)
+	orchestrator := services.NewRetryOrchestrator(agentRunRepo, jobService, issueContextService, logger)
+
+	t.Run("retry_count == 0 の場合、0 を返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 0,
+		}
+		count := orchestrator.GetRetryCount(agentRun)
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("retry_count == 25 の場合、25 を返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 25,
+		}
+		count := orchestrator.GetRetryCount(agentRun)
+		assert.Equal(t, 25, count)
+	})
+
+	t.Run("retry_count == 50 の場合、50 を返す", func(t *testing.T) {
+		agentRun := &models.AgentRun{
+			ID:         1,
+			RetryCount: 50,
+		}
+		count := orchestrator.GetRetryCount(agentRun)
+		assert.Equal(t, 50, count)
+	})
+
+	t.Run("agentRunがnilの場合、0 を返す", func(t *testing.T) {
+		count := orchestrator.GetRetryCount(nil)
+		assert.Equal(t, 0, count)
+	})
+}
