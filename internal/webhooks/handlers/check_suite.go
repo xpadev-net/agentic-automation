@@ -343,14 +343,12 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		githubClient := deps.GitHubClient
 		if githubClient == nil {
 			if appGitHubClient == nil {
-				// Fallback: skip re-evaluation (keep legacy behavior for tests/env without credentials)
-				logger.Error("GitHub App client not available",
+				// Fallback: skip re-evaluation (legacy-compatible minimal response)
+				logger.Info("GitHub App client not available; skipping re-evaluation",
 					zap.String("delivery_id", deliveryID),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "processed",
-					"action":      "re_eval_skipped",
-					"reason":      "github_client_unavailable",
 					"delivery_id": deliveryID,
 					"pr_number":   prNumber,
 					"conclusion":  *conclusion,
@@ -360,7 +358,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 			if err != nil {
 				// Fallback: skip re-evaluation
-				logger.Error("Failed to init per-repo GitHub client",
+				logger.Info("Failed to init per-repo GitHub client; skipping re-evaluation",
 					zap.Error(err),
 					zap.String("owner", owner),
 					zap.String("repo", repo),
@@ -368,8 +366,6 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "processed",
-					"action":      "re_eval_skipped",
-					"reason":      "github_client_init_failed",
 					"delivery_id": deliveryID,
 					"pr_number":   prNumber,
 					"conclusion":  *conclusion,
