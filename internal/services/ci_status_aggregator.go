@@ -93,15 +93,34 @@ func (s *ciStatusAggregator) AggregateAndStore(ctx context.Context, owner, repo 
 	agg := AggregateFromRuns(runs)
 
 	// Upsert aggregated status as a synthetic CIStatus row identified by (pr_id, check_suite_id)
-	now := time.Now()
-	conclusion := aggToConclusionPtr(agg.Aggregated)
+	var completedAt *time.Time
+	var conclusion *string
+	status := "completed"
+	switch agg.Aggregated {
+	case "success":
+		now := time.Now()
+		completedAt = &now
+		conclusion = aggToConclusionPtr("success")
+		status = "completed"
+	case "failed":
+		now := time.Now()
+		completedAt = &now
+		conclusion = aggToConclusionPtr("failed")
+		status = "completed"
+	default: // pending
+		// keep in-progress; do not set conclusion/completedAt
+		status = "in_progress"
+		completedAt = nil
+		conclusion = nil
+	}
+
 	ci := &models.CIStatus{
 		PRID:         prID,
 		CheckSuiteID: strconv.FormatInt(checkSuiteID, 10),
 		Name:         "aggregated",
-		Status:       "completed",
+		Status:       status,
 		Conclusion:   conclusion,
-		CompletedAt:  &now,
+		CompletedAt:  completedAt,
 	}
 
 	if err := s.repo.CreateOrUpdate(ci); err != nil {
