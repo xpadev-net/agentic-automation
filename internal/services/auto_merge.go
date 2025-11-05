@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"agentic-automation/internal/clients"
-	"agentic-automation/internal/utils"
 	"github.com/google/go-github/v76/github"
 	"go.uber.org/zap"
 )
@@ -43,25 +42,36 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 		return nil, fmt.Errorf("invalid input: owner/repo/prNumber are required")
 	}
 
-	// マージ実行（トークン失効時の再試行は GitHubClient.DoWithClientRetry に委譲）
+	// マージ実行（非冪等のため一般リトライは行わない。トークン更新のみ DoWithClientRetry に委譲）
 	var mergeResult *github.PullRequestMergeResult
-	mergeFn := func() error {
-		return s.ghApp.DoWithClientRetry(ctx, owner, repo, func(c *github.Client) (*github.Response, error) {
-			opt := &github.PullRequestOptions{MergeMethod: "merge"}
-			// commit message を空にすると GitHub 側で既定メッセージ
-			res, resp, err := c.PullRequests.Merge(ctx, owner, repo, prNumber, "", opt)
-			if err == nil {
-				mergeResult = res
-			}
-			return resp, err
-		})
-	}
+	mergeErr := s.ghApp.DoWithClientRetry(ctx, owner, repo, func(c *github.Client) (*github.Response, error) {
+		opt := &github.PullRequestOptions{MergeMethod: "merge"}
+		res, resp, err := c.PullRequests.Merge(ctx, owner, repo, prNumber, "", opt)
+		if err == nil {
+			mergeResult = res
+		}
+		return resp, err
+	})
 
-	// 一時的障害に対して指数バックオフでリトライ
-	if err := utils.Retry(ctx, mergeFn, utils.DefaultRetryConfig(), s.logger); err != nil {
-		// 論理失敗（409/422など）は DoWithClientRetry から error として返る
-		// ユーザ向けメッセージへ分類
-		return &AutoMergeResult{Merged: false, Message: classifyMergeError(err)}, nil
+	// エラー時: 応答喪失などに備え IsMerged を確認し、既にマージ済なら成功扱い
+	if mergeErr != nil {
+		var isMerged bool
+		_ = s.ghApp.DoWithClientRetry(ctx, owner, repo, func(c *github.Client) (*github.Response, error) {
+			merged, resp, ierr := c.PullRequests.IsMerged(ctx, owner, repo, prNumber)
+			if ierr == nil {
+				isMerged = merged
+			}
+			return resp, ierr
+		})
+		if isMerged {
+			s.logger.Info("merge succeeded but initial response failed; treating as success",
+				zap.String("owner", owner), zap.String("repo", repo), zap.Int("pr_number", prNumber))
+			// 成功扱いにしてブランチ削除へ進む
+			mergeResult = &github.PullRequestMergeResult{}
+		} else {
+			// 未マージ → エラーを返却（上位で明示的に再試行判断）
+			return nil, mergeErr
+		}
 	}
 
 	// 成功時: Merge SHA を取得
