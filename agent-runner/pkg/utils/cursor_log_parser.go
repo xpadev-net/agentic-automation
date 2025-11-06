@@ -211,29 +211,22 @@ func (lf *LogFormatter) ShouldOutput(entry LogEntry, formatted string) (string, 
 	sessionID := entry.GetSessionID()
 
 	if te, ok := entry.(*ThinkingEntry); ok {
+		base := "[THINKING] processing"
 		if te.Subtype == "completed" {
 			// Mark completion; next processing restarts from base
 			lf.lastFormattedBySession[sessionID] = "[THINKING] completed"
 			return formatted, true
 		}
-		if formatted == "[THINKING] processing..." {
+		// processing case: first -> base, subsequent -> "."
+		if strings.HasPrefix(formatted, base) || formatted == "[THINKING] processing..." {
 			last := lf.lastFormattedBySession[sessionID]
-			base := "[THINKING] processing"
 			if strings.HasPrefix(last, base) {
-				// Count trailing dots and add one more
-				dots := 0
-				for i := len(last) - 1; i >= 0 && last[i] == '.'; i-- {
-					dots++
-				}
-				if dots < 3 {
-					dots = 3
-				}
-				dots++
-				formatted = base + strings.Repeat(".", dots)
+				formatted = "."
 			} else {
-				// First processing in the streak stays as base ("...")
-				formatted = "[THINKING] processing..."
+				formatted = base
 			}
+			lf.lastFormattedBySession[sessionID] = base
+			return formatted, true
 		}
 	}
 
@@ -318,6 +311,7 @@ func ParseLogEntry(line []byte) (LogEntry, error) {
 func ParseAndFormatOutput(output string) {
 	formatter := NewLogFormatter()
 	lines := strings.Split(output, "\n")
+	inProgress := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -334,10 +328,17 @@ func ParseAndFormatOutput(output string) {
 		// Format and output the parsed entry with suppression of duplicate thinking progress logs
 		formatted, shouldOutput := formatter.FormatAndOutput(entry)
 		if shouldOutput {
-			// processing 系は改行しない（同一行で進捗を更新）
-			if strings.HasPrefix(formatted, "[THINKING] processing") {
+			isProcessingPiece := strings.HasPrefix(formatted, "[THINKING] processing") || formatted == "."
+			if isProcessingPiece {
+				// processing 系は改行しない（同一行で進捗を更新）
 				fmt.Fprintf(os.Stderr, "%s", formatted)
+				inProgress = true
 			} else {
+				// 非 processing が来たら、直前が進捗連結中なら行を確定
+				if inProgress {
+					fmt.Fprintf(os.Stderr, "\n")
+					inProgress = false
+				}
 				fmt.Fprintf(os.Stderr, "%s\n", formatted)
 			}
 		}

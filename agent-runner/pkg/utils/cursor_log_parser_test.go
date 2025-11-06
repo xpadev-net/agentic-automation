@@ -34,9 +34,12 @@ func TestProgressDotsIncrementOnConsecutiveProcessing(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect concatenated processing updates on the same line followed by completed
-	if !strings.Contains(out, "[THINKING] processing...[THINKING] processing....[THINKING] completed") {
-		t.Fatalf("expected concatenated processing updates then completed, got:\n%s", out)
+	// Expect first processing then one dot, then a newline before completed
+	if !strings.Contains(out, "[THINKING] processing.") {
+		t.Fatalf("expected '[THINKING] processing.' sequence, got:\n%s", out)
+	}
+	if !strings.Contains(out, "\n[THINKING] completed") {
+		t.Fatalf("expected newline before completed, got:\n%s", out)
 	}
 }
 
@@ -70,18 +73,9 @@ func TestProgressDotsKeepIncreasingWithMoreProcessing(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect dots to increase: ..., ...., ....., ......, ....... (concatenated)
-	want := []string{
-		"[THINKING] processing...",
-		"[THINKING] processing....",
-		"[THINKING] processing.....",
-		"[THINKING] processing......",
-		"[THINKING] processing.......",
-	}
-	for _, w := range want {
-		if !strings.Contains(out, w) {
-			t.Fatalf("expected to contain %q, got:\n%s", w, out)
-		}
+	// Expect first processing then four dots (total 5 processing events)
+	if !strings.Contains(out, "[THINKING] processing....") {
+		t.Fatalf("expected '[THINKING] processing....', got:\n%s", out)
 	}
 	if !strings.Contains(out, "[THINKING] completed") {
 		t.Fatalf("expected completed, got:\n%s", out)
@@ -117,8 +111,8 @@ func TestDifferentSessionsDotsManagedIndependently(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect concatenated order: s1 "..." + s2 "..." + s1 "...."
-	prefix := "[THINKING] processing...[THINKING] processing...[THINKING] processing...."
+	// Expect concatenated order: s1 base + s2 base + s1 dot
+	prefix := "[THINKING] processing[THINKING] processing."
 	if !strings.Contains(out, prefix) {
 		t.Fatalf("expected concatenated processing sequence per session, got:\n%s", out)
 	}
