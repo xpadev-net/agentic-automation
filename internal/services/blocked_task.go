@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 
+	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/utils"
+	"encoding/json"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // BlockedTaskResolver locates tasks (issues) that have become unblocked
@@ -180,6 +183,147 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 	)
 
 	return result, nil
+}
+
+// TriggerJobsForUnblockedTasks resolves unblocked issues and triggers Kubernetes Jobs for each.
+// It uses the provided dependencies to ensure idempotent behavior and proper state transitions.
+// Note: This function intentionally does not write OperationLog entries due to current enum constraints.
+func TriggerJobsForUnblockedTasks(
+	ctx context.Context,
+	resolver BlockedTaskResolver,
+	issues *repositories.IssueRepository,
+	agents repositories.AgentRunRepository,
+	jobService KubernetesJobService,
+	stateMachine AgentRunStateMachine,
+	issueCtxSvc *IssueContextService,
+	ghClient *clients.Client,
+	owner, repo string,
+	eventIssueDBID int64,
+) error {
+	if ctx == nil {
+		return errors.New("context must not be nil")
+	}
+	if resolver == nil || issues == nil || agents == nil || jobService == nil || stateMachine == nil || issueCtxSvc == nil || ghClient == nil {
+		return errors.New("missing dependencies for TriggerJobsForUnblockedTasks")
+	}
+
+	// Resolve unblocked issues based on the current graph and DB state
+	candidates, err := resolver.FindUnblockedTasks(ctx, eventIssueDBID)
+	if err != nil {
+		return err
+	}
+
+	// Process each candidate
+	for _, is := range candidates {
+		// Respect context cancellation
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		// Filter by repository (owner/repo)
+		if is.Repo != owner+"/"+repo {
+			continue
+		}
+
+		// Double-check active/completed runs to avoid duplicate starts
+		runs, runsErr := agents.GetByIssueID(is.ID)
+		if runsErr != nil {
+			return fmt.Errorf("failed to load agent runs for issue %d: %w", is.ID, runsErr)
+		}
+		skip := false
+		for _, run := range runs {
+			if run == nil {
+				continue
+			}
+			s := run.State
+			if s == "queued" || s == "started" || s == "succeeded" {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		// Collect issue context and build prompt
+		issueCtx, ctxErr := issueCtxSvc.CollectIssueContext(ctx, owner, repo, is.Number)
+		if ctxErr != nil {
+			return fmt.Errorf("failed to collect issue context for #%d: %w", is.Number, ctxErr)
+		}
+		prompt := issueCtxSvc.FormatPrompt(issueCtx)
+
+		// Respect labels from freshly fetched issue context for agent detection
+		labelsJSON, _ := json.Marshal(issueCtx.Labels)
+		updatedIssue := is
+		updatedIssue.Labels = string(labelsJSON)
+		_ = issues.Update(&updatedIssue)
+
+		// Detect agent type using updated labels
+		agentType := NewAgentTypeDetectorService(nil).DetectAgentType(&updatedIssue)
+
+		// Prepare input payload (schema v1)
+		inputPayload := map[string]any{
+			"schema_version": "1",
+			"prompt":         prompt,
+			"agent_type":     agentType,
+			"issue": map[string]any{
+				"repo":           is.Repo,
+				"number":         is.Number,
+				"has_body":       issueCtx.Body != "",
+				"labels":         issueCtx.Labels,
+				"comments_count": len(issueCtx.Comments),
+			},
+		}
+		inputBytes, _ := json.Marshal(inputPayload)
+
+		// Create or get AgentRun using deterministic idempotency key per issue
+		idemp := fmt.Sprintf("unblock:%s#%d", is.Repo, is.Number)
+		newRun := &models.AgentRun{
+			IssueID:   is.ID,
+			State:     "queued",
+			AgentType: agentType,
+			Input:     inputBytes,
+			Output:    []byte("{}"),
+		}
+		agentRun, isNew, createErr := agents.CreateOrGet(idemp, newRun)
+		if createErr != nil {
+			return fmt.Errorf("failed to create agent run: %w", createErr)
+		}
+
+		// If an existing run already exists, branch by state to avoid duplicate jobs
+		if !isNew {
+			switch agentRun.State {
+			case "queued":
+				// Update prompt and agent type to latest context, then proceed
+				agentRun.AgentType = agentType
+				agentRun.Input = inputBytes
+				if err := agents.Update(agentRun); err != nil {
+					return fmt.Errorf("failed to update existing queued run %d: %w", agentRun.ID, err)
+				}
+			case "started", "succeeded", "failed":
+				// Another worker already started or finished this issue; skip
+				continue
+			}
+		}
+
+		// Transition to started before Job creation (align with comment-trigger flow)
+		if err := stateMachine.TransitionToStarted(agentRun.ID); err != nil {
+			return fmt.Errorf("failed to transition run %d to started: %w", agentRun.ID, err)
+		}
+
+		// Create Job
+		if _, err := jobService.CreateJobForAgentRun(ctx, agentRun, &updatedIssue, prompt); err != nil {
+			// If a job with same name already exists, treat as success (another handler created it)
+			if apierrors.IsAlreadyExists(err) {
+				continue
+			}
+			// Rollback to queued only when Job was not created
+			_ = stateMachine.TransitionToQueued(agentRun.ID)
+			return fmt.Errorf("failed to create job for run %d: %w", agentRun.ID, err)
+		}
+	}
+
+	return nil
 }
 
 // truncateIDsForInfo trims an int slice to at most limit elements and reports whether truncation occurred.
