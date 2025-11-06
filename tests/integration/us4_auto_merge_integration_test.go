@@ -118,9 +118,11 @@ func setupDBForUS4(t *testing.T) *gorm.DB {
 			started_at DATETIME,
 			completed_at DATETIME,
 			created_at DATETIME,
-			updated_at DATETIME
+			updated_at DATETIME,
+			UNIQUE(pr_id, check_suite_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_ci_status_pr_id ON ci_status(pr_id);
+		CREATE INDEX IF NOT EXISTS idx_ci_status_pr_status ON ci_status(pr_id, status);
 	`).Error)
 
 	// review_feedback table
@@ -497,6 +499,7 @@ func setupRouterForUS4(
 	mockGH *mockGitHubClient,
 	autoMergeService services.AutoMergeService,
 	mergeChecker services.MergeConditionChecker,
+	githubClient *clients.Client,
 ) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
@@ -536,6 +539,7 @@ func setupRouterForUS4(
 			case "pull_request_review_comment":
 				prrcDeps := handlers.PullRequestReviewCommentDeps{
 					Logger:                   logger,
+					GitHubClient:             githubClient,
 					PullRequestRepository:    prRepo,
 					ReviewFeedbackRepository: rfRepo,
 					MergeConditionChecker:    mergeChecker,
@@ -619,7 +623,7 @@ func Test_ApproveAndCISuccess_TriggersAutoMerge(t *testing.T) {
 	autoMergeService := &verifyingAutoMergeService{}
 
 	// Setup router
-	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker)
+	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker, githubClient)
 
 	// Send check_suite webhook (for CI aggregation)
 	checkSuiteDeliveryID := "delivery-check-suite-1"
@@ -744,7 +748,7 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	autoMergeService := &verifyingAutoMergeService{}
 
 	// Setup router
-	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker)
+	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker, githubClient)
 
 	// Send pull_request_review_comment webhook with Codex approval comment
 	commentDeliveryID := "delivery-pr-comment-1"

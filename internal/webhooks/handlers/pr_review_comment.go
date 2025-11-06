@@ -322,6 +322,29 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			return
 		}
 
+		// ReviewFeedbackレコード作成（承認検出時）
+		reviewFeedbackRepo := deps.ReviewFeedbackRepository
+		if reviewFeedbackRepo != nil {
+			commentID := int64(payload.Comment.ID)
+			content := payload.Comment.Body
+			feedback := &models.ReviewFeedback{
+				PRID:             pr.ID,
+				Source:           "Codex",
+				Content:          &content,
+				Status:           "completed",
+				ApprovalDetected: true,
+				GitHubCommentID:  &commentID,
+			}
+			if err := reviewFeedbackRepo.Create(feedback); err != nil {
+				logger.Warn("Failed to create ReviewFeedback record for approval",
+					zap.Error(err),
+					zap.String("delivery_id", deliveryID),
+					zap.Int("pr_id", pr.ID),
+				)
+				// エラーは無視して続行（既に存在する可能性があるため）
+			}
+		}
+
 		// CIStatusProvider/CodexApprovalChecker はファイル先頭のアダプタを利用
 
 		var checker services.MergeConditionChecker
