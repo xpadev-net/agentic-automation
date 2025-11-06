@@ -210,7 +210,7 @@
 - [x] T104 [P] [US3] Write unit tests for CodexApprovalDetector (approval pattern matching)
 - [x] T105 [P] [US3] Write unit tests for RetryOrchestrator (max 50 retries logic)
 - [x] T106 [P] [US3] Write unit tests for FeedbackAggregator (review + CI combination)
-- [ ] T107 [US3] Write integration test for CI failure → retry → success flow
+- [x] T107 [US3] Write integration test for CI failure → retry → success flow
 
 **Checkpoint**: All user stories 1-3 should now be independently functional - quality loop with automatic improvements
 
@@ -281,16 +281,16 @@
 - [ ] T134 [P] Add comprehensive error messages and user-facing error codes in internal/utils/error_codes.go
 - [ ] T135 [P] Implement rate limiting for GitHub API calls in internal/clients/github.go
 - [ ] T136 [P] Add metrics collection for execution times and success rates in internal/services/metrics.go
-- [ ] T137 [P] Create health check endpoint for webhook server in internal/webhooks/server.go
+- [x] T137 [P] Create health check endpoint for webhook server in internal/webhooks/server.go
 - [ ] T138 [P] Add environment variable validation on startup in internal/config/env.go
-- [ ] T139 [P] Implement graceful shutdown handler in internal/webhooks/server.go
-- [ ] T140 [P] Add/optimize SQL indexes via goose migrations in `migrations/*.sql`
-- [ ] T141 [P] Create README.md with setup and deployment instructions
+- [x] T139 [P] Implement graceful shutdown handler in internal/webhooks/server.go
+- [x] T140 [P] Add/optimize SQL indexes via goose migrations in `migrations/*.sql`
+- [x] T141 [P] Create README.md with setup and deployment instructions
 - [ ] T142 [P] Document API client configurations in docs/api-clients.md
-- [ ] T143 [P] Add inline code documentation with Go doc comments
+- [x] T143 [P] Add inline code documentation with Go doc comments
 - [ ] T144 Run quickstart.md validation checklist
 - [ ] T145 Perform security audit for secret handling and authorization
-- [ ] T146 [P] Add performance optimization for blocker graph queries with SQL indexes (goose)
+- [x] T146 [P] Add performance optimization for blocker graph queries with SQL indexes (goose)
 - [ ] T147 [P] Implement caching for GitHub API responses where appropriate
 
 ---
