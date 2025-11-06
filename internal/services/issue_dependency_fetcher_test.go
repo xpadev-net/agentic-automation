@@ -175,18 +175,11 @@ func TestListBlocking_Pagination_Success(t *testing.T) {
 		case "1":
 			atomic.AddInt32(&page1Hit, 1)
 			// Link to next page
-			next := fmt.Sprintf("<%s/repos/o/r/issues/1/dependencies/blocking?page=2&per_page=%s>; rel=\"next\"", r.HostlessURL(), per)
-			// r.HostlessURL is not real; construct with scheme+host
-			// Build absolute URL
-			base := r.URL
-			baseCopy := *base
-			baseCopy.Scheme = "http"
+			scheme := "http"
 			if r.TLS != nil {
-				baseCopy.Scheme = "https"
+				scheme = "https"
 			}
-			baseCopy.Host = r.Host
-			baseCopy.RawQuery = "page=2&per_page=" + per
-			next = fmt.Sprintf("<%s://%s%s?%s>; rel=\"next\"", baseCopy.Scheme, baseCopy.Host, baseCopy.Path, baseCopy.RawQuery)
+			next := fmt.Sprintf("<%s://%s%s?page=2&per_page=%s>; rel=\"next\"", scheme, r.Host, r.URL.Path, per)
 			w.Header().Set("Link", next)
 			fmt.Fprint(w, issuesJSON("o", "r", []struct {
 				Number            int
