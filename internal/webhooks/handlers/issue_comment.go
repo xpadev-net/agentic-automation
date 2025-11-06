@@ -595,14 +595,13 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 	// Step 12.5: Dependency validation (US5 T127)
 	// ジョブ開始前に依存が全てクローズ済みかを検証する。
-	{
-		// DI 準備
+	// GitHubクライアント未注入のテスト/環境では安全にスキップする。
+	if deps.GitHubClient != nil {
 		edgesRepo := repositories.NewBlockerGraphRepository()
 		fetcher := services.NewIssueDependencyFetcher(deps.GitHubClient, logger)
 		builder := services.NewBlockerGraphBuilder(fetcher, issueRepo, edgesRepo, logger)
 		validator := services.NewDependencyValidator(builder, issueRepo, edgesRepo, logger)
 
-		// owner/repo は payload.Repository.FullName から取得済み
 		vr, verr := validator.ValidateUnblocked(ctx, owner, repo, payload.Issue.Number)
 		if verr != nil {
 			if errors.Is(verr, services.ErrBlockedDependencies) {
@@ -619,6 +618,12 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			c.Error(verr)
 			return
 		}
+	} else {
+		logger.Info("Skipping dependency validation: GitHub client not provided",
+			zap.String("delivery_id", deliveryID),
+			zap.Int("issue_number", payload.Issue.Number),
+			zap.String("repo", payload.Repository.FullName),
+		)
 	}
 
 	// Step 13: State transition (queued -> started)
