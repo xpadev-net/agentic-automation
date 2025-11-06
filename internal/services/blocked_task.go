@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/utils"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -76,6 +78,18 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 	}
 	graph := utils.FromEdges(allEdges)
 
+	logger := config.GetLogger().With(zap.String("component", "blocked_task"))
+	const snapshotLimit = 100 * 1024 // 100KB
+	graphJSON, truncated, hash := utils.BuildGraphSnapshot(graph, snapshotLimit)
+	logger.Info("blocked_task.resolution_started",
+		zap.Int64("eventIssueID", eventIssueID),
+		zap.Int("nodeCount", len(graph.Nodes())),
+		zap.Int("edgeCount", len(graph.Edges())),
+		zap.String("graphHash", hash),
+		zap.Bool("snapshotTruncated", truncated),
+	)
+	logger.Debug("blocked_task.graph_snapshot", zap.String("graphSnapshot", graphJSON))
+
 	// Build the set of closed issues (by DB state)
 	closedIssues, err := r.issues.FindByState("closed")
 	if err != nil {
@@ -88,6 +102,13 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 
 	// Compute candidate nodes that are unblocked given closedSet
 	candidateIDs := graph.UnblockedGiven(closedSet)
+
+	shownCandidateIDs, candTrunc := truncateIDsForInfo(candidateIDs, 50)
+	logger.Info("blocked_task.candidate_ids",
+		zap.Int("count", len(candidateIDs)),
+		zap.Ints("ids", shownCandidateIDs),
+		zap.Bool("idsTruncated", candTrunc),
+	)
 
 	// Exclude issues that are themselves still open (must be open to proceed)?
 	// For the purpose of T126, we only require that prerequisites are closed.
@@ -135,9 +156,61 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 			continue
 		}
 
+		// Debug incoming/outgoing edges for this candidate
+		logger.Debug("blocked_task.candidate_edges",
+			zap.Int("taskId", iss.ID),
+			zap.Ints("incomingEdges", graph.DependenciesOf(iss.ID)),
+			zap.Ints("outgoingEdges", graph.DependentsOf(iss.ID)),
+		)
+
 		// Keep the candidate
 		result = append(result, *iss)
 	}
 
+	finalIDs := make([]int, 0, len(result))
+	for _, iss := range result {
+		finalIDs = append(finalIDs, iss.ID)
+	}
+	shownFinalIDs, finalTrunc := truncateIDsForInfo(finalIDs, 50)
+	logger.Info("blocked_task.unblocked_found",
+		zap.Int("count", len(finalIDs)),
+		zap.Ints("ids", shownFinalIDs),
+		zap.Bool("idsTruncated", finalTrunc),
+		zap.String("reason", "all_dependencies_completed"),
+	)
+
 	return result, nil
+}
+
+// truncateIDsForInfo trims an int slice to at most limit elements and reports whether truncation occurred.
+func truncateIDsForInfo(ids []int, limit int) ([]int, bool) {
+	if limit <= 0 || len(ids) <= limit {
+		return ids, false
+	}
+	return ids[:limit], true
+}
+
+// The following helper stubs are placeholders for T128 integration points.
+// They are not used yet but kept to centralize log formats for resume events.
+func logResumeAttempt(logger *zap.Logger, issueID int64, taskID int, agentType string, retryCount int) {
+	if logger == nil {
+		return
+	}
+	logger.Info("blocked_task.resume_attempt",
+		zap.Int64("issueId", issueID),
+		zap.Int("taskId", taskID),
+		zap.String("agentType", agentType),
+		zap.Int("retryCount", retryCount),
+	)
+}
+
+func logResumeScheduled(logger *zap.Logger, issueID int64, taskID int, jobName string) {
+	if logger == nil {
+		return
+	}
+	logger.Info("blocked_task.resume_scheduled",
+		zap.Int64("issueId", issueID),
+		zap.Int("taskId", taskID),
+		zap.String("jobName", jobName),
+	)
 }
