@@ -325,7 +325,7 @@ func TriggerJobsForUnblockedTasks(
 		}
 		logger.Info("blocked_task.agent_run_upserted",
 			zap.Int("taskId", is.ID),
-			zap.Int64("agentRunId", agentRun.ID),
+			zap.Int("agentRunId", agentRun.ID),
 			zap.Bool("isNew", isNew),
 			zap.String("agentType", agentType),
 		)
@@ -348,13 +348,13 @@ func TriggerJobsForUnblockedTasks(
 
 		// Transition to started before Job creation (align with comment-trigger flow)
 		logger.Info("blocked_task.run_transition_started",
-			zap.Int64("agentRunId", agentRun.ID),
+			zap.Int("agentRunId", agentRun.ID),
 			zap.String("from", "queued"),
 			zap.String("to", "started"),
 		)
 		if err := stateMachine.TransitionToStarted(agentRun.ID); err != nil {
 			logger.Error("blocked_task.run_transition_failed",
-				zap.Int64("agentRunId", agentRun.ID),
+				zap.Int("agentRunId", agentRun.ID),
 				zap.Error(err),
 			)
 			return fmt.Errorf("failed to transition run %d to started: %w", agentRun.ID, err)
@@ -365,7 +365,7 @@ func TriggerJobsForUnblockedTasks(
 			// If a job with same name already exists, treat as success (another handler created it)
 			if apierrors.IsAlreadyExists(err) {
 				logger.Info("blocked_task.job_already_exists",
-					zap.Int64("agentRunId", agentRun.ID),
+					zap.Int("agentRunId", agentRun.ID),
 					zap.Int("taskId", is.ID),
 				)
 				continue
@@ -373,7 +373,7 @@ func TriggerJobsForUnblockedTasks(
 			// Rollback to queued only when Job was not created
 			_ = stateMachine.TransitionToQueued(agentRun.ID)
 			logger.Error("blocked_task.job_creation_failed",
-				zap.Int64("agentRunId", agentRun.ID),
+				zap.Int("agentRunId", agentRun.ID),
 				zap.Int("taskId", is.ID),
 				zap.Error(err),
 			)
@@ -381,7 +381,7 @@ func TriggerJobsForUnblockedTasks(
 		} else {
 			jobsTriggered++
 			logger.Info("blocked_task.job_created",
-				zap.Int64("agentRunId", agentRun.ID),
+				zap.Int("agentRunId", agentRun.ID),
 				zap.Int("taskId", is.ID),
 				zap.String("jobName", job.Name),
 			)
