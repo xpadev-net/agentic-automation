@@ -23,6 +23,13 @@
 git checkout -b feature/issue-123 master
 ```
 
+### コミットポリシー（コミッター保持）
+
+- コミット作成時はコミッター情報を変更しないでください。
+  - `.gitconfig` の `user.name` / `user.email` を一時的に上書きしない
+  - `git commit --author` や `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`、`GIT_COMMITTER_NAME`/`GIT_COMMITTER_EMAIL` 等の環境変数での上書きを行わない
+  - CI/ボット用の固定ユーザーへ書き換えない
+
 ## 実行フロー（要点）
 
 1. 対象リポジトリを `WORKSPACE_DIR` にクローン
