@@ -256,19 +256,16 @@ See [ai-agent-execution.md](contracts/ai-agent-execution.md) for Pod configurati
 
 ### Managing Dependencies
 
-To create task dependencies, include in Issue body or comment:
+To create task dependencies, use GitHub's native Issue Dependencies feature:
 
-```markdown
-This issue depends on #123 and #456
-```
+1. Navigate to the Issue in GitHub UI
+2. In the right sidebar, find "Dependencies" section
+3. Click "Add dependency" to link blocking/blocked issues
+4. Dependencies are managed through GitHub's structured API
 
-Or:
+The system fetches dependency information from GitHub Issue Dependencies API (`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by` and `/blocking`) and won't start execution until all blocking dependencies are closed.
 
-```markdown
-blocked by #123
-```
-
-The system parses these and won't start execution until dependencies are closed.
+**Note**: Dependencies are tracked through GitHub's native feature, not text parsing. This ensures reliable and structured dependency management.
 
 ### Manual Operations (CLI)
 

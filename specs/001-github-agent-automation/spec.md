@@ -138,7 +138,7 @@ PR が承認状態になったら自動でマージする。
   「@codex review」のみを本文に含む新規コメントを投稿した場合は、それ自体が再レビュー依頼となるためシステムは別途依頼を送信しない（編集・削除は無視、冪等実行） (MUST)
 - FR-011: 承認要件は、Codex ボットが PR に「Codex Review: Didn't find any major issues.」という本文のコメント（または同等内容のレビュー）を投稿した時点で approve と見なす。ただしマージには別途 CI 成功が必須。コメント本文の検知を一次根拠とし、投稿者が Codex ボットであることを確認する（必要に応じて Reviews API の state=APPROVED を補助として用いる） (MUST)
 - FR-012: 同時実行の上限は設けない（無制限）。ただし重複・競合の回避は Issue 起票側の
-  運用で考慮し、依存関係は Issue の blocked by / blocking 情報に基づいて実行順序を
+  運用で考慮し、依存関係は GitHub Issue Dependencies API（`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by` および `/blocking`）で取得した構造化データに基づいて実行順序を
   決定する (MUST)
 - FR-013: 依存関係に反する実行（下流先行など）が検出された場合は当該実行を保留にし、
   ブロック解除イベントで再開する (MUST)
@@ -156,7 +156,7 @@ PR が承認状態になったら自動でマージする。
 - FR-021: PR/ブランチ単位の操作はロックを取得して実行し、重複操作（PR 作成、コメント投稿、レビュー依頼、マージ）を防止する (MUST)
 - FR-022: 再試行には総経過時間上限および各試行のタイムアウトを設定し、いずれかの上限到達時は失敗として扱う (MUST)
 - FR-023: データストアは MySQL を使用し、データアクセスは GORM を用い、マイグレーションは goose を用いる (MUST)
-- FR-024: 依存関係は GitHub Issue の blocked by / blocking フィールドを一次情報として利用する (MUST)
+- FR-024: 依存関係は GitHub Issue Dependencies API（`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by` および `/blocking`）を使用して取得した構造化データを一次情報として利用する (MUST)
 
 ### Webhook Events (authoritative)
 
