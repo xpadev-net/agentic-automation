@@ -105,6 +105,11 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 			continue
 		}
 
+		// Only consider issues that are still open; skip closed ones
+		if iss.State != "open" {
+			continue
+		}
+
 		// Skip if this issue has any AgentRun in queued/started/succeeded
 		runs, runsErr := r.agents.GetByIssueID(iss.ID)
 		if runsErr != nil {
