@@ -344,7 +344,7 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, prNumbe
 }
 
 // CreatePullRequest creates a new GitHub pull request
-func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base, head, title, body string) (*github.PullRequest, error) {
+func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base, head, title, body string, issueNumber *int) (*github.PullRequest, error) {
 	c.logger.Info("Creating GitHub pull request",
 		zap.String("owner", owner),
 		zap.String("repo", repo),
@@ -353,12 +353,15 @@ func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base
 		zap.String("title", title),
 	)
 
-	newPR := &github.NewPullRequest{
-		Title: &title,
-		Head:  &head,
-		Base:  &base,
-		Body:  &body,
-	}
+    newPR := &github.NewPullRequest{
+        Title: &title,
+        Head:  &head,
+        Base:  &base,
+        Body:  &body,
+    }
+    if issueNumber != nil {
+        newPR.Issue = issueNumber
+    }
 
 	pr, resp, err := c.PullRequests.Create(ctx, owner, repo, newPR)
 	if err != nil {
