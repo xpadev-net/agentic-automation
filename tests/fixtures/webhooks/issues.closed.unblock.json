@@ -1,0 +1,15 @@
+{
+  "action": "closed",
+  "issue": {
+    "number": 1,
+    "state": "closed"
+  },
+  "repository": {
+    "full_name": "o/r"
+  },
+  "sender": {
+    "login": "alice"
+  }
+}
+
+
