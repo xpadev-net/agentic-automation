@@ -237,8 +237,8 @@
 
 ### Tests for User Story 4 (Test-First Development)
 
-- [ ] T118 [P] [US4] Write unit tests for MergeConditionChecker (DoD validation)
-- [ ] T119 [P] [US4] Write unit tests for AutoMergeService (GitHub merge API call)
+- [x] T118 [P] [US4] Write unit tests for MergeConditionChecker (DoD validation)
+- [x] T119 [P] [US4] Write unit tests for AutoMergeService (GitHub merge API call)
 - [ ] T120 [US4] Write integration test for approve + CI success → auto-merge flow
 
 **Checkpoint**: All user stories 1-4 should now be independently functional - complete automation from comment to merge
