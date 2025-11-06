@@ -577,6 +577,7 @@ func Test_ApproveAndCISuccess_TriggersAutoMerge(t *testing.T) {
 		if sqlDB != nil {
 			_ = sqlDB.Close()
 		}
+		config.ResetDBForTesting()
 	}()
 	config.SetDBForTesting(db)
 
@@ -707,6 +708,7 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 		if sqlDB != nil {
 			_ = sqlDB.Close()
 		}
+		config.ResetDBForTesting()
 	}()
 	config.SetDBForTesting(db)
 
