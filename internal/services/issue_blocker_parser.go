@@ -58,7 +58,7 @@ func ParseIssueBlockers(body string, ctx RepoContext) (ParseResult, error) {
 		// Process all occurrences of the phrases within the same line.
 		// blocked by
 		for _, loc := range reBlockedBy.FindAllStringIndex(line, -1) {
-			section := line[loc[1]:]
+			section := sliceSection(line, loc[1:])
 			refs := extractIssueReferences(section, ctx)
 			for _, r := range refs {
 				key := dedupeKey(r)
@@ -72,7 +72,7 @@ func ParseIssueBlockers(body string, ctx RepoContext) (ParseResult, error) {
 
 		// blocking
 		for _, loc := range reBlocking.FindAllStringIndex(line, -1) {
-			section := line[loc[1]:]
+			section := sliceSection(line, loc[1:])
 			refs := extractIssueReferences(section, ctx)
 			for _, r := range refs {
 				key := dedupeKey(r)
@@ -88,18 +88,72 @@ func ParseIssueBlockers(body string, ctx RepoContext) (ParseResult, error) {
 	return result, nil
 }
 
+// sliceSection returns substring starting at given start index until earliest of:
+// next comma, next phrase occurrence (blocked by/blocking), or line end.
+func sliceSection(line string, startIdx []int) string {
+	start := startIdx[0]
+	// Default end: next phrase occurrence or end of line
+	end := len(line)
+	if loc := reBlockedBy.FindStringIndex(line[start:]); loc != nil {
+		if start+loc[0] < end {
+			end = start + loc[0]
+		}
+	}
+	if loc := reBlocking.FindStringIndex(line[start:]); loc != nil {
+		if start+loc[0] < end {
+			end = start + loc[0]
+		}
+	}
+
+	// Consider comma as boundary ONLY if there is no reference before the comma
+	if i := strings.IndexByte(line[start:end], ','); i >= 0 {
+		commaEnd := start + i
+		segment := line[start:commaEnd]
+		hasRef := reIssueURL.MatchString(segment) || reOwnerRepo.MatchString(segment) || reLocalIssue.MatchString(segment)
+		if !hasRef {
+			end = commaEnd
+		}
+	}
+
+	if end < start {
+		end = start
+	}
+	return line[start:end]
+}
+
 func extractIssueReferences(text string, ctx RepoContext) []IssueReference {
 	var out []IssueReference
 
-	// First, URLs
-	for _, m := range reIssueURL.FindAllStringSubmatch(text, -1) {
-		owner := m[1]
-		repo := m[2]
-		num, _ := strconv.Atoi(m[3])
-		out = append(out, IssueReference{Owner: owner, Repo: repo, Number: num})
+	// Collect spans for owner/repo# and URL to mask before local search
+	type span struct{ s, e int }
+	var ownerRepoSpans []span
+	var urlSpans []span
+	for _, loc := range reOwnerRepo.FindAllStringIndex(text, -1) {
+		ownerRepoSpans = append(ownerRepoSpans, span{loc[0], loc[1]})
+	}
+	for _, loc := range reIssueURL.FindAllStringIndex(text, -1) {
+		urlSpans = append(urlSpans, span{loc[0], loc[1]})
 	}
 
-	// Then, owner/repo#num
+	// Mask those spans
+	b := []byte(text)
+	for _, sp := range append(append([]span{}, ownerRepoSpans...), urlSpans...) {
+		for i := sp.s; i < sp.e && i < len(b); i++ {
+			b[i] = ' '
+		}
+	}
+
+	// 1) Local #num (preferred order)
+	for _, m := range reLocalIssue.FindAllSubmatchIndex(b, -1) {
+		if ctx.Owner == "" || ctx.Repo == "" {
+			continue
+		}
+		numStr := string(b[m[2]:m[3]])
+		num, _ := strconv.Atoi(numStr)
+		out = append(out, IssueReference{Owner: ctx.Owner, Repo: ctx.Repo, Number: num})
+	}
+
+	// 2) owner/repo#num in original text order
 	for _, m := range reOwnerRepo.FindAllStringSubmatch(text, -1) {
 		owner := m[1]
 		repo := m[2]
@@ -107,14 +161,12 @@ func extractIssueReferences(text string, ctx RepoContext) []IssueReference {
 		out = append(out, IssueReference{Owner: owner, Repo: repo, Number: num})
 	}
 
-	// Finally, #num (use context)
-	for _, m := range reLocalIssue.FindAllStringSubmatch(text, -1) {
-		if ctx.Owner == "" || ctx.Repo == "" {
-			// Without context, skip local references.
-			continue
-		}
-		num, _ := strconv.Atoi(m[1])
-		out = append(out, IssueReference{Owner: ctx.Owner, Repo: ctx.Repo, Number: num})
+	// 3) URLs in original text order
+	for _, m := range reIssueURL.FindAllStringSubmatch(text, -1) {
+		owner := m[1]
+		repo := m[2]
+		num, _ := strconv.Atoi(m[3])
+		out = append(out, IssueReference{Owner: owner, Repo: repo, Number: num})
 	}
 
 	return out
