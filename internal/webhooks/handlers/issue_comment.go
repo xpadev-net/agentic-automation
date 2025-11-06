@@ -657,6 +657,32 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			c.Error(verr)
 			return
 		}
+		// Defensive: if no error but blocked deps exist, treat as violation and notify
+		if vr != nil && len(vr.BlockedDeps) > 0 {
+			if githubNotificationService != nil {
+				idempotencyKey := agentRun.IdempotencyKey
+				if idempotencyKey == "" {
+					idempotencyKey = fmt.Sprintf("%s#%d:%d", payload.Repository.FullName, payload.Issue.Number, len(vr.BlockedDeps))
+				}
+				prNumber := 0
+				pullRequestRepo := repositories.NewPullRequestRepository(db)
+				prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
+				if prErr == nil && len(prs) > 0 {
+					prNumber = prs[0].Number
+				}
+				if notifyErr := githubNotificationService.NotifyDependencyViolation(
+					ctx, owner, repo, payload.Issue.Number, prNumber, vr.BlockedDeps, idempotencyKey,
+				); notifyErr != nil {
+					logger.Warn("Failed to post dependency violation notification (defensive path)",
+						zap.Error(notifyErr),
+						zap.Int("issue_number", payload.Issue.Number),
+						zap.String("repo", payload.Repository.FullName),
+					)
+				}
+			}
+			c.Error(services.ErrBlockedDependencies)
+			return
+		}
 	} else {
 		logger.Info("Skipping dependency validation: GitHub client not provided",
 			zap.String("delivery_id", deliveryID),

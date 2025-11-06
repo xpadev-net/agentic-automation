@@ -56,6 +56,12 @@ func (s *StubGitHubNotification) PostExecutionStartComment(ctx context.Context, 
 	return s.Err
 }
 
+// NotifyDependencyViolation satisfies handlers.GitHubNotification for integration tests
+func (s *StubGitHubNotification) NotifyDependencyViolation(ctx context.Context, owner, repo string, issueNumber, prNumber int, blocked []models.Issue, idempotencyKey string) error {
+	s.Called = true
+	return s.Err
+}
+
 // CreatedJobInfo represents information about a Job created by StubKubernetesJobService
 type CreatedJobInfo struct {
 	AgentRunID int
