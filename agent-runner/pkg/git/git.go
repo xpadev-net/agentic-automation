@@ -303,14 +303,13 @@ LIST_SUCCESS:
 	}
 	// Fallback to main if default branch retrieval failed and master fails later
 	title := fmt.Sprintf("Fix: issue #%d", issueNumber)
-	body := "自動生成: エージェントによる修正"
+	body := fmt.Sprintf("自動生成: エージェントによる修正\n\nclose #%d", issueNumber)
 
 	newPR := &github.NewPullRequest{
 		Title: &title,
 		Head:  &branchName,
 		Base:  &base,
 		Body:  &body,
-		Issue: &issueNumber,
 	}
 
 	pr, resp, err := client.PullRequests.Create(ctx, owner, repoName, newPR)

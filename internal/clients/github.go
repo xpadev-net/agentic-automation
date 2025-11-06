@@ -353,14 +353,21 @@ func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base
 		zap.String("title", title),
 	)
 
+	// If issueNumber is provided, append "close #123" to body
+	finalBody := body
+	if issueNumber != nil {
+		if finalBody != "" {
+			finalBody = fmt.Sprintf("%s\n\nclose #%d", finalBody, *issueNumber)
+		} else {
+			finalBody = fmt.Sprintf("close #%d", *issueNumber)
+		}
+	}
+
 	newPR := &github.NewPullRequest{
 		Title: &title,
 		Head:  &head,
 		Base:  &base,
-		Body:  &body,
-	}
-	if issueNumber != nil {
-		newPR.Issue = issueNumber
+		Body:  &finalBody,
 	}
 
 	pr, resp, err := c.PullRequests.Create(ctx, owner, repo, newPR)
