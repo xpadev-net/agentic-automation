@@ -3,6 +3,9 @@ package webhooks
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -153,7 +156,7 @@ func TestIssueComment_BlockedDependencies_PreventsStart(t *testing.T) {
 	req := httptest.NewRequest("POST", "/webhooks/issue_comment", bytes.NewBuffer(b))
 	req.Header.Set("X-GitHub-Delivery", "dep-block-1")
 	// HMAC
-	mac := middleware.GenerateHMACForTesting(b, "sec")
+	mac := generateHMACForTesting(b, "sec")
 	req.Header.Set("X-Hub-Signature-256", mac)
 
 	w := httptest.NewRecorder()
@@ -163,4 +166,11 @@ func TestIssueComment_BlockedDependencies_PreventsStart(t *testing.T) {
 	var run models.AgentRun
 	require.NoError(t, db.Where("idempotency_key = ?", "dep-block-1").First(&run).Error)
 	assert.Equal(t, "queued", run.State)
+}
+
+// generateHMACForTesting mimics GitHub's sha256 signature header value.
+func generateHMACForTesting(payload []byte, secret string) string {
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write(payload)
+	return "sha256=" + hex.EncodeToString(h.Sum(nil))
 }
