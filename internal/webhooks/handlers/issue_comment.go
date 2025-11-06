@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -130,6 +131,7 @@ type IssueContext interface {
 
 type GitHubNotification interface {
 	PostExecutionStartComment(ctx context.Context, owner, repo string, issueNumber int, agentType string, agentRunID int) error
+	NotifyDependencyViolation(ctx context.Context, owner, repo string, issueNumber, prNumber int, blocked []models.Issue, idempotencyKey string) error
 }
 
 type IssueCommentDeps struct {
@@ -612,6 +614,43 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					zap.Int("blocked_count", len(vr.BlockedDeps)),
 					zap.Strings("blocked_deps", summarizeIssuesForLog(vr.BlockedDeps)),
 				)
+
+				// Post dependency violation notification (US5 T129)
+				if githubNotificationService != nil {
+					// Get idempotency key
+					idempotencyKey := agentRun.IdempotencyKey
+					if idempotencyKey == "" {
+						// Fallback if idempotency key is empty
+						idempotencyKey = fmt.Sprintf("%s#%d:%d", payload.Repository.FullName, payload.Issue.Number, len(vr.BlockedDeps))
+					}
+
+					// Get PR number if exists
+					prNumber := 0
+					pullRequestRepo := repositories.NewPullRequestRepository(db)
+					prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
+					if prErr == nil && len(prs) > 0 {
+						// Use the first PR if multiple exist
+						prNumber = prs[0].Number
+					}
+
+					// Post notification (errors are logged but don't block the error return)
+					if notifyErr := githubNotificationService.NotifyDependencyViolation(
+						ctx,
+						owner,
+						repo,
+						payload.Issue.Number,
+						prNumber,
+						vr.BlockedDeps,
+						idempotencyKey,
+					); notifyErr != nil {
+						logger.Warn("Failed to post dependency violation notification",
+							zap.Error(notifyErr),
+							zap.Int("issue_number", payload.Issue.Number),
+							zap.String("repo", payload.Repository.FullName),
+						)
+					}
+				}
+
 				c.Error(verr)
 				return
 			}

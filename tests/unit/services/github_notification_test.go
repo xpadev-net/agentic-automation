@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 	testmocks "agentic-automation/tests/mocks"
 	"context"
@@ -416,6 +417,188 @@ func TestNotifyRetryProgress_PROnly(t *testing.T) {
 
 	ctx := context.Background()
 	err := svc.NotifyRetryProgress(ctx, "org", "repo", 0, 20, 2, 50, "Error", "key2")
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Equal(t, 20, posts[0].Number)
+}
+
+// -----------------------------------------------------------------------------
+// Dependency Violation Notification Tests (US5 T129)
+// -----------------------------------------------------------------------------
+
+func TestFormatDependencyViolationBody_SingleIssue(t *testing.T) {
+	blocked := []models.Issue{
+		{Repo: "owner/repo", Number: 123, State: "open"},
+	}
+	marker := "<!-- agent:dependency-violation:key1 -->"
+	result := services.FormatDependencyViolationBody(blocked, marker)
+
+	require.Contains(t, result, marker)
+	require.Contains(t, result, "❌ Dependency violation")
+	require.Contains(t, result, "owner/repo#123 [open]")
+	require.Contains(t, result, "Close all blocking issues to proceed.")
+}
+
+func TestFormatDependencyViolationBody_MultipleIssues(t *testing.T) {
+	blocked := []models.Issue{
+		{Repo: "owner/repo", Number: 1, State: "open"},
+		{Repo: "owner/repo", Number: 2, State: "open"},
+		{Repo: "owner/repo", Number: 3, State: "open"},
+	}
+	marker := "<!-- agent:dependency-violation:key2 -->"
+	result := services.FormatDependencyViolationBody(blocked, marker)
+
+	require.Contains(t, result, "owner/repo#1 [open]")
+	require.Contains(t, result, "owner/repo#2 [open]")
+	require.Contains(t, result, "owner/repo#3 [open]")
+	require.NotContains(t, result, "... and")
+}
+
+func TestFormatDependencyViolationBody_MoreThanMaxShows(t *testing.T) {
+	blocked := make([]models.Issue, 15)
+	for i := 0; i < 15; i++ {
+		blocked[i] = models.Issue{Repo: "owner/repo", Number: i + 1, State: "open"}
+	}
+	marker := "<!-- agent:dependency-violation:key3 -->"
+	result := services.FormatDependencyViolationBody(blocked, marker)
+
+	// Should show first 10
+	require.Contains(t, result, "owner/repo#1 [open]")
+	require.Contains(t, result, "owner/repo#10 [open]")
+	// Should not show 11th
+	require.NotContains(t, result, "owner/repo#11 [open]")
+	// Should show summary
+	require.Contains(t, result, "... and 5 more")
+}
+
+func TestNotifyDependencyViolation_NewPostsToIssueAndPR(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	blocked := []models.Issue{
+		{Repo: "owner/repo", Number: 100, State: "open"},
+		{Repo: "owner/repo", Number: 101, State: "open"},
+	}
+
+	ctx := context.Background()
+	err := svc.NotifyDependencyViolation(ctx, "owner", "repo", 10, 20, blocked, "delivery-1")
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 2)
+
+	seenIssue := false
+	seenPR := false
+	for _, p := range posts {
+		if p.Number == 10 {
+			seenIssue = true
+			require.Contains(t, p.Body, "<!-- agent:dependency-violation:delivery-1 -->")
+			require.Contains(t, p.Body, "❌ Dependency violation")
+			require.Contains(t, p.Body, "owner/repo#100 [open]")
+			require.Contains(t, p.Body, "owner/repo#101 [open]")
+		}
+		if p.Number == 20 {
+			seenPR = true
+			require.Contains(t, p.Body, "<!-- agent:dependency-violation:delivery-1 -->")
+		}
+	}
+	require.True(t, seenIssue)
+	require.True(t, seenPR)
+}
+
+func TestNotifyDependencyViolation_UpdatesExistingComment(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	idem := "test-key"
+	marker := "<!-- agent:dependency-violation:" + idem + " -->"
+	mock.Seed(100, marker+"\nOld comment")
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	blocked := []models.Issue{
+		{Repo: "owner/repo", Number: 200, State: "open"},
+	}
+
+	ctx := context.Background()
+	err := svc.NotifyDependencyViolation(ctx, "o", "r", 100, 0, blocked, idem)
+	require.NoError(t, err)
+
+	// Should have one update (PATCH) call
+	updates := mock.Updates()
+	require.Len(t, updates, 1)
+	require.Equal(t, int64(100), updates[0].CommentID)
+	require.Contains(t, updates[0].Body, marker)
+	require.Contains(t, updates[0].Body, "owner/repo#200 [open]")
+}
+
+func TestNotifyDependencyViolation_InputValidation(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	ctx := context.Background()
+
+	// Empty blocked list
+	err := svc.NotifyDependencyViolation(ctx, "o", "r", 10, 20, []models.Issue{}, "key")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "blocked issues list must not be empty")
+
+	// Empty idempotencyKey
+	blocked := []models.Issue{
+		{Repo: "owner/repo", Number: 1, State: "open"},
+	}
+	err = svc.NotifyDependencyViolation(ctx, "o", "r", 10, 20, blocked, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "idempotencyKey must not be empty")
+}
+
+func TestNotifyDependencyViolation_IssueOnly(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	blocked := []models.Issue{
+		{Repo: "owner/repo", Number: 1, State: "open"},
+	}
+
+	ctx := context.Background()
+	err := svc.NotifyDependencyViolation(ctx, "org", "repo", 10, 0, blocked, "key1")
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Equal(t, 10, posts[0].Number)
+}
+
+func TestNotifyDependencyViolation_PROnly(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+
+	blocked := []models.Issue{
+		{Repo: "owner/repo", Number: 1, State: "open"},
+	}
+
+	ctx := context.Background()
+	err := svc.NotifyDependencyViolation(ctx, "org", "repo", 0, 20, blocked, "key2")
 	require.NoError(t, err)
 
 	posts := mock.Posts()
