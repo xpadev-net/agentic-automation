@@ -138,6 +138,9 @@ func handleGitHubWebhook(c *gin.Context) {
 	case models.EventTypeIssueComment:
 		handlers.HandleIssueComment(c)
 		return
+	case models.EventTypeIssues:
+		handlers.HandleIssues(c)
+		return
 	case models.EventTypePullRequestReviewComment:
 		handlers.HandlePullRequestReviewComment(c)
 		return
