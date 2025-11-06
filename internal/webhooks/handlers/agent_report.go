@@ -229,19 +229,20 @@ func HandleAgentReport(c *gin.Context) {
 	if req.Status == "failed" {
 		var parts []string
 		if strings.TrimSpace(req.ErrorMessage) != "" {
-			parts = append(parts, strings.TrimSpace(req.ErrorMessage))
+			parts = append(parts, strings.TrimSpace(utils.SanitizeUTF8(req.ErrorMessage)))
 		}
 		summary, excerpt := utils.ExtractErrorSummary(req.Logs, utils.ErrSummaryMaxLines, utils.ErrSummaryMaxBytes)
+		summary = utils.SanitizeUTF8(summary)
+		excerpt = utils.SanitizeUTF8(excerpt)
 		if strings.TrimSpace(summary) != "" {
 			parts = append(parts, strings.TrimSpace(summary))
 		}
 		if len(parts) > 0 {
 			combined := strings.Join(parts, "\n---\n")
 			// Ensure combined stays within ErrSummaryMaxBytes for safety
-			trimmed := combined
-			if len(trimmed) > utils.ErrSummaryMaxBytes {
-				trimmed = trimmed[:utils.ErrSummaryMaxBytes]
-			}
+			limit := utils.GetDBOutputLimitBytes()
+			sanitized := utils.SanitizeUTF8(combined)
+			trimmed := utils.TruncateWithSuffix(sanitized, limit, "… [truncated]")
 			agentRun.ErrorMessage = &trimmed
 			finalErrorMessage = trimmed
 			preview := trimmed
@@ -284,7 +285,23 @@ func HandleAgentReport(c *gin.Context) {
 	}
 
 	if outBytes, mErr := json.Marshal(outputPayload); mErr == nil {
-		agentRun.Output = datatypes.JSON(outBytes)
+		limit := utils.GetDBOutputLimitBytes()
+		if len(outBytes) > limit {
+			// replace with compact summary noting truncation to keep JSON valid
+			compact := map[string]any{
+				"schema_version": "1",
+				"status":         req.Status,
+				"agent_type":     req.AgentType,
+				"truncated":      true,
+			}
+			if b, err2 := json.Marshal(compact); err2 == nil {
+				agentRun.Output = datatypes.JSON(b)
+			} else {
+				agentRun.Output = datatypes.JSON(outBytes[:limit])
+			}
+		} else {
+			agentRun.Output = datatypes.JSON(outBytes)
+		}
 	} else {
 		logger.Warn("Failed to marshal structured output payload", zap.Error(mErr))
 	}
