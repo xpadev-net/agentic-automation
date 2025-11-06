@@ -251,7 +251,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 
 	// Step 4.5: Codex 承認コメント検知 → マージ条件再評価（@codex review トリガーと独立に実行）
 	detector := services.NewCodexApprovalDetector(logger)
-	if detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login) {
+	if detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login, payload.Comment.User.ID) {
 		logger.Info("Codex approval detected; re-evaluating merge conditions",
 			zap.String("delivery_id", deliveryID),
 			zap.Int("pr_number", payload.PullRequest.Number),

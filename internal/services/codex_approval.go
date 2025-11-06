@@ -4,6 +4,7 @@ package services
 import (
 	"agentic-automation/internal/config"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
@@ -20,19 +21,29 @@ const codexApprovalExactMatch = "Codex Review: Didn't find any major issues."
 type CodexApprovalDetector struct {
 	logger           *zap.Logger
 	codexBotUsername string
+	codexBotUserID   int64
 }
 
 // NewCodexApprovalDetector creates a new CodexApprovalDetector instance.
 // If logger is nil, it uses config.GetLogger().
-// The Codex bot username is read from CODEX_BOT_USERNAME environment variable (default: "codex-bot").
+// The Codex bot username is read from CODEX_BOT_USERNAME environment variable (default: "chatgpt-codex-connector[bot]").
+// The Codex bot user ID is read from CODEX_BOT_USER_ID environment variable (default: 199175422).
 func NewCodexApprovalDetector(logger *zap.Logger) *CodexApprovalDetector {
 	if logger == nil {
 		logger = config.GetLogger()
 	}
 
+	// Parse user ID from environment variable
+	userIDStr := config.GetEnv("CODEX_BOT_USER_ID", "199175422")
+	userID := int64(199175422) // default value
+	if parsedID, err := strconv.ParseInt(userIDStr, 10, 64); err == nil {
+		userID = parsedID
+	}
+
 	return &CodexApprovalDetector{
 		logger:           logger,
-		codexBotUsername: config.GetEnv("CODEX_BOT_USERNAME", "codex-bot"),
+		codexBotUsername: config.GetEnv("CODEX_BOT_USERNAME", "chatgpt-codex-connector[bot]"),
+		codexBotUserID:   userID,
 	}
 }
 
@@ -41,13 +52,17 @@ func NewCodexApprovalDetector(logger *zap.Logger) *CodexApprovalDetector {
 // - Regex pattern: "didn't find.*major issues" (case-insensitive)
 // - Exact match: "Codex Review: Didn't find any major issues." (case-insensitive)
 //
+// The reviewer is identified by either username or user ID:
+// - Username matching is case-insensitive and handles [bot] suffix variations
+// - User ID matching is exact
+//
 // Returns true if approval is detected, false otherwise.
 // Logs the detection result at Info level with approval_detected, reviewer_username,
-// and review_body_preview fields. The review_body_preview is limited to the first 100 characters
+// reviewer_user_id, and review_body_preview fields. The review_body_preview is limited to the first 100 characters
 // for security purposes.
-func (s *CodexApprovalDetector) DetectApproval(reviewBody string, reviewerUsername string) bool {
-	// 1. Validate reviewer username (case-insensitive)
-	if !strings.EqualFold(reviewerUsername, s.codexBotUsername) {
+func (s *CodexApprovalDetector) DetectApproval(reviewBody string, reviewerUsername string, reviewerUserID int64) bool {
+	// 1. Validate reviewer (by username or user ID)
+	if !s.isCodexBot(reviewerUsername, reviewerUserID) {
 		return false
 	}
 
@@ -74,10 +89,46 @@ func (s *CodexApprovalDetector) DetectApproval(reviewBody string, reviewerUserna
 	s.logger.Info("Codex approval detection result",
 		zap.Bool("approval_detected", detected),
 		zap.String("reviewer_username", reviewerUsername),
+		zap.Int64("reviewer_user_id", reviewerUserID),
 		zap.String("review_body_preview", preview),
 		zap.String("service", "codex_approval"),
 	)
 
 	// 5. Return detection result
 	return detected
+}
+
+// isCodexBot checks if the given username and user ID match the Codex bot.
+// It matches by username (case-insensitive, with [bot] suffix handling) or by user ID.
+func (s *CodexApprovalDetector) isCodexBot(username string, userID int64) bool {
+	// Check by user ID first (exact match)
+	if userID != 0 && userID == s.codexBotUserID {
+		return true
+	}
+
+	// Check by username (case-insensitive)
+	// Handle [bot] suffix: match both "chatgpt-codex-connector[bot]" and "chatgpt-codex-connector"
+	usernameNormalized := strings.ToLower(strings.TrimSpace(username))
+	expectedUsernameNormalized := strings.ToLower(strings.TrimSpace(s.codexBotUsername))
+
+	// Direct match
+	if usernameNormalized == expectedUsernameNormalized {
+		return true
+	}
+
+	// Match without [bot] suffix
+	// Remove [bot] suffix from both if present
+	removeBotSuffix := func(s string) string {
+		s = strings.TrimSuffix(s, "[bot]")
+		return strings.TrimSpace(s)
+	}
+
+	usernameWithoutSuffix := removeBotSuffix(usernameNormalized)
+	expectedUsernameWithoutSuffix := removeBotSuffix(expectedUsernameNormalized)
+
+	if usernameWithoutSuffix == expectedUsernameWithoutSuffix && usernameWithoutSuffix != "" {
+		return true
+	}
+
+	return false
 }
