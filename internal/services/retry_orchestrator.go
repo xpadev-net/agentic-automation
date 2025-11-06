@@ -288,14 +288,35 @@ func (r *RetryOrchestrator) TriggerRetry(
 	// Format prompt (no user instruction for retry)
 	prompt := r.issueContextService.FormatPrompt(issueContext, "")
 
+	// Get existing branch name from PR associated with issue (for continuing work on existing PR)
+	var existingBranchName string
+	prRepo := repositories.NewPullRequestRepository(config.GetDB())
+	prs, prErr := prRepo.FindByIssueID(issue.ID)
+	if prErr == nil && len(prs) > 0 {
+		// Use the first open PR if multiple exist
+		for _, pr := range prs {
+			if pr.Status == "open" {
+				existingBranchName = pr.Branch
+				r.logger.Info("Found existing PR for issue, will use existing branch for retry",
+					zap.Int("agent_run_id", agentRun.ID),
+					zap.Int("issue_id", issue.ID),
+					zap.Int("pr_number", pr.Number),
+					zap.String("branch", existingBranchName),
+				)
+				break
+			}
+		}
+	}
+
 	r.logger.Info("Creating retry Job for AgentRun",
 		zap.Int("agent_run_id", agentRun.ID),
 		zap.Int("retry_count", agentRun.RetryCount),
 		zap.Bool("has_feedback", feedback != nil),
+		zap.String("branch_name", existingBranchName),
 	)
 
 	// Create new Kubernetes Job with feedback
-	_, err = r.jobService.CreateJobForAgentRunWithFeedback(ctx, agentRun, issue, prompt, feedback)
+	_, err = r.jobService.CreateJobForAgentRunWithFeedback(ctx, agentRun, issue, prompt, feedback, existingBranchName)
 	if err != nil {
 		r.logger.Error("Failed to create retry Job",
 			zap.Int("agent_run_id", agentRun.ID),

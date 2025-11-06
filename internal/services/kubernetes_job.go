@@ -34,10 +34,11 @@ type KubernetesJobService interface {
 	//   - issue: Issue record (must not be nil)
 	//   - prompt: Formatted prompt string for the agent (must not be empty)
 	//   - feedback: AggregatedFeedback containing review feedback and CI logs (may be nil)
+	//   - branchName: Optional existing branch name to checkout (empty means create new branch)
 	// Returns:
 	//   - *batchv1.Job: Created Kubernetes Job, or nil on error
 	//   - error: Error if Job creation fails
-	CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback) (*batchv1.Job, error)
+	CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback, branchName string) (*batchv1.Job, error)
 }
 
 // kubernetesJobService implements KubernetesJobService interface
@@ -262,7 +263,7 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 }
 
 // CreateJobForAgentRunWithFeedback creates a Kubernetes Job with aggregated feedback for retry
-func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback) (*batchv1.Job, error) {
+func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback, branchName string) (*batchv1.Job, error) {
 	// Input validation
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil",
@@ -350,6 +351,7 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		AgentType:        agentRun.AgentType,
 		AgentRunnerImage: agentRunnerImage,
 		TimeoutMinutes:   timeoutMinutes,
+		BranchName:       branchName,
 	}
 
 	// Generate job name
