@@ -260,9 +260,9 @@
 - [x] T125 [US5] Implement webhook handler for issues events (closed/reopened) in internal/webhooks/handlers/issues.go
 - [x] T126 [US5] Create blocked task resolver finding unblocked tasks in internal/services/blocked_task.go
 - [x] T127 [US5] Implement dependency validation preventing out-of-order execution in internal/services/dependency_validator.go
-- [ ] T128 [US5] Implement automatic K8s Job trigger for unblocked tasks in internal/services/blocked_task.go
-- [ ] T129 [US5] Add GitHub status comment for dependency violations in internal/services/github_notification.go
-- [ ] T130 [US5] Add logging for blocker graph updates and task resumption in internal/services/blocked_task.go
+- [x] T128 [US5] Implement automatic K8s Job trigger for unblocked tasks in internal/services/blocked_task.go
+- [x] T129 [US5] Add GitHub status comment for dependency violations in internal/services/github_notification.go
+- [x] T130 [US5] Add logging for blocker graph updates and task resumption in internal/services/blocked_task.go
 
 ### Tests for User Story 5 (Test-First Development)
 
