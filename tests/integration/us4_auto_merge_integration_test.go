@@ -33,7 +33,8 @@ import (
 
 // setupDBForUS4 creates in-memory SQLite database with required tables for US4 auto-merge tests
 func setupDBForUS4(t *testing.T) *gorm.DB {
-	dsn := "file::memory:?cache=shared"
+	// Use :memory: (not shared) to avoid conflicts when tests run in parallel
+	dsn := ":memory:"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		NowFunc:                                  func() time.Time { return time.Now().UTC() },
 		DisableForeignKeyConstraintWhenMigrating: true,
