@@ -353,15 +353,15 @@ func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base
 		zap.String("title", title),
 	)
 
-    newPR := &github.NewPullRequest{
-        Title: &title,
-        Head:  &head,
-        Base:  &base,
-        Body:  &body,
-    }
-    if issueNumber != nil {
-        newPR.Issue = issueNumber
-    }
+	newPR := &github.NewPullRequest{
+		Title: &title,
+		Head:  &head,
+		Base:  &base,
+		Body:  &body,
+	}
+	if issueNumber != nil {
+		newPR.Issue = issueNumber
+	}
 
 	pr, resp, err := c.PullRequests.Create(ctx, owner, repo, newPR)
 	if err != nil {
