@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 
+	"agentic-automation/internal/clients"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/utils"
+	"encoding/json"
 	"gorm.io/gorm"
+	"time"
 )
 
 // BlockedTaskResolver locates tasks (issues) that have become unblocked
@@ -140,4 +143,119 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 	}
 
 	return result, nil
+}
+
+// TriggerJobsForUnblockedTasks resolves unblocked issues and triggers Kubernetes Jobs for each.
+// It uses the provided dependencies to ensure idempotent behavior and proper state transitions.
+// Note: This function intentionally does not write OperationLog entries due to current enum constraints.
+func TriggerJobsForUnblockedTasks(
+	ctx context.Context,
+	resolver BlockedTaskResolver,
+	issues *repositories.IssueRepository,
+	agents repositories.AgentRunRepository,
+	jobService KubernetesJobService,
+	stateMachine AgentRunStateMachine,
+	issueCtxSvc *IssueContextService,
+	ghClient *clients.Client,
+	owner, repo string,
+	eventIssueDBID int64,
+) error {
+	if ctx == nil {
+		return errors.New("context must not be nil")
+	}
+	if resolver == nil || issues == nil || agents == nil || jobService == nil || stateMachine == nil || issueCtxSvc == nil || ghClient == nil {
+		return errors.New("missing dependencies for TriggerJobsForUnblockedTasks")
+	}
+
+	// Resolve unblocked issues based on the current graph and DB state
+	candidates, err := resolver.FindUnblockedTasks(ctx, eventIssueDBID)
+	if err != nil {
+		return err
+	}
+
+	// Process each candidate
+	for _, is := range candidates {
+		// Respect context cancellation
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		// Filter by repository (owner/repo)
+		if is.Repo != owner+"/"+repo {
+			continue
+		}
+
+		// Double-check active/completed runs to avoid duplicate starts
+		runs, runsErr := agents.GetByIssueID(is.ID)
+		if runsErr != nil {
+			return fmt.Errorf("failed to load agent runs for issue %d: %w", is.ID, runsErr)
+		}
+		skip := false
+		for _, run := range runs {
+			if run == nil {
+				continue
+			}
+			s := run.State
+			if s == "queued" || s == "started" || s == "succeeded" {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		// Collect issue context and build prompt
+		issueCtx, ctxErr := issueCtxSvc.CollectIssueContext(ctx, owner, repo, is.Number)
+		if ctxErr != nil {
+			return fmt.Errorf("failed to collect issue context for #%d: %w", is.Number, ctxErr)
+		}
+		prompt := issueCtxSvc.FormatPrompt(issueCtx)
+
+		// Detect agent type
+		agentType := NewAgentTypeDetectorService(nil).DetectAgentType(&is)
+
+		// Prepare input payload (schema v1)
+		inputPayload := map[string]any{
+			"schema_version": "1",
+			"prompt":         prompt,
+			"agent_type":     agentType,
+			"issue": map[string]any{
+				"repo":           is.Repo,
+				"number":         is.Number,
+				"has_body":       issueCtx.Body != "",
+				"labels":         issueCtx.Labels,
+				"comments_count": len(issueCtx.Comments),
+			},
+		}
+		inputBytes, _ := json.Marshal(inputPayload)
+
+		// Create a fresh AgentRun (unique idempotency key per trigger to allow retries if previous failed)
+		idemp := fmt.Sprintf("unblock:%s#%d:%d", is.Repo, is.Number, time.Now().UnixNano())
+		newRun := &models.AgentRun{
+			IssueID:   is.ID,
+			State:     "queued",
+			AgentType: agentType,
+			Input:     inputBytes,
+			Output:    []byte("{}"),
+		}
+		agentRun, _, createErr := agents.CreateOrGet(idemp, newRun)
+		if createErr != nil {
+			return fmt.Errorf("failed to create agent run: %w", createErr)
+		}
+
+		// Transition to started before Job creation (align with comment-trigger flow)
+		if err := stateMachine.TransitionToStarted(agentRun.ID); err != nil {
+			return fmt.Errorf("failed to transition run %d to started: %w", agentRun.ID, err)
+		}
+
+		// Create Job
+		if _, err := jobService.CreateJobForAgentRun(ctx, agentRun, &is, prompt); err != nil {
+			// Rollback to queued for retry if job creation fails
+			_ = stateMachine.TransitionToQueued(agentRun.ID)
+			return fmt.Errorf("failed to create job for run %d: %w", agentRun.ID, err)
+		}
+	}
+
+	return nil
 }

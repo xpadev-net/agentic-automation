@@ -245,7 +245,15 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 		}
 	}
 
-	// TODO(T128): 実行トリガはT128で実装。T126では「ブロック解除タスクの特定」のみを担う。
+	// T128: ブロック解除タスクの自動起動
+	if deps.BlockedTaskResolver == nil {
+		// Wire default resolver via adapter
+		issueRepo := repositories.NewIssueRepository()
+		edgesRepo := repositories.NewBlockerGraphRepository()
+		agentRunRepo := repositories.NewAgentRunRepository(config.GetDB())
+		serviceResolver := services.NewBlockedTaskResolver(issueRepo, edgesRepo, agentRunRepo)
+		deps.BlockedTaskResolver = NewBlockedTaskResolverAdapter(serviceResolver, issueRepo)
+	}
 	if deps.BlockedTaskResolver != nil {
 		if err := deps.BlockedTaskResolver.ResolveAndMaybeTrigger(ctx, owner, repo, payload.Issue.Number); err != nil {
 			logger.Error("Blocked task resolve/trigger failed",

@@ -3,8 +3,11 @@ package handlers
 import (
 	"context"
 
+	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
+	"errors"
 )
 
 // blockedTaskResolverAdapter adapts services.BlockedTaskResolver to
@@ -39,11 +42,48 @@ func (a *blockedTaskResolverAdapter) ResolveAndMaybeTrigger(ctx context.Context,
 	repoKey := owner + "/" + repo
 	issue, err := a.issues.FindByRepoAndNumber(repoKey, issueNumber)
 	if err != nil {
-		// Let handler decide how to surface errors; return to be logged as accepted_with_errors
 		return err
 	}
 
-	// Delegate to service resolver (ignore returned issues here; T128 will trigger jobs)
-	_, err = a.resolver.FindUnblockedTasks(ctx, int64(issue.ID))
-	return err
+	// Build dependencies for triggering
+	logger := config.GetLogger()
+	db := config.GetDB()
+
+	agentRunRepo := repositories.NewAgentRunRepository(db)
+
+	// Initialize GitHub per-repo client
+	if appGitHubClient == nil {
+		return errors.New("github app client not initialized")
+	}
+	rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
+	if err != nil {
+		return err
+	}
+	ghClient := clients.NewFromGitHub(rawClient, logger)
+	issueCtxSvc := services.NewIssueContextService(ghClient, logger)
+
+	// Initialize Kubernetes job service
+	k8sClient, err := clients.NewKubernetesClient(logger)
+	if err != nil {
+		return err
+	}
+	jobSvc := services.NewKubernetesJobService(k8sClient, logger)
+
+	// State machine
+	sm := services.NewAgentRunStateMachine(agentRunRepo, logger)
+
+	// Trigger jobs for unblocked tasks
+	return services.TriggerJobsForUnblockedTasks(
+		ctx,
+		a.resolver,
+		a.issues,
+		agentRunRepo,
+		jobSvc,
+		sm,
+		issueCtxSvc,
+		ghClient,
+		owner,
+		repo,
+		int64(issue.ID),
+	)
 }
