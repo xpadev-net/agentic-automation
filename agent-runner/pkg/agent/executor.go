@@ -160,6 +160,9 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 	var outputBuf bytes.Buffer
 	var outputMu sync.Mutex
 
+	// Create log formatter for suppressing duplicate thinking logs
+	logFormatter := utils.NewLogFormatter()
+
 	// Channels for goroutine errors
 	stdoutErrCh := make(chan error, 1)
 	stderrErrCh := make(chan error, 1)
@@ -188,8 +191,11 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 				// If parsing fails, output the raw line with a warning
 				fmt.Fprintf(os.Stderr, "[PARSE ERROR] %v: %s\n", parseErr, string(lineCopy))
 			} else {
-				// Format and output the parsed entry
-				fmt.Fprintf(os.Stderr, "%s\n", entry.Format())
+				// Format and output the parsed entry with suppression of duplicate thinking progress logs
+				formatted, shouldOutput := logFormatter.FormatAndOutput(entry)
+				if shouldOutput {
+					fmt.Fprintf(os.Stderr, "%s\n", formatted)
+				}
 			}
 		}
 		if err := scanner.Err(); err != nil {

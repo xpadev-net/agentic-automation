@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
 
 // LogEntry represents a cursor agent log entry.
@@ -185,6 +186,52 @@ func (e *ResultEntry) Format() string {
 	return fmt.Sprintf("[RESULT] %s%s%s", status, duration, result)
 }
 
+// LogFormatter handles formatting and suppression of duplicate log entries.
+// It maintains state per session to suppress consecutive duplicate thinking progress logs.
+type LogFormatter struct {
+	mu                     sync.Mutex
+	lastFormattedBySession map[string]string
+}
+
+// NewLogFormatter creates a new LogFormatter instance.
+func NewLogFormatter() *LogFormatter {
+	return &LogFormatter{
+		lastFormattedBySession: make(map[string]string),
+	}
+}
+
+// ShouldOutput determines if a log entry should be output, suppressing duplicate
+// consecutive thinking progress logs for the same session.
+// formatted is the formatted string for the entry.
+func (lf *LogFormatter) ShouldOutput(entry LogEntry, formatted string) bool {
+	lf.mu.Lock()
+	defer lf.mu.Unlock()
+
+	sessionID := entry.GetSessionID()
+
+	if te, ok := entry.(*ThinkingEntry); ok {
+		// Only suppress when it's a processing (non-completed) thinking log
+		if te.Subtype != "completed" && formatted == "[THINKING] processing..." {
+			if last, ok := lf.lastFormattedBySession[sessionID]; ok && last == formatted {
+				// skip duplicate consecutive processing log for the same session
+				return false
+			}
+		}
+	}
+
+	// Update the last formatted entry for this session
+	lf.lastFormattedBySession[sessionID] = formatted
+	return true
+}
+
+// FormatAndOutput formats an entry and determines if it should be output.
+// Returns the formatted string and whether it should be output.
+func (lf *LogFormatter) FormatAndOutput(entry LogEntry) (string, bool) {
+	formatted := entry.Format()
+	shouldOutput := lf.ShouldOutput(entry, formatted)
+	return formatted, shouldOutput
+}
+
 // ParseLogEntry parses a single line of JSON log entry.
 // Returns a LogEntry interface and an error if parsing fails.
 func ParseLogEntry(line []byte) (LogEntry, error) {
@@ -251,9 +298,8 @@ func ParseLogEntry(line []byte) (LogEntry, error) {
 // ParseAndFormatOutput parses the stream-json output and formats it for human-readable logging.
 // It processes each line and writes formatted output to stderr.
 func ParseAndFormatOutput(output string) {
+	formatter := NewLogFormatter()
 	lines := strings.Split(output, "\n")
-	// sessionID -> last formatted line, used to suppress duplicate thinking progress logs
-	lastFormattedBySession := make(map[string]string)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -268,20 +314,9 @@ func ParseAndFormatOutput(output string) {
 		}
 
 		// Format and output the parsed entry with suppression of duplicate thinking progress logs
-		formatted := entry.Format()
-		sessionID := entry.GetSessionID()
-
-		if te, ok := entry.(*ThinkingEntry); ok {
-			// Only suppress when it's a processing (non-completed) thinking log
-			if te.Subtype != "completed" && formatted == "[THINKING] processing..." {
-				if last, ok := lastFormattedBySession[sessionID]; ok && last == formatted {
-					// skip duplicate consecutive processing log for the same session
-					continue
-				}
-			}
+		formatted, shouldOutput := formatter.FormatAndOutput(entry)
+		if shouldOutput {
+			fmt.Fprintf(os.Stderr, "%s\n", formatted)
 		}
-
-		fmt.Fprintf(os.Stderr, "%s\n", formatted)
-		lastFormattedBySession[sessionID] = formatted
 	}
 }
