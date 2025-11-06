@@ -268,7 +268,7 @@
 
 - [x] T131 [P] [US5] Write unit tests for IssueDependencyFetcher (GitHub API integration, error handling)
 - [x] T132 [P] [US5] Write unit tests for CircularDependencyDetector (cycle detection)
-- [ ] T133 [US5] Write integration test for Issue close → unblock → auto-trigger flow
+- [x] T133 [US5] Write integration test for Issue close → unblock → auto-trigger flow
 
 **Checkpoint**: All user stories should now be independently functional - complete system with dependency management
 
