@@ -1,0 +1,761 @@
+package integration
+
+import (
+	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
+	"agentic-automation/internal/models"
+	"agentic-automation/internal/repositories"
+	"agentic-automation/internal/services"
+	"agentic-automation/internal/webhooks/handlers"
+	"agentic-automation/internal/webhooks/middleware"
+	tu "agentic-automation/tests/integration/testutils"
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/go-github/v76/github"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
+
+// setupDBForUS4 creates in-memory SQLite database with required tables for US4 auto-merge tests
+func setupDBForUS4(t *testing.T) *gorm.DB {
+	dsn := "file::memory:?cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NowFunc:                                  func() time.Time { return time.Now().UTC() },
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
+	require.NoError(t, err)
+
+	// issues table
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS issues (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT,
+			number INTEGER,
+			github_issue_id INTEGER,
+			title TEXT,
+			body TEXT,
+			labels TEXT,
+			state TEXT DEFAULT 'open',
+			created_at DATETIME,
+			updated_at DATETIME
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_issue_repo_number ON issues(repo, number);
+		CREATE INDEX IF NOT EXISTS idx_issues_github_issue_id ON issues(github_issue_id);
+	`).Error)
+
+	// pull_requests table
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS pull_requests (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT,
+			number INTEGER,
+			issue_id INTEGER,
+			branch TEXT,
+			base_branch TEXT DEFAULT 'main',
+			status TEXT DEFAULT 'open',
+			mergeable BOOLEAN,
+			created_at DATETIME,
+			updated_at DATETIME
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_repo_number ON pull_requests(repo, number);
+		CREATE INDEX IF NOT EXISTS idx_pull_requests_issue_id ON pull_requests(issue_id);
+	`).Error)
+
+	// agent_runs table
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS agent_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			idempotency_key TEXT UNIQUE,
+			issue_id INTEGER,
+			pr_id INTEGER,
+			state TEXT DEFAULT 'queued',
+			agent_type TEXT DEFAULT 'claude-code',
+			input TEXT,
+			output TEXT,
+			retry_count INTEGER DEFAULT 0,
+			error_message TEXT,
+			commit_sha TEXT,
+			s3_session_key TEXT,
+			session_saved_at DATETIME,
+			started_at DATETIME,
+			completed_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runs_idempotency_key ON agent_runs(idempotency_key);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_issue_id ON agent_runs(issue_id);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_pr_id ON agent_runs(pr_id);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_state ON agent_runs(state);
+	`).Error)
+
+	// ci_status table
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS ci_status (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			pr_id INTEGER,
+			check_suite_id TEXT,
+			check_run_id TEXT,
+			name TEXT,
+			status TEXT DEFAULT 'queued',
+			conclusion TEXT,
+			logs TEXT,
+			logs_url TEXT,
+			started_at DATETIME,
+			completed_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		);
+		CREATE INDEX IF NOT EXISTS idx_ci_status_pr_id ON ci_status(pr_id);
+	`).Error)
+
+	// review_feedback table
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS review_feedback (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			pr_id INTEGER,
+			source TEXT DEFAULT 'Codex',
+			content TEXT,
+			status TEXT DEFAULT 'requested',
+			approval_detected BOOLEAN DEFAULT FALSE,
+			github_comment_id INTEGER,
+			created_at DATETIME,
+			updated_at DATETIME
+		);
+		CREATE INDEX IF NOT EXISTS idx_review_feedback_pr_id ON review_feedback(pr_id);
+	`).Error)
+
+	return db
+}
+
+// mockGitHubClient implements services.GitHubChecks interface for testing
+type mockGitHubClient struct {
+	headSHA        string
+	mergeable      *bool
+	mergeableState *string
+	checkRuns      []*github.CheckRun
+	mergeCalled    bool
+	mergeError     error
+	isMerged       bool
+	prsForCommit   []*github.PullRequest
+}
+
+// GetPullRequest returns a mock PR with the configured head SHA, mergeable, and mergeableState
+func (m *mockGitHubClient) GetPullRequest(ctx context.Context, owner, repo string, prNumber int) (*github.PullRequest, error) {
+	sha := m.headSHA
+	if sha == "" {
+		sha = "abc123def"
+	}
+	mergeable := true
+	if m.mergeable != nil {
+		mergeable = *m.mergeable
+	}
+	mergeableState := "clean"
+	if m.mergeableState != nil {
+		mergeableState = *m.mergeableState
+	}
+	return &github.PullRequest{
+		Head: &github.PullRequestBranch{
+			SHA: &sha,
+		},
+		Mergeable:      &mergeable,
+		MergeableState: &mergeableState,
+	}, nil
+}
+
+// ListCheckRunsForCheckSuite returns the configured check runs or a default success run
+func (m *mockGitHubClient) ListCheckRunsForCheckSuite(ctx context.Context, owner, repo string, checkSuiteID int64) ([]*github.CheckRun, error) {
+	if m.checkRuns != nil {
+		return m.checkRuns, nil
+	}
+	// default: one success run
+	status := "completed"
+	conclusion := "success"
+	return []*github.CheckRun{
+		{
+			Status:     &status,
+			Conclusion: &conclusion,
+		},
+	}, nil
+}
+
+// newCheckRun creates a new CheckRun with the given status and conclusion
+func newCheckRun(status, conclusion string) *github.CheckRun {
+	s := status
+	c := conclusion
+	return &github.CheckRun{
+		Status:     &s,
+		Conclusion: &c,
+	}
+}
+
+// verifyingAutoMergeService implements services.AutoMergeService interface for testing
+type verifyingAutoMergeService struct {
+	Called       bool
+	CallCount    int
+	LastOwner    string
+	LastRepo     string
+	LastPRNumber int
+	ReturnResult *services.AutoMergeResult
+	ReturnError  error
+}
+
+// AttemptAutoMerge records the call and returns the configured result
+func (v *verifyingAutoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo string, prNumber int) (*services.AutoMergeResult, error) {
+	v.Called = true
+	v.CallCount++
+	v.LastOwner = owner
+	v.LastRepo = repo
+	v.LastPRNumber = prNumber
+
+	if v.ReturnError != nil {
+		return nil, v.ReturnError
+	}
+
+	if v.ReturnResult != nil {
+		return v.ReturnResult, nil
+	}
+
+	// Default: return success
+	return &services.AutoMergeResult{
+		Merged:  true,
+		Message: "merged",
+	}, nil
+}
+
+// createPRWithIssue creates a test Issue and associated PullRequest in the database
+func createPRWithIssue(t *testing.T, db *gorm.DB, repo, branch string, mergeable bool) (*models.Issue, *models.PullRequest) {
+	body := "Test body"
+	issue := &models.Issue{
+		Repo:          repo,
+		Number:        123,
+		GitHubIssueID: 999123,
+		Title:         "Test Issue",
+		Body:          &body,
+		Labels:        "[]",
+		State:         "open",
+	}
+	require.NoError(t, db.Create(issue).Error)
+
+	issueID := issue.ID
+	pr := &models.PullRequest{
+		Repo:       repo,
+		Number:     456,
+		IssueID:    &issueID,
+		Branch:     branch,
+		BaseBranch: "main",
+		Status:     "open",
+		Mergeable:  &mergeable,
+	}
+	require.NoError(t, db.Create(pr).Error)
+
+	return issue, pr
+}
+
+// createCISuccess creates an aggregated CIStatus with success conclusion
+func createCISuccess(t *testing.T, db *gorm.DB, prID int, checkSuiteID int64, headSHA string) *models.CIStatus {
+	now := time.Now()
+	conclusion := "success"
+	ciStatus := &models.CIStatus{
+		PRID:         prID,
+		CheckSuiteID: strconv.FormatInt(checkSuiteID, 10),
+		Name:         "aggregated",
+		Status:       "completed",
+		Conclusion:   &conclusion,
+		CompletedAt:  &now,
+	}
+
+	ciRepo := repositories.NewCIStatusRepositoryWithDB(db)
+	require.NoError(t, ciRepo.CreateOrUpdate(ciStatus))
+	return ciStatus
+}
+
+// createCodexApproval creates a ReviewFeedback record with approval_detected=true
+func createCodexApproval(t *testing.T, db *gorm.DB, prID int, commentID int64) *models.ReviewFeedback {
+	content := "Codex Review: Didn't find any major issues."
+	feedback := &models.ReviewFeedback{
+		PRID:             prID,
+		Source:           "Codex",
+		Content:          &content,
+		Status:           "completed",
+		ApprovalDetected: true,
+		GitHubCommentID:  &commentID,
+	}
+
+	rfRepo := repositories.NewReviewFeedbackRepositoryWithDB(db)
+	require.NoError(t, rfRepo.Create(feedback))
+	return feedback
+}
+
+// dbCIProviderForTest implements services.CIStatusProvider backed by DB aggregation rows (test version)
+type dbCIProviderForTest struct {
+	prRepo *repositories.PullRequestRepository
+	ciRepo *repositories.CIStatusRepository
+	logger *zap.Logger
+}
+
+func (p *dbCIProviderForTest) GetAggregatedState(ctx context.Context, owner, repo string, prNumber int) (services.CIState, error) {
+	repoFull := owner + "/" + repo
+	pr, err := p.prRepo.FindByRepoAndNumber(repoFull, prNumber)
+	if err != nil || pr == nil {
+		return services.CIStateUnknown, err
+	}
+	statuses, err := p.ciRepo.FindByPRID(pr.ID)
+	if err != nil {
+		return services.CIStateUnknown, err
+	}
+	var chosen *models.CIStatus
+	for i := range statuses {
+		s := statuses[i]
+		if s.Name == "aggregated" {
+			chosen = &s
+			break
+		}
+	}
+	if chosen == nil {
+		// fallback aggregation: failed > pending > success > unknown
+		hasFailed := false
+		hasPending := false
+		hasAny := len(statuses) > 0
+		for i := range statuses {
+			s := statuses[i]
+			if s.Conclusion != nil {
+				if *s.Conclusion == "failure" || *s.Conclusion == "cancelled" {
+					hasFailed = true
+				}
+			} else if s.Status == "in_progress" || s.Status == "queued" {
+				hasPending = true
+			}
+		}
+		switch {
+		case hasFailed:
+			return services.CIStateFailed, nil
+		case hasPending:
+			return services.CIStatePending, nil
+		case hasAny:
+			return services.CIStateSuccess, nil
+		default:
+			return services.CIStateUnknown, nil
+		}
+	}
+	if chosen.Conclusion != nil {
+		switch *chosen.Conclusion {
+		case "success":
+			return services.CIStateSuccess, nil
+		case "failure", "cancelled":
+			return services.CIStateFailed, nil
+		}
+	}
+	if chosen.Status == "in_progress" || chosen.Status == "queued" {
+		return services.CIStatePending, nil
+	}
+	return services.CIStateUnknown, nil
+}
+
+// dbCodexCheckerForTest implements services.CodexApprovalChecker backed by ReviewFeedback (test version)
+type dbCodexCheckerForTest struct {
+	prRepo *repositories.PullRequestRepository
+	rfRepo *repositories.ReviewFeedbackRepository
+	logger *zap.Logger
+}
+
+func (c *dbCodexCheckerForTest) IsApproved(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
+	repoFull := owner + "/" + repo
+	pr, err := c.prRepo.FindByRepoAndNumber(repoFull, prNumber)
+	if err != nil || pr == nil {
+		return false, err
+	}
+	fbs, err := c.rfRepo.FindByApprovalDetected(pr.ID, true)
+	if err != nil {
+		return false, err
+	}
+	return len(fbs) > 0, nil
+}
+
+// sendCheckSuiteWebhook sends a check_suite webhook to the router
+func sendCheckSuiteWebhook(t *testing.T, router *gin.Engine, secret, deliveryID string, action string, conclusion *string, checkSuiteID int64, headBranch, headSHA string, prNumber int, repoFullName string) *httptest.ResponseRecorder {
+	payload := handlers.CheckSuitePayload{
+		Action: action,
+		CheckSuite: handlers.CheckSuite{
+			ID:         checkSuiteID,
+			Status:     "completed",
+			Conclusion: conclusion,
+			HeadBranch: headBranch,
+			HeadSHA:    headSHA,
+			PullRequests: []handlers.CheckSuitePullRequest{
+				{Number: prNumber},
+			},
+		},
+		Repository: handlers.CheckSuiteRepository{
+			FullName: repoFullName,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(body))
+	req.Header.Set("X-GitHub-Event", "check_suite")
+	req.Header.Set("X-GitHub-Delivery", deliveryID)
+	req.Header.Set("X-Hub-Signature-256", tu.ComputeGitHubSignature(secret, body))
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// sendStatusWebhook sends a status webhook to the router
+func sendStatusWebhook(t *testing.T, router *gin.Engine, secret, deliveryID string, state, sha, context, repoFullName, branch string) *httptest.ResponseRecorder {
+	payload := map[string]any{
+		"state":      state,
+		"sha":        sha,
+		"context":    context,
+		"repository": map[string]any{"full_name": repoFullName},
+		"branches":   []map[string]any{{"name": branch}},
+	}
+
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/webhooks/status", bytes.NewBuffer(body))
+	req.Header.Set("X-GitHub-Delivery", deliveryID)
+	req.Header.Set("X-Hub-Signature-256", tu.ComputeGitHubSignature(secret, body))
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// sendPRReviewCommentWebhook sends a pull_request_review_comment webhook to the router
+func sendPRReviewCommentWebhook(t *testing.T, router *gin.Engine, secret, deliveryID string, action string, commentBody, commentUser string, commentID int, prNumber int, repoFullName string) *httptest.ResponseRecorder {
+	payload := handlers.PullRequestReviewCommentPayload{
+		Action: action,
+		Comment: handlers.PullRequestReviewCommentComment{
+			ID:        commentID,
+			Body:      commentBody,
+			User:      handlers.User{Login: commentUser},
+			CreatedAt: time.Now().Format(time.RFC3339),
+		},
+		PullRequest: handlers.PullRequestReviewCommentPullRequest{
+			Number: prNumber,
+		},
+		Repository: handlers.PullRequestReviewCommentRepository{
+			FullName: repoFullName,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(body))
+	req.Header.Set("X-GitHub-Event", "pull_request_review_comment")
+	req.Header.Set("X-GitHub-Delivery", deliveryID)
+	req.Header.Set("X-Hub-Signature-256", tu.ComputeGitHubSignature(secret, body))
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// assertAutoMergeCalled verifies that the auto-merge service was called with the expected parameters
+func assertAutoMergeCalled(t *testing.T, service *verifyingAutoMergeService, owner, repo string, prNumber int) {
+	assert.True(t, service.Called, "AutoMergeService.AttemptAutoMerge should have been called")
+	assert.GreaterOrEqual(t, service.CallCount, 1, "AutoMergeService.AttemptAutoMerge should have been called at least once")
+	assert.Equal(t, owner, service.LastOwner, "AutoMergeService should have been called with correct owner")
+	assert.Equal(t, repo, service.LastRepo, "AutoMergeService should have been called with correct repo")
+	assert.Equal(t, prNumber, service.LastPRNumber, "AutoMergeService should have been called with correct PR number")
+}
+
+// assertMergeConditionResult verifies that the merge condition result matches the expected values
+func assertMergeConditionResult(t *testing.T, result services.MergeConditionResult, expectedMergeable bool, expectedCIState services.CIState, expectedCodexApproved bool, expectedConflict services.MergeConflictStatus) {
+	assert.Equal(t, expectedMergeable, result.Mergeable, "Mergeable should match expected value")
+	assert.Equal(t, expectedCIState, result.CIState, "CIState should match expected value")
+	assert.Equal(t, expectedCodexApproved, result.CodexApproved, "CodexApproved should match expected value")
+	assert.Equal(t, expectedConflict, result.Conflict, "Conflict status should match expected value")
+}
+
+// setupRouterForUS4 constructs a router with webhook handlers for US4 auto-merge tests
+func setupRouterForUS4(
+	logger *zap.Logger,
+	prRepo *repositories.PullRequestRepository,
+	ciRepo *repositories.CIStatusRepository,
+	rfRepo *repositories.ReviewFeedbackRepository,
+	mockGH *mockGitHubClient,
+	autoMergeService services.AutoMergeService,
+	mergeChecker services.MergeConditionChecker,
+) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.ErrorHandler())
+
+	// Status webhook handler
+	if autoMergeService == nil {
+		autoMergeService = &verifyingAutoMergeService{}
+	}
+	stDeps := handlers.StatusDeps{
+		Logger:           logger,
+		PullRequestRepo:  prRepo,
+		CIStatusRepo:     ciRepo,
+		MergeChecker:     mergeChecker,
+		AutoMergeService: autoMergeService,
+	}
+	r.POST("/webhooks/status",
+		middleware.VerifyWebhookSignature(),
+		middleware.IdempotencyMiddleware(),
+		func(c *gin.Context) { handlers.HandleStatusWithDeps(c, stDeps) },
+	)
+
+	// Check suite webhook handler
+	csDeps := handlers.CheckSuiteDeps{
+		Logger:                logger,
+		PullRequestRepository: prRepo,
+		CIStatusRepository:    ciRepo,
+	}
+	r.POST("/webhooks/github",
+		middleware.VerifyWebhookSignature(),
+		middleware.IdempotencyMiddleware(),
+		func(c *gin.Context) {
+			event := c.GetHeader("X-GitHub-Event")
+			switch event {
+			case "check_suite":
+				handlers.HandleCheckSuiteWithDeps(c, csDeps)
+			case "pull_request_review_comment":
+				prrcDeps := handlers.PullRequestReviewCommentDeps{
+					Logger:                   logger,
+					PullRequestRepository:    prRepo,
+					ReviewFeedbackRepository: rfRepo,
+					MergeConditionChecker:    mergeChecker,
+					AutoMergeService:         autoMergeService,
+				}
+				handlers.HandlePullRequestReviewCommentWithDeps(c, prrcDeps)
+			default:
+				c.JSON(http.StatusBadRequest, gin.H{"error": "unknown event type"})
+			}
+		},
+	)
+
+	return r
+}
+
+// Test_ApproveAndCISuccess_TriggersAutoMerge tests the auto-merge flow when
+// Codex approval and CI success conditions are met via status webhook.
+func Test_ApproveAndCISuccess_TriggersAutoMerge(t *testing.T) {
+	// Setup environment
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	defer os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+
+	logger := zaptest.NewLogger(t)
+	config.SetLoggerForTesting(logger)
+
+	db := setupDBForUS4(t)
+	defer func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	config.SetDBForTesting(db)
+
+	// Create test data
+	repo := "test-org/test-repo"
+	branch := "feature/issue-123"
+	headSHA := "abc123def"
+	_, pr := createPRWithIssue(t, db, repo, branch, true)
+
+	// Create CI success status
+	checkSuiteID := int64(1001)
+	createCISuccess(t, db, pr.ID, checkSuiteID, headSHA)
+
+	// Create Codex approval
+	commentID := int64(999)
+	createCodexApproval(t, db, pr.ID, commentID)
+
+	// Setup repositories
+	prRepo := repositories.NewPullRequestRepository(db)
+	ciRepo := repositories.NewCIStatusRepositoryWithDB(db)
+	rfRepo := repositories.NewReviewFeedbackRepositoryWithDB(db)
+
+	// Setup mock GitHub client for MergeConflictDetector
+	mergeableTrue := true
+	cleanState := "clean"
+	mockGH := &mockGitHubClient{
+		headSHA:        headSHA,
+		mergeable:      &mergeableTrue,
+		mergeableState: &cleanState,
+	}
+
+	// Create a mock *github.Client wrapped in clients.Client
+	// Use a custom HTTP transport that returns mock PR data
+	mockTransport := &mockPRTransport{
+		headSHA:        headSHA,
+		mergeable:      true,
+		mergeableState: "clean",
+	}
+	mockHTTPClient := &http.Client{Transport: mockTransport}
+	mockGitHubRawClient := github.NewClient(mockHTTPClient)
+	githubClient := clients.NewFromGitHub(mockGitHubRawClient, logger)
+
+	// Setup services
+	ciProvider := &dbCIProviderForTest{prRepo: prRepo, ciRepo: ciRepo, logger: logger}
+	codexChecker := &dbCodexCheckerForTest{prRepo: prRepo, rfRepo: rfRepo, logger: logger}
+	conflictDetector := services.NewMergeConflictDetector(githubClient, logger)
+	mergeChecker := services.NewMergeConditionChecker(ciProvider, codexChecker, conflictDetector, logger)
+
+	// Setup verifying auto-merge service
+	autoMergeService := &verifyingAutoMergeService{}
+
+	// Setup router
+	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker)
+
+	// Send check_suite webhook (for CI aggregation)
+	checkSuiteDeliveryID := "delivery-check-suite-1"
+	successStr := "success"
+	conclusion := &successStr
+	w1 := sendCheckSuiteWebhook(t, router, "test-secret", checkSuiteDeliveryID, "completed", conclusion, checkSuiteID, branch, headSHA, pr.Number, repo)
+	assert.Equal(t, http.StatusOK, w1.Code)
+
+	// Send status webhook (should trigger auto-merge)
+	statusDeliveryID := "delivery-status-1"
+	w2 := sendStatusWebhook(t, router, "test-secret", statusDeliveryID, "success", headSHA, "ci/test", repo, branch)
+	assert.Equal(t, http.StatusOK, w2.Code)
+
+	// Verify auto-merge was called
+	owner := "test-org"
+	repoName := "test-repo"
+	assertAutoMergeCalled(t, autoMergeService, owner, repoName, pr.Number)
+}
+
+// mockPRTransport is an HTTP transport that returns mock PR data for GitHub API calls
+type mockPRTransport struct {
+	headSHA        string
+	mergeable      bool
+	mergeableState string
+}
+
+func (m *mockPRTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Check if this is a PR GET request
+	if strings.Contains(req.URL.Path, "/pulls/") && req.Method == "GET" {
+		// Return mock PR data
+		mergeableStr := "false"
+		if m.mergeable {
+			mergeableStr = "true"
+		}
+		prJSON := `{
+			"number": 456,
+			"head": {
+				"sha": "` + m.headSHA + `"
+			},
+			"mergeable": ` + mergeableStr + `,
+			"mergeable_state": "` + m.mergeableState + `"
+		}`
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(prJSON)),
+			Header:     make(http.Header),
+		}
+		resp.Header.Set("Content-Type", "application/json")
+		return resp, nil
+	}
+
+	// Default: return empty response
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("{}")),
+		Header:     make(http.Header),
+	}
+	resp.Header.Set("Content-Type", "application/json")
+	return resp, nil
+}
+
+// Test_CodexApprovalComment_TriggersAutoMerge tests the auto-merge flow when
+// Codex approval comment is detected via pull_request_review_comment webhook.
+func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
+	// Setup environment
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	defer os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+
+	logger := zaptest.NewLogger(t)
+	config.SetLoggerForTesting(logger)
+
+	db := setupDBForUS4(t)
+	defer func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	config.SetDBForTesting(db)
+
+	// Create test data
+	repo := "test-org/test-repo"
+	branch := "feature/issue-123"
+	headSHA := "abc123def"
+	_, pr := createPRWithIssue(t, db, repo, branch, true)
+
+	// Create CI success status
+	checkSuiteID := int64(1001)
+	createCISuccess(t, db, pr.ID, checkSuiteID, headSHA)
+
+	// Setup repositories
+	prRepo := repositories.NewPullRequestRepository(db)
+	ciRepo := repositories.NewCIStatusRepositoryWithDB(db)
+	rfRepo := repositories.NewReviewFeedbackRepositoryWithDB(db)
+
+	// Setup mock GitHub client for MergeConflictDetector
+	mergeableTrue := true
+	cleanState := "clean"
+	mockGH := &mockGitHubClient{
+		headSHA:        headSHA,
+		mergeable:      &mergeableTrue,
+		mergeableState: &cleanState,
+	}
+
+	// Create a mock *github.Client wrapped in clients.Client
+	mockTransport := &mockPRTransport{
+		headSHA:        headSHA,
+		mergeable:      true,
+		mergeableState: "clean",
+	}
+	mockHTTPClient := &http.Client{Transport: mockTransport}
+	mockGitHubRawClient := github.NewClient(mockHTTPClient)
+	githubClient := clients.NewFromGitHub(mockGitHubRawClient, logger)
+
+	// Setup services
+	ciProvider := &dbCIProviderForTest{prRepo: prRepo, ciRepo: ciRepo, logger: logger}
+	codexChecker := &dbCodexCheckerForTest{prRepo: prRepo, rfRepo: rfRepo, logger: logger}
+	conflictDetector := services.NewMergeConflictDetector(githubClient, logger)
+	mergeChecker := services.NewMergeConditionChecker(ciProvider, codexChecker, conflictDetector, logger)
+
+	// Setup verifying auto-merge service
+	autoMergeService := &verifyingAutoMergeService{}
+
+	// Setup router
+	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker)
+
+	// Send pull_request_review_comment webhook with Codex approval comment
+	commentDeliveryID := "delivery-pr-comment-1"
+	commentBody := "Codex Review: Didn't find any major issues."
+	commentUser := "codex-bot"
+	commentID := 999
+	w := sendPRReviewCommentWebhook(t, router, "test-secret", commentDeliveryID, "created", commentBody, commentUser, commentID, pr.Number, repo)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify auto-merge was called
+	owner := "test-org"
+	repoName := "test-repo"
+	assertAutoMergeCalled(t, autoMergeService, owner, repoName, pr.Number)
+}
