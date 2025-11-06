@@ -1,0 +1,139 @@
+## Agent Runner 概要
+
+Agent Runner は、Kubernetes の Pod（Job）内で実行される AI エージェント実行コンポーネントです。対象リポジトリをクローンし、プロンプトに基づいて `claude-code` もしくは `cursor-agent` を起動、lint/型チェック・フック・バリデーションを実行して変更をコミットし、PR を作成します。実行結果は Operator API に push 通知されます。
+
+- エントリーポイント: `agent-runner/main.go`
+- 実行契約: `specs/001-github-agent-automation/contracts/ai-agent-execution.md`
+- マニフェスト仕様: `specs/001-github-agent-automation/contracts/agent-manifest.md`
+- 詳細仕様: `specs/001-github-agent-automation/contracts/agent-runner-detail.md`
+
+---
+
+## 主な機能
+- リポジトリのクローン（`feature/issue-{番号}` ブランチ作成）
+- マニフェスト（`.agent-config.yaml`）のロード、pre/post フックと validation 実行
+- AI エージェント実行（claude-code / cursor-agent）
+- 変更検知、コミット、リモートに push、PR 作成
+- セッションの保存・復元（S3/MinIO）
+- 実行結果の Operator API へのレポート
+
+---
+
+## ビルド方法
+### Docker イメージ
+```bash
+# ルートで実行
+make docker-build          # イメージ作成（latest / sha タグ）
+make docker-push           # レジストリへ push
+# まとめて
+make docker-build-push
+```
+
+### ローカルバイナリ
+```bash
+# ルートで実行
+make build                 # bin/agent-runner を生成
+# または直接
+go build -o bin/agent-runner ./cmd/agent-runner
+```
+
+---
+
+## 実行方法
+通常は Operator から Kubernetes Job として起動されます。ローカルでの動作確認用に CLI でも実行できます。
+
+### CLI
+```bash
+./bin/agent-runner \
+  --issue-id 188 \
+  --repo your-org/your-repo \
+  --prompt "Fix issue #188: README 整備"
+# 任意
+# --previous-attempts '{...JSON...}'
+# --ci-logs "<failed CI logs>"
+```
+
+必須フラグ: `--issue-id`, `--repo`, `--prompt`
+
+---
+
+## 環境変数
+Agent Runner は Kubernetes 環境変数を前提とします（Operator から注入）。必須/任意は以下です。
+
+- 必須（Operator URL 構築）
+  - `KUBERNETES_NAMESPACE`: Namespace
+  - `OPERATOR_SERVICE_NAME`: Operator サービス名
+  - `OPERATOR_SERVICE_PORT`: Operator サービスポート
+- 必須（認可・実行）
+  - `OPERATOR_API_TOKEN`: Operator API の Bearer トークン
+  - `AGENT_RUN_ID`: AgentRun レコード ID（整数、>0）
+  - `AGENT_TYPE`: `claude-code` | `cursor-agent`
+- GitHub App（認証）
+  - `GITHUB_APP_ID`: App ID（数値）
+  - `GITHUB_PRIVATE_KEY`: App 秘密鍵（PEM 本文、改行含む）
+- AI エージェント
+  - `ANTHROPIC_API_KEY`: Claude 用（`AGENT_TYPE=claude-code` のとき必須）
+  - `CURSOR_API_KEY`: Cursor 用（`AGENT_TYPE=cursor-agent` のとき必須）
+- 任意（デフォルト/挙動）
+  - `WORKSPACE_DIR`: 作業ディレクトリ（デフォルト `/workspace`）
+  - `RETRY_COUNT`: リトライ回数（整数、>=0）>0 でセッション復元
+  - `CURSOR_MODEL`: Cursor モデル（デフォルト `auto`）
+  - `CURSOR_ALLOW_WRITE`: `true`/`false`（デフォルト `true`）
+
+備考:
+- Operator API の URL は `http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}` で自動構築されます。
+- PAT フォールバックはありません。GitHub App 認証のみを前提とします。
+
+---
+
+## 設定ファイル（.agent-config.yaml）
+リポジトリルートに配置可能なマニフェスト（省略可）。存在すれば pre/post フックと validation を順に実行します。
+
+- 位置: ルートの `.agent-config.yaml`
+- バージョン: `version: "1.0"` 必須
+- スキーマ（抜粋）:
+  - `hooks.pre[]`: 実行前フック（`name`, `command`, `timeout`, `required`）
+  - `hooks.post[]`: 実行後フック
+  - `validation[]`: バリデーション
+
+例:
+```yaml
+version: "1.0"
+hooks:
+  pre:
+    - name: install deps
+      command: make deps
+      timeout: 2m
+      required: true
+  post:
+    - name: fmt
+      command: go vet ./...
+      timeout: 1m
+      required: false
+validation:
+  - name: tests
+    command: make test
+    timeout: 10m
+    required: true
+```
+
+詳細は `specs/001-github-agent-automation/contracts/agent-manifest.md` を参照してください。
+
+---
+
+## 開発者向け（ローカルテスト/デバッグ）
+- 依存取得: `make deps`
+- 単体/結合テスト: `make test`
+- ログ: `stderr` にビルド情報と進捗を出力（Operator 通知エラーは警告表示）
+- 失敗時の扱い:
+  - フック失敗は失敗として Operator に通知
+  - バリデーション失敗は PR 作成前にエラー終了（通知はしない）
+  - Post-hook 失敗は警告として継続（PR 作成後）
+
+---
+
+## サポートする AI エージェント
+- `claude-code`（`@anthropic/claude-code` CLI）
+- `cursor-agent`（Cursor Headless）
+
+それぞれの API キーは環境変数 `ANTHROPIC_API_KEY` / `CURSOR_API_KEY` で注入してください。
