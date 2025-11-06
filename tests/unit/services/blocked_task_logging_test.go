@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	neturl "net/url"
 	"testing"
 
 	"agentic-automation/internal/clients"
@@ -107,7 +108,7 @@ func TestTriggerJobsForUnblockedTasks_EmitsLogs(t *testing.T) {
 	httpClient := server.Client()
 	githubClient := gh.NewClient(httpClient)
 	baseURL := server.URL + "/"
-	parsed, _ := gh.ParseURL(baseURL)
+	parsed, _ := neturl.Parse(baseURL)
 	githubClient.BaseURL = parsed
 	// Wrap into our clients.Client and create IssueContextService
 	ghWrap := clients.NewFromGitHub(githubClient, logger)
