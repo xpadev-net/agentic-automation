@@ -33,7 +33,7 @@ func (f *fakeResolver) FindUnblockedTasks(ctx context.Context, eventIssueID int6
 // fakeJobService implements KubernetesJobService and returns a dummy job
 type fakeJobService struct{}
 
-func (f *fakeJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string) (*batchv1.Job, error) {
+func (f *fakeJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error) {
 	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job-1"}}, nil
 }
 

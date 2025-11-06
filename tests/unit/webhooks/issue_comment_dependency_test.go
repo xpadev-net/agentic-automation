@@ -111,7 +111,9 @@ type simpleIssueCtx struct{}
 func (s *simpleIssueCtx) CollectIssueContext(_ context.Context, _, _ string, issueNumber int) (*services.IssueContext, error) {
 	return &services.IssueContext{Number: issueNumber}, nil
 }
-func (s *simpleIssueCtx) FormatPrompt(ic *services.IssueContext) string { return "p" }
+func (s *simpleIssueCtx) FormatPrompt(ic *services.IssueContext, userInstruction string) string {
+	return "p"
+}
 
 func TestIssueComment_BlockedDependencies_PreventsStart(t *testing.T) {
 	gin.SetMode(gin.TestMode)

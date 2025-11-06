@@ -127,7 +127,7 @@ type Authorization interface {
 
 type IssueContext interface {
 	CollectIssueContext(ctx context.Context, owner, repo string, issueNumber int) (*services.IssueContext, error)
-	FormatPrompt(issueCtx *services.IssueContext) string
+	FormatPrompt(issueCtx *services.IssueContext, userInstruction string) string
 }
 
 type GitHubNotification interface {
@@ -516,8 +516,37 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Step 10: Format prompt
-	prompt := issueContextService.FormatPrompt(issueContext)
+	// Step 9.5: Check for existing PR and extract user instruction
+	var existingBranchName string
+	userInstruction := utils.ExtractInstructionFromComment(payload.Comment.Body)
+
+	pullRequestRepo := repositories.NewPullRequestRepository(db)
+	prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
+	if prErr == nil && len(prs) > 0 {
+		// Use the first open PR if multiple exist
+		for _, pr := range prs {
+			if pr.Status == "open" {
+				existingBranchName = pr.Branch
+				logger.Info("Found existing PR for issue, will checkout existing branch",
+					zap.Int("issue_id", issue.ID),
+					zap.Int("pr_number", pr.Number),
+					zap.String("branch", existingBranchName),
+					zap.String("delivery_id", deliveryID),
+				)
+				break
+			}
+		}
+	}
+
+	if userInstruction != "" {
+		logger.Info("Extracted user instruction from comment",
+			zap.String("instruction", userInstruction),
+			zap.String("delivery_id", deliveryID),
+		)
+	}
+
+	// Step 10: Format prompt with user instruction
+	prompt := issueContextService.FormatPrompt(issueContext, userInstruction)
 
 	// Step 10.5: Set labels from issueContext for agent type detection
 	if len(issueContext.Labels) > 0 {
@@ -709,7 +738,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	)
 
 	// Step 14: Create Kubernetes Job
-	job, err := jobService.CreateJobForAgentRun(ctx, agentRun, issue, prompt)
+	job, err := jobService.CreateJobForAgentRun(ctx, agentRun, issue, prompt, existingBranchName)
 	if err != nil {
 		logger.Error("Failed to create Kubernetes Job, rolling back state",
 			zap.Error(err),

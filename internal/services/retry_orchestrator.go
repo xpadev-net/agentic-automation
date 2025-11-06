@@ -285,8 +285,8 @@ func (r *RetryOrchestrator) TriggerRetry(
 		return fmt.Errorf("failed to collect issue context: %w", err)
 	}
 
-	// Format prompt
-	prompt := r.issueContextService.FormatPrompt(issueContext)
+	// Format prompt (no user instruction for retry)
+	prompt := r.issueContextService.FormatPrompt(issueContext, "")
 
 	r.logger.Info("Creating retry Job for AgentRun",
 		zap.Int("agent_run_id", agentRun.ID),

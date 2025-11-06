@@ -284,7 +284,7 @@ func TriggerJobsForUnblockedTasks(
 			zap.Int("labelsCount", len(issueCtx.Labels)),
 			zap.Int("commentsCount", len(issueCtx.Comments)),
 		)
-		prompt := issueCtxSvc.FormatPrompt(issueCtx)
+		prompt := issueCtxSvc.FormatPrompt(issueCtx, "") // No user instruction for blocked task resume
 
 		// Respect labels from freshly fetched issue context for agent detection
 		labelsJSON, _ := json.Marshal(issueCtx.Labels)
@@ -361,7 +361,7 @@ func TriggerJobsForUnblockedTasks(
 		}
 
 		// Create Job
-		if job, err := jobService.CreateJobForAgentRun(ctx, agentRun, &updatedIssue, prompt); err != nil {
+		if job, err := jobService.CreateJobForAgentRun(ctx, agentRun, &updatedIssue, prompt, ""); err != nil {
 			// If a job with same name already exists, treat as success (another handler created it)
 			if apierrors.IsAlreadyExists(err) {
 				logger.Info("blocked_task.job_already_exists",

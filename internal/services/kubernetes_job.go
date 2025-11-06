@@ -22,10 +22,11 @@ type KubernetesJobService interface {
 	//   - agentRun: AgentRun record (must not be nil)
 	//   - issue: Issue record (must not be nil)
 	//   - prompt: Formatted prompt string for the agent (must not be empty)
+	//   - branchName: Optional existing branch name to checkout (empty means create new branch)
 	// Returns:
 	//   - *batchv1.Job: Created Kubernetes Job, or nil on error
 	//   - error: Error if Job creation fails
-	CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string) (*batchv1.Job, error)
+	CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error)
 	// CreateJobForAgentRunWithFeedback creates a Kubernetes Job with aggregated feedback for retry
 	// Parameters:
 	//   - ctx: Context for cancellation and timeout control
@@ -172,7 +173,7 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) 
 }
 
 // CreateJobForAgentRun creates a Kubernetes Job for the given AgentRun and Issue
-func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string) (*batchv1.Job, error) {
+func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error) {
 	// Input validation
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil",
@@ -230,6 +231,7 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		AgentType:        agentRun.AgentType,
 		AgentRunnerImage: agentRunnerImage,
 		TimeoutMinutes:   timeoutMinutes,
+		BranchName:       branchName,
 	}
 
 	// Generate job name
