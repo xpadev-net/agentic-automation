@@ -50,19 +50,19 @@ RUN apt-get update && apt-get install -y \
   rm -rf /var/lib/apt/lists/*
 
 # Install Go from official tarball with checksum verification
-RUN curl -fsSLo /tmp/go.tgz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
-  curl -fsSLo /tmp/go.tgz.sha256 https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz.sha256 && \
-  sha256sum -c /tmp/go.tgz.sha256 && \
-  tar -C /usr/local -xzf /tmp/go.tgz && \
-  rm -f /tmp/go.tgz /tmp/go.tgz.sha256
-
-# Configure Go paths for both root (during build) and agent user (runtime)
-ENV GOPATH=/home/agent/go
-RUN mkdir -p /home/agent/go && chown -R agent:agent /home/agent/go
+RUN curl -fsSLo /tmp/go${GO_VERSION}.linux-amd64.tar.gz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
+  curl -fsSLo /tmp/go${GO_VERSION}.linux-amd64.tar.gz.sha256 https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz.sha256 && \
+  cd /tmp && sha256sum -c go${GO_VERSION}.linux-amd64.tar.gz.sha256 && \
+  tar -C /usr/local -xzf /tmp/go${GO_VERSION}.linux-amd64.tar.gz && \
+  rm -f /tmp/go${GO_VERSION}.linux-amd64.tar.gz /tmp/go${GO_VERSION}.linux-amd64.tar.gz.sha256
 
 # Create non-root user for security
 # --home option creates the home directory for the system user
 RUN addgroup --system agent && adduser --system --home /home/agent --group agent
+
+# Configure Go paths for both root (during build) and agent user (runtime)
+ENV GOPATH=/home/agent/go
+RUN mkdir -p /home/agent/go && chown -R agent:agent /home/agent/go
 
 # Create workspace directory and set ownership
 RUN mkdir -p /workspace && chown -R agent:agent /workspace
