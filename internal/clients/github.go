@@ -176,6 +176,75 @@ func (c *Client) GetIssue(ctx context.Context, owner, repo string, issueNumber i
 	return issue, nil
 }
 
+// listIssueDependencies is an internal helper to retrieve issue dependencies for the given kind.
+// kind must be either "blocked_by" or "blocking" per GitHub REST API.
+func (c *Client) listIssueDependencies(ctx context.Context, owner, repo string, issueNumber int, kind string) ([]*github.Issue, error) {
+	c.logger.Info("Listing GitHub issue dependencies",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("issue_number", issueNumber),
+		zap.String("kind", kind),
+	)
+
+	// Pagination options
+	opts := &github.ListOptions{
+		Page:    1,
+		PerPage: 100,
+	}
+
+	var allIssues []*github.Issue
+	var resp *github.Response
+
+	for {
+		// Build path: /repos/{owner}/{repo}/issues/{issue_number}/dependencies/{kind}
+		path := fmt.Sprintf("repos/%s/%s/issues/%d/dependencies/%s", owner, repo, issueNumber, kind)
+
+		// Append pagination query params
+		u, err := url.Parse(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse dependencies path: %w", err)
+		}
+		q := u.Query()
+		q.Set("per_page", fmt.Sprintf("%d", opts.PerPage))
+		q.Set("page", fmt.Sprintf("%d", opts.Page))
+		u.RawQuery = q.Encode()
+
+		req, err := c.NewRequest("GET", u.String(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		// Explicit Accept header as per docs
+		req.Header.Set("Accept", "application/vnd.github+json")
+
+		var issues []*github.Issue
+		pageResp, err := c.Do(ctx, req, &issues)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "listIssueDependencies")
+		}
+
+		allIssues = append(allIssues, issues...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+
+	c.handleRateLimit(resp)
+	return allIssues, nil
+}
+
+// ListIssueDependenciesBlockedBy lists issues that block the given issue (blocked_by).
+func (c *Client) ListIssueDependenciesBlockedBy(ctx context.Context, owner, repo string, issueNumber int) ([]*github.Issue, error) {
+	return c.listIssueDependencies(ctx, owner, repo, issueNumber, "blocked_by")
+}
+
+// ListIssueDependenciesBlocking lists issues that are blocked by the given issue (blocking).
+func (c *Client) ListIssueDependenciesBlocking(ctx context.Context, owner, repo string, issueNumber int) ([]*github.Issue, error) {
+	return c.listIssueDependencies(ctx, owner, repo, issueNumber, "blocking")
+}
+
 // ListIssueComments retrieves all comments for a GitHub issue
 // Handles pagination to return all comments, not just the first page
 func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, issueNumber int) ([]*github.IssueComment, error) {
