@@ -393,6 +393,18 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	}
 
 	// 11. Commit changes
+	// 10.5 Ensure git commit identity (user.name/email)
+	if err := git.EnsureCommitIdentity(envCfg.WorkDir, repo, issueID); err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Git identity setup failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+		}
+		return fmt.Errorf("git identity setup failed: %w", err)
+	}
 	commitMsg := fmt.Sprintf("feat: implement issue #%d", issueID)
 	fmt.Fprintf(os.Stderr, "Committing changes\n")
 	commitSHA, err := git.CommitChanges(envCfg.WorkDir, commitMsg)
