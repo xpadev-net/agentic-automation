@@ -456,13 +456,13 @@ func sendStatusWebhook(t *testing.T, router *gin.Engine, secret, deliveryID stri
 }
 
 // sendPRReviewCommentWebhook sends a pull_request_review_comment webhook to the router
-func sendPRReviewCommentWebhook(t *testing.T, router *gin.Engine, secret, deliveryID string, action string, commentBody, commentUser string, commentID int, prNumber int, repoFullName string) *httptest.ResponseRecorder {
+func sendPRReviewCommentWebhook(t *testing.T, router *gin.Engine, secret, deliveryID string, action string, commentBody, commentUser string, commentID int, prNumber int, repoFullName string, userID int64) *httptest.ResponseRecorder {
 	payload := handlers.PullRequestReviewCommentPayload{
 		Action: action,
 		Comment: handlers.PullRequestReviewCommentComment{
 			ID:        commentID,
 			Body:      commentBody,
-			User:      handlers.User{Login: commentUser},
+			User:      handlers.User{Login: commentUser, ID: userID},
 			CreatedAt: time.Now().Format(time.RFC3339),
 		},
 		PullRequest: handlers.PullRequestReviewCommentPullRequest{
@@ -768,9 +768,10 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	// Send pull_request_review_comment webhook with Codex approval comment
 	commentDeliveryID := "delivery-pr-comment-1"
 	commentBody := "Codex Review: Didn't find any major issues."
-	commentUser := "codex-bot"
+	commentUser := "chatgpt-codex-connector[bot]"
 	commentID := 999
-	w := sendPRReviewCommentWebhook(t, router, "test-secret", commentDeliveryID, "created", commentBody, commentUser, commentID, pr.Number, repo)
+	commentUserID := int64(199175422) // Default Codex bot user ID
+	w := sendPRReviewCommentWebhook(t, router, "test-secret", commentDeliveryID, "created", commentBody, commentUser, commentID, pr.Number, repo, commentUserID)
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Verify auto-merge was called
