@@ -22,7 +22,6 @@ func (f *fakeBuilder) BuildForIssue(ctx context.Context, owner, repo string, iss
 }
 
 func TestDependencyValidator_AllClosed_Allows(t *testing.T) {
-	t.Parallel()
 
 	logger := zap.NewNop()
 	// initialize in-memory sqlite and inject into config
@@ -93,7 +92,6 @@ func TestDependencyValidator_AllClosed_Allows(t *testing.T) {
 }
 
 func TestDependencyValidator_HasOpen_Block(t *testing.T) {
-	t.Parallel()
 
 	logger := zap.NewNop()
 	sdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
