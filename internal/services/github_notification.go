@@ -111,6 +111,29 @@ func makePRCreatedBody(prNumber int, prURL, branch, sha, idempotencyKey string) 
 	return marker + "\n" + fmt.Sprintf(prCreatedTemplate, prNumber, prURL, branch, shortSHA(sha))
 }
 
+// makeMergeSuccessBody formats a message body for merge success notification.
+// It includes an idempotency marker and the merge SHA (shortened).
+func makeMergeSuccessBody(mergeSHA, idempotencyKey string) string {
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+	message := fmt.Sprintf("✅ Auto-merge succeeded\n\n**Merge SHA**: %s\n\nPR has been successfully merged.", shortSHA(mergeSHA))
+	return marker + "\n" + message
+}
+
+// makeMergeFailureBody formats a message body for merge failure notification.
+// It includes an idempotency marker, error classification, and the error message.
+func makeMergeFailureBody(errorMessage, errorClassification, idempotencyKey string) string {
+	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
+
+	content := "❌ Auto-merge failed\n\n"
+	if errorClassification != "" {
+		content += fmt.Sprintf("**Error Classification**: %s\n\n", errorClassification)
+	}
+	if em := getErrorMessageForNotification(&errorMessage); em != "" {
+		content += fmt.Sprintf("**Error**: %s", em)
+	}
+	return marker + "\n" + content
+}
+
 // makeMaxRetriesBody formats a message body for max retries exceeded notification.
 // It includes an idempotency marker and formatted message with error details.
 //
@@ -135,29 +158,6 @@ func makeMaxRetriesBody(agentRun *models.AgentRun, idempotencyKey string) string
 	}
 
 	return marker + "\n" + message
-}
-
-// makeMergeSuccessBody formats a message body for merge success notification.
-// It includes an idempotency marker and the merge SHA (shortened).
-func makeMergeSuccessBody(mergeSHA, idempotencyKey string) string {
-	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
-	message := fmt.Sprintf("✅ Auto-merge succeeded\n\n**Merge SHA**: %s\n\nPR has been successfully merged.", shortSHA(mergeSHA))
-	return marker + "\n" + message
-}
-
-// makeMergeFailureBody formats a message body for merge failure notification.
-// It includes an idempotency marker, error classification, and the error message.
-func makeMergeFailureBody(errorMessage, errorClassification, idempotencyKey string) string {
-	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
-
-	content := "❌ Auto-merge failed\n\n"
-	if errorClassification != "" {
-		content += fmt.Sprintf("**Error Classification**: %s\n\n", errorClassification)
-	}
-	if em := getErrorMessageForNotification(&errorMessage); em != "" {
-		content += fmt.Sprintf("**Error**: %s", em)
-	}
-	return marker + "\n" + content
 }
 
 // hasCommentWithMarker checks if a recent comment contains the given marker.
@@ -654,6 +654,7 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 	mergeSHA string,
 	errorMessage string,
 	idempotencyKey string,
+	errorType string, // Optional: pre-classified error type. If empty, will be classified from errorMessage.
 ) error {
 	// Input validation
 	if idempotencyKey == "" {
@@ -678,7 +679,10 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 		}
 		body = makeMergeSuccessBody(mergeSHA, idempotencyKey)
 	} else {
-		classification := ClassifyMergeError(errors.New(errorMessage))
+		classification := errorType
+		if classification == "" {
+			classification = ClassifyMergeError(errors.New(errorMessage))
+		}
 		body = makeMergeFailureBody(errorMessage, classification, idempotencyKey)
 	}
 
@@ -736,13 +740,16 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 		}
 	}
 
-	if aggErr != nil {
-		return aggErr
-	}
+	return aggErr
+}
 
-	s.logger.Info("Merge status notifications posted (or updated)",
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
-	)
-	return nil
+// NotifyMergeFailure posts a status comment to Issue and PR when auto-merge fails.
+// It is a convenience wrapper around NotifyMergeStatus for backward compatibility.
+func (s *GitHubNotificationService) NotifyMergeFailure(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber, prNumber int,
+	errorType, errorMessage, idempotencyKey string,
+) error {
+	return s.NotifyMergeStatus(ctx, owner, repo, issueNumber, prNumber, false, "", errorMessage, idempotencyKey, errorType)
 }

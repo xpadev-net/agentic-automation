@@ -23,9 +23,11 @@ type autoMergeService struct {
 
 // AutoMergeResult は自動マージの結果を表す
 type AutoMergeResult struct {
-	Merged   bool
-	MergeSHA string
-	Message  string // 成功/失敗の要約
+	Merged       bool
+	MergeSHA     string
+	Message      string // 成功/失敗の要約
+	ErrorType    string // 失敗時の分類済みエラー種別
+	ErrorMessage string // 失敗時の元エラーメッセージ
 }
 
 // NewAutoMergeService は AutoMergeService のコンストラクタ
@@ -69,8 +71,15 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 			// 成功扱いにしてブランチ削除へ進む
 			mergeResult = &github.PullRequestMergeResult{}
 		} else {
-			// 未マージ → エラーを返却（上位で明示的に再試行判断）
-			return nil, mergeErr
+			// 未マージ → エラーを分類して結果として返却（上位で通知・ハンドリング）
+			classified := ClassifyMergeError(mergeErr)
+			return &AutoMergeResult{
+				Merged:       false,
+				MergeSHA:     "",
+				Message:      "merge_failed",
+				ErrorType:    classified,
+				ErrorMessage: mergeErr.Error(),
+			}, nil
 		}
 	}
 

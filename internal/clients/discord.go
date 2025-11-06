@@ -641,6 +641,65 @@ func (c *DiscordClient) SendPRCreatedNotification(ctx context.Context, pr *model
 	return c.send(ctx, payload)
 }
 
+// SendMergeFailureNotification sends an auto-merge failure notification
+func (c *DiscordClient) SendMergeFailureNotification(ctx context.Context, pr *models.PullRequest, issue *models.Issue, errorType, errorMessage string) error {
+	if c == nil {
+		return nil // Client is disabled
+	}
+
+	// Build description
+	var description string
+	if issue != nil {
+		description = sanitizeMessage(fmt.Sprintf("**Issue #%d**: %s", issue.Number, issue.Title))
+	} else {
+		description = sanitizeMessage(fmt.Sprintf("**PR #%d**: %s", pr.Number, pr.Branch))
+	}
+
+	embed := DiscordEmbed{
+		Title:       sanitizeMessage("❌ Auto-Merge Failed"),
+		Description: description,
+		Color:       ColorError,
+		Fields: []DiscordEmbedField{
+			{
+				Name:   "Repository",
+				Value:  sanitizeMessage(pr.Repo),
+				Inline: true,
+			},
+			{
+				Name:   "PR Number",
+				Value:  fmt.Sprintf("#%d", pr.Number),
+				Inline: true,
+			},
+			{
+				Name:   "Error Type",
+				Value:  sanitizeMessage(errorType),
+				Inline: true,
+			},
+			{
+				Name:   "Error Message",
+				Value:  sanitizeMessage(truncateErrorMessage(errorMessage)),
+				Inline: false,
+			},
+			{
+				Name:   "PR URL",
+				Value:  fmt.Sprintf("[View PR](%s)", formatGitHubURL(pr.Repo, pr.Number, true)),
+				Inline: false,
+			},
+		},
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Footer: &DiscordEmbedFooter{
+			Text: "GitHub Agent Automation",
+		},
+	}
+
+	payload := DiscordPayload{Embeds: []DiscordEmbed{embed}}
+
+	c.logger.Info("Sending Discord merge failure notification",
+		zap.Int("pr_number", pr.Number))
+
+	return c.send(ctx, payload)
+}
+
 // SendOperatorAPIErrorNotification sends an operator API error notification
 func (c *DiscordClient) SendOperatorAPIErrorNotification(ctx context.Context, agentRunID int, podName, errorMsg string) error {
 	if c == nil {

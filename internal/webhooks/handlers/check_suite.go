@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,20 +51,21 @@ type CheckSuiteRepository struct {
 
 // CheckSuiteDeps represents injectable dependencies for HandleCheckSuite
 type CheckSuiteDeps struct {
-	Logger                    *zap.Logger
-	GitHubClient              *clients.Client
-	PullRequestRepository     *repositories.PullRequestRepository
-	CIStatusRepository        *repositories.CIStatusRepository
-	CIStatusAggregator        services.CIStatusAggregator
-	CIFailureAnalyzer         *services.CIFailureAnalyzer
-	FeedbackAggregator        *services.FeedbackAggregator
-	RetryOrchestrator         *services.RetryOrchestrator
-	KubernetesJobService      services.KubernetesJobService
-	GitHubNotificationService *services.GitHubNotificationService
-	IssueContextService       *services.IssueContextService
-	AgentRunRepository        repositories.AgentRunRepository
-	IssueRepository           *repositories.IssueRepository
-	AutoMergeService          services.AutoMergeService
+	Logger                     *zap.Logger
+	GitHubClient               *clients.Client
+	PullRequestRepository      *repositories.PullRequestRepository
+	CIStatusRepository         *repositories.CIStatusRepository
+	CIStatusAggregator         services.CIStatusAggregator
+	CIFailureAnalyzer          *services.CIFailureAnalyzer
+	FeedbackAggregator         *services.FeedbackAggregator
+	RetryOrchestrator          *services.RetryOrchestrator
+	KubernetesJobService       services.KubernetesJobService
+	GitHubNotificationService  *services.GitHubNotificationService
+	DiscordNotificationService *services.DiscordNotificationService
+	IssueContextService        *services.IssueContextService
+	AgentRunRepository         repositories.AgentRunRepository
+	IssueRepository            *repositories.IssueRepository
+	AutoMergeService           services.AutoMergeService
 }
 
 // HandleCheckSuite handles GitHub check_suite webhook events
@@ -655,7 +657,8 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		}
 		mergeRes, mergeErr := autoMergeSvc.AttemptAutoMerge(ctx, owner, repo, pr.Number)
 		if mergeErr != nil {
-			logger.Error("auto-merge failed",
+			// 予期しないエラー（通常はAutoMergeResultで返却される）
+			logger.Error("auto-merge service returned error",
 				zap.Error(mergeErr),
 				zap.String("delivery_id", deliveryID),
 				zap.Int("pr_id", pr.ID),
@@ -689,6 +692,77 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				"delivery_id": deliveryID,
 				"pr_number":   prNumber,
 				"error":       mergeErr.Error(),
+			})
+			return
+		}
+
+		// マージ失敗（結果で通知）
+		if mergeRes != nil && !mergeRes.Merged {
+			// Initialize GitHubNotificationService if not already set
+			if deps.GitHubNotificationService == nil && githubClient != nil {
+				deps.GitHubNotificationService = services.NewGitHubNotificationService(githubClient, logger)
+			}
+
+			// Issue 情報取得（通知に使用）
+			var issueNumber int
+			if deps.IssueRepository != nil && pr.IssueID != nil {
+				if i, err := deps.IssueRepository.FindByID(*pr.IssueID); err == nil {
+					issueNumber = i.Number
+				} else {
+					logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+				}
+			}
+
+			// GitHub 通知（Issueが存在しない場合でもPRには通知を送信）
+			if deps.GitHubNotificationService != nil {
+				idem := c.GetHeader(deliveryHeader)
+				if idem == "" {
+					idem = fmt.Sprintf("merge-fail-%d-%d", pr.Number, time.Now().Unix())
+				}
+				_ = deps.GitHubNotificationService.NotifyMergeFailure(
+					ctx, owner, repo,
+					issueNumber, pr.Number,
+					mergeRes.ErrorType, mergeRes.ErrorMessage,
+					idem,
+				)
+			}
+
+			// Discord 通知
+			func() {
+				discordClient := clients.NewDiscordClient("", logger)
+				if discordClient == nil {
+					return
+				}
+				discordSvc := services.NewDiscordNotificationService(discordClient, logger)
+				var prModel *models.PullRequest
+				var issueModel *models.Issue
+				if deps.PullRequestRepository != nil {
+					repoFullName := owner + "/" + repo
+					if pm, perr := deps.PullRequestRepository.FindByRepoAndNumber(repoFullName, prNumber); perr == nil {
+						prModel = pm
+						if deps.IssueRepository != nil && pm != nil && pm.IssueID != nil && *pm.IssueID > 0 {
+							if iss, ierr := deps.IssueRepository.FindByID(*pm.IssueID); ierr == nil {
+								issueModel = iss
+							}
+						}
+					}
+				}
+				_ = discordSvc.NotifyMergeFailure(ctx, prModel, issueModel, mergeRes.ErrorMessage, mergeRes.ErrorType)
+			}()
+
+			logger.Warn("auto-merge failed",
+				zap.String("error_type", mergeRes.ErrorType),
+				zap.String("error_message", mergeRes.ErrorMessage),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_id", pr.ID),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "processed",
+				"action":      "re_eval",
+				"auto_merge":  "failed",
+				"delivery_id": deliveryID,
+				"pr_number":   prNumber,
+				"error_type":  mergeRes.ErrorType,
 			})
 			return
 		}
