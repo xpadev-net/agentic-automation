@@ -52,7 +52,8 @@ func TestDependencyValidator_AllClosed_Allows(t *testing.T) {
 	if err := db.Exec(`
         CREATE TABLE IF NOT EXISTS blocker_graph_edges (
             task_id INTEGER,
-            depends_on_task_id INTEGER
+            depends_on_task_id INTEGER,
+            created_at DATETIME
         );
     `).Error; err != nil {
 		t.Fatalf("create edges: %v", err)
@@ -120,7 +121,8 @@ func TestDependencyValidator_HasOpen_Block(t *testing.T) {
 	if err := db.Exec(`
         CREATE TABLE IF NOT EXISTS blocker_graph_edges (
             task_id INTEGER,
-            depends_on_task_id INTEGER
+            depends_on_task_id INTEGER,
+            created_at DATETIME
         );
     `).Error; err != nil {
 		t.Fatalf("create edges: %v", err)
