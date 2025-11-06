@@ -50,8 +50,8 @@ RUN apt-get update && apt-get install -y \
   rm -rf /var/lib/apt/lists/*
 
 # Install Go from official tarball with checksum verification
-RUN curl -fsSLo /tmp/go${GO_VERSION}.linux-amd64.tar.gz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
-  curl -fsSLo /tmp/go${GO_VERSION}.linux-amd64.tar.gz.sha256 https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz.sha256 && \
+RUN curl -fsSL -o /tmp/go${GO_VERSION}.linux-amd64.tar.gz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
+  curl -fsSL -o /tmp/go${GO_VERSION}.linux-amd64.tar.gz.sha256 https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz.sha256 && \
   cd /tmp && sha256sum -c go${GO_VERSION}.linux-amd64.tar.gz.sha256 && \
   tar -C /usr/local -xzf /tmp/go${GO_VERSION}.linux-amd64.tar.gz && \
   rm -f /tmp/go${GO_VERSION}.linux-amd64.tar.gz /tmp/go${GO_VERSION}.linux-amd64.tar.gz.sha256
