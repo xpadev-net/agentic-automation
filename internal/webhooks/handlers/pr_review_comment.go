@@ -322,6 +322,35 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			return
 		}
 
+		// ReviewFeedbackレコード作成（承認検出時）
+		reviewFeedbackRepo := deps.ReviewFeedbackRepository
+		if reviewFeedbackRepo == nil {
+			reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
+		}
+		if reviewFeedbackRepo != nil {
+			commentID := int64(payload.Comment.ID)
+			content := payload.Comment.Body
+			// 既存の 'requested' があれば 'received' へ更新、無ければ 'received' を新規作成
+			if list, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested"); err == nil && len(list) > 0 {
+				latest := list[0]
+				if uerr := reviewFeedbackRepo.UpdateToReceived(latest.ID, content, true, &commentID); uerr != nil {
+					logger.Warn("Failed to update ReviewFeedback to received",
+						zap.Error(uerr),
+						zap.String("delivery_id", deliveryID),
+						zap.Int("pr_id", pr.ID),
+					)
+				}
+			} else {
+				if _, cerr := reviewFeedbackRepo.CreateReceivedReview(pr.ID, content, true, &commentID); cerr != nil {
+					logger.Warn("Failed to create received ReviewFeedback",
+						zap.Error(cerr),
+						zap.String("delivery_id", deliveryID),
+						zap.Int("pr_id", pr.ID),
+					)
+				}
+			}
+		}
+
 		// CIStatusProvider/CodexApprovalChecker はファイル先頭のアダプタを利用
 
 		var checker services.MergeConditionChecker
