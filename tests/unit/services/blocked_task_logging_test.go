@@ -50,8 +50,45 @@ func setupSQLite(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("failed to open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Issue{}, &models.AgentRun{}); err != nil {
-		t.Fatalf("failed to migrate: %v", err)
+	// SQLite は enum 型をサポートしないため、最低限のカラムで手動定義する
+	// issues
+	if err := db.Exec(`
+CREATE TABLE IF NOT EXISTS issues (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  repo TEXT,
+  number INTEGER,
+  github_issue_id INTEGER,
+  title TEXT,
+  body TEXT,
+  labels TEXT,
+  state TEXT DEFAULT 'open',
+  created_at DATETIME,
+  updated_at DATETIME
+);`).Error; err != nil {
+		t.Fatalf("failed to create issues table: %v", err)
+	}
+	// agent_runs
+	if err := db.Exec(`
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  idempotency_key TEXT UNIQUE,
+  issue_id INTEGER,
+  pr_id INTEGER,
+  state TEXT DEFAULT 'queued',
+  agent_type TEXT,
+  input TEXT,
+  output TEXT,
+  retry_count INTEGER DEFAULT 0,
+  error_message TEXT,
+  commit_sha TEXT,
+  s3_session_key TEXT,
+  session_saved_at DATETIME,
+  started_at DATETIME,
+  completed_at DATETIME,
+  created_at DATETIME,
+  updated_at DATETIME
+);`).Error; err != nil {
+		t.Fatalf("failed to create agent_runs table: %v", err)
 	}
 	return db
 }
