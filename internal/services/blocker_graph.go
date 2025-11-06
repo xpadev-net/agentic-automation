@@ -90,23 +90,20 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 
 	// Upsert dependency issues and prepare desired edges
 	desired := make(map[int]struct{}) // DependsOnTaskID set for root.TaskID
-	createdIssues := 0
 	for _, d := range deps {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		depRepoKey := makeRepoKey(d.Owner, d.Repo)
-		depIssue := &models.Issue{Repo: depRepoKey, Number: d.Number}
-		// Optional fields
+		updates := map[string]interface{}{}
 		if d.Title != "" {
-			title := d.Title
-			depIssue.Title = title
+			updates["title"] = d.Title
 		}
 		if d.State != "" {
-			depIssue.State = d.State
+			updates["state"] = d.State
 		}
-		if upErr := b.issues.Upsert(depIssue); upErr != nil {
-			b.logger.Error("failed to upsert dependency issue", zap.String("repo", depRepoKey), zap.Int("number", d.Number), zap.Error(upErr))
+		if upErr := b.issues.UpsertSelective(depRepoKey, d.Number, updates); upErr != nil {
+			b.logger.Error("failed to upsert (selective) dependency issue", zap.String("repo", depRepoKey), zap.Int("number", d.Number), zap.Error(upErr))
 			return upErr
 		}
 		// Ensure we have ID
@@ -116,7 +113,6 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 			return findErr
 		}
 		desired[loaded.ID] = struct{}{}
-		createdIssues++
 	}
 
 	if err := ctx.Err(); err != nil {

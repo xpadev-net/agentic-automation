@@ -91,6 +91,51 @@ func (r *IssueRepository) Upsert(issue *models.Issue) error {
 	return r.Update(issue)
 }
 
+// UpsertSelective creates or updates an Issue by (repo, number), updating only provided columns.
+// This avoids wiping existing metadata when some fields are zero-values in the input.
+//
+// Behavior:
+//   - If record exists: updates only keys present in 'updates' map
+//   - If not exists: creates a new record initialized with repo, number and provided updates
+func (r *IssueRepository) UpsertSelective(repo string, number int, updates map[string]interface{}) error {
+	if updates == nil {
+		updates = map[string]interface{}{}
+	}
+
+	var existing models.Issue
+	err := r.db.Where("repo = ? AND number = ?", repo, number).First(&existing).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Create new with partial fields
+			newIssue := models.Issue{Repo: repo, Number: number}
+			if title, ok := updates["title"].(string); ok {
+				newIssue.Title = title
+			}
+			if state, ok := updates["state"].(string); ok {
+				newIssue.State = state
+			}
+			return r.db.Create(&newIssue).Error
+		}
+		return err
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// Update only specified columns
+	return r.db.Model(&existing).Select(getMapKeys(updates)).Updates(updates).Error
+}
+
+// getMapKeys returns keys of a map[string]interface{} in a slice
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // FindByState finds all Issues with the given state ('open' or 'closed')
 // Returns empty slice if none found
 func (r *IssueRepository) FindByState(state string) ([]models.Issue, error) {
