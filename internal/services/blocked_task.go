@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"time"
 )
 
 // BlockedTaskResolver locates tasks (issues) that have become unblocked
@@ -276,8 +275,8 @@ func TriggerJobsForUnblockedTasks(
 		}
 		inputBytes, _ := json.Marshal(inputPayload)
 
-		// Create a fresh AgentRun (unique idempotency key per trigger to allow retries if previous failed)
-		idemp := fmt.Sprintf("unblock:%s#%d:%d", is.Repo, is.Number, time.Now().UnixNano())
+		// Create or get AgentRun using deterministic idempotency key per issue
+		idemp := fmt.Sprintf("unblock:%s#%d", is.Repo, is.Number)
 		newRun := &models.AgentRun{
 			IssueID:   is.ID,
 			State:     "queued",
@@ -285,9 +284,25 @@ func TriggerJobsForUnblockedTasks(
 			Input:     inputBytes,
 			Output:    []byte("{}"),
 		}
-		agentRun, _, createErr := agents.CreateOrGet(idemp, newRun)
+		agentRun, isNew, createErr := agents.CreateOrGet(idemp, newRun)
 		if createErr != nil {
 			return fmt.Errorf("failed to create agent run: %w", createErr)
+		}
+
+		// If an existing run already exists, branch by state to avoid duplicate jobs
+		if !isNew {
+			switch agentRun.State {
+			case "queued":
+				// Update prompt and agent type to latest context, then proceed
+				agentRun.AgentType = agentType
+				agentRun.Input = inputBytes
+				if err := agents.Update(agentRun); err != nil {
+					return fmt.Errorf("failed to update existing queued run %d: %w", agentRun.ID, err)
+				}
+			case "started", "succeeded", "failed":
+				// Another worker already started or finished this issue; skip
+				continue
+			}
 		}
 
 		// Transition to started before Job creation (align with comment-trigger flow)
