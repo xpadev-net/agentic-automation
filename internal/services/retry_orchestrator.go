@@ -288,22 +288,51 @@ func (r *RetryOrchestrator) TriggerRetry(
 	// Format prompt (no user instruction for retry)
 	prompt := r.issueContextService.FormatPrompt(issueContext, "")
 
-	// Get existing branch name from PR associated with issue (for continuing work on existing PR)
+	// Get existing branch name from PR associated with agent run (for continuing work on existing PR)
 	var existingBranchName string
 	prRepo := repositories.NewPullRequestRepository(config.GetDB())
-	prs, prErr := prRepo.FindByIssueID(issue.ID)
-	if prErr == nil && len(prs) > 0 {
-		// Use the first open PR if multiple exist
-		for _, pr := range prs {
-			if pr.Status == "open" {
-				existingBranchName = pr.Branch
-				r.logger.Info("Found existing PR for issue, will use existing branch for retry",
-					zap.Int("agent_run_id", agentRun.ID),
-					zap.Int("issue_id", issue.ID),
-					zap.Int("pr_number", pr.Number),
-					zap.String("branch", existingBranchName),
-				)
-				break
+	// Prefer PR associated with this agent run if available
+	if agentRun.PRID != nil {
+		pr, prErr := prRepo.FindByID(*agentRun.PRID)
+		if prErr == nil && pr != nil && pr.Status == "open" {
+			existingBranchName = pr.Branch
+			r.logger.Info("Found PR associated with agent run, will use existing branch for retry",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.Int("pr_number", pr.Number),
+				zap.String("branch", existingBranchName),
+			)
+		} else if prErr != nil {
+			r.logger.Warn("Failed to find PR associated with agent run, falling back to issue PRs",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.Error(prErr),
+			)
+		} else if pr != nil && pr.Status != "open" {
+			r.logger.Info("PR associated with agent run is not open, falling back to issue PRs",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.String("pr_status", pr.Status),
+			)
+		}
+	}
+
+	// Fallback: scan all PRs for the issue if no branch found from agent run's PR
+	if existingBranchName == "" {
+		prs, prErr := prRepo.FindByIssueID(issue.ID)
+		if prErr == nil && len(prs) > 0 {
+			// Use the first open PR if multiple exist
+			for _, pr := range prs {
+				if pr.Status == "open" {
+					existingBranchName = pr.Branch
+					r.logger.Info("Found existing PR for issue, will use existing branch for retry",
+						zap.Int("agent_run_id", agentRun.ID),
+						zap.Int("issue_id", issue.ID),
+						zap.Int("pr_number", pr.Number),
+						zap.String("branch", existingBranchName),
+					)
+					break
+				}
 			}
 		}
 	}

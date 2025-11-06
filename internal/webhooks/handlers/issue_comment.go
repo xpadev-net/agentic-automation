@@ -521,19 +521,51 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	userInstruction := utils.ExtractInstructionFromComment(payload.Comment.Body)
 
 	pullRequestRepo := repositories.NewPullRequestRepository(db)
-	prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
-	if prErr == nil && len(prs) > 0 {
-		// Use the first open PR if multiple exist
-		for _, pr := range prs {
-			if pr.Status == "open" {
-				existingBranchName = pr.Branch
-				logger.Info("Found existing PR for issue, will checkout existing branch",
-					zap.Int("issue_id", issue.ID),
-					zap.Int("pr_number", pr.Number),
-					zap.String("branch", existingBranchName),
-					zap.String("delivery_id", deliveryID),
-				)
-				break
+	// Prefer PR associated with this agent run if available
+	if agentRun.PRID != nil {
+		pr, prErr := pullRequestRepo.FindByID(*agentRun.PRID)
+		if prErr == nil && pr != nil && pr.Status == "open" {
+			existingBranchName = pr.Branch
+			logger.Info("Found PR associated with agent run, will checkout existing branch",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.Int("pr_number", pr.Number),
+				zap.String("branch", existingBranchName),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else if prErr != nil {
+			logger.Warn("Failed to find PR associated with agent run, falling back to issue PRs",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.Error(prErr),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else if pr != nil && pr.Status != "open" {
+			logger.Info("PR associated with agent run is not open, falling back to issue PRs",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.String("pr_status", pr.Status),
+				zap.String("delivery_id", deliveryID),
+			)
+		}
+	}
+
+	// Fallback: scan all PRs for the issue if no branch found from agent run's PR
+	if existingBranchName == "" {
+		prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
+		if prErr == nil && len(prs) > 0 {
+			// Use the first open PR if multiple exist
+			for _, pr := range prs {
+				if pr.Status == "open" {
+					existingBranchName = pr.Branch
+					logger.Info("Found existing PR for issue, will checkout existing branch",
+						zap.Int("issue_id", issue.ID),
+						zap.Int("pr_number", pr.Number),
+						zap.String("branch", existingBranchName),
+						zap.String("delivery_id", deliveryID),
+					)
+					break
+				}
 			}
 		}
 	}
