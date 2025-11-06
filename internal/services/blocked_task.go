@@ -8,6 +8,7 @@ import (
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/utils"
+	"gorm.io/gorm"
 )
 
 // BlockedTaskResolver locates tasks (issues) that have become unblocked
@@ -101,8 +102,12 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 
 		iss, findErr := r.issues.FindByID(id)
 		if findErr != nil {
-			// If the record vanished or cannot be loaded, skip safely
-			continue
+			if errors.Is(findErr, gorm.ErrRecordNotFound) {
+				// record truly doesn't exist; skip
+				continue
+			}
+			// unexpected data access error: propagate so caller can retry/surface
+			return nil, fmt.Errorf("failed to load issue %d: %w", id, findErr)
 		}
 
 		// Only consider issues that are still open; skip closed ones
