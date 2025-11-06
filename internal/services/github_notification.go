@@ -99,6 +99,12 @@ const (
 	progressBarLength         = 10 // 進捗バーの文字数
 )
 
+// Dependency Violation Notification (US5 T129)
+const (
+	dependencyViolationMarkerPrefix = "<!-- agent:dependency-violation:"
+	maxBlockedIssuesToShow          = 10
+)
+
 func shortSHA(sha string) string {
 	if len(sha) >= 7 {
 		return sha[:7]
@@ -752,4 +758,187 @@ func (s *GitHubNotificationService) NotifyMergeFailure(
 	errorType, errorMessage, idempotencyKey string,
 ) error {
 	return s.NotifyMergeStatus(ctx, owner, repo, issueNumber, prNumber, false, "", errorMessage, idempotencyKey, errorType)
+}
+
+// -----------------------------------------------------------------------------
+// Dependency Violation Notification (US5 T129)
+// -----------------------------------------------------------------------------
+
+// FormatDependencyViolationBody formats a message body for dependency violation notification.
+// It includes a marker, header, list of blocked issues, and guidance message.
+// Exported for testing purposes.
+//
+// Parameters:
+//   - blocked: List of blocking issues (must not be empty)
+//   - marker: HTML comment marker for idempotency
+//
+// Returns:
+//   - string: Formatted markdown message
+func FormatDependencyViolationBody(blocked []models.Issue, marker string) string {
+	message := marker + "\n❌ Dependency violation\n\n"
+	message += "This issue cannot be executed because it depends on the following open issues:\n\n"
+
+	// Show up to maxBlockedIssuesToShow issues
+	showCount := len(blocked)
+	if showCount > maxBlockedIssuesToShow {
+		showCount = maxBlockedIssuesToShow
+	}
+
+	for i := 0; i < showCount; i++ {
+		issue := blocked[i]
+		message += fmt.Sprintf("- %s#%d [%s]\n", issue.Repo, issue.Number, issue.State)
+	}
+
+	// Add summary if there are more issues
+	if len(blocked) > maxBlockedIssuesToShow {
+		remaining := len(blocked) - maxBlockedIssuesToShow
+		message += fmt.Sprintf("\n... and %d more\n", remaining)
+	}
+
+	message += "\nClose all blocking issues to proceed."
+	return message
+}
+
+// NotifyDependencyViolation posts a status comment to both the Issue and the PR (if exists)
+// to report dependency violations. It is idempotent per idempotencyKey; if a marker is
+// already present, the existing comment is updated.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - owner: Repository owner
+//   - repo: Repository name
+//   - issueNumber: Issue number
+//   - prNumber: PR number (0 if not applicable)
+//   - blocked: List of blocking issues (must not be empty)
+//   - idempotencyKey: Idempotency key for marker-based deduplication
+//
+// Returns:
+//   - error: Error if both Issue and PR notifications failed
+func (s *GitHubNotificationService) NotifyDependencyViolation(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber, prNumber int,
+	blocked []models.Issue,
+	idempotencyKey string,
+) error {
+	// Input validation
+	if len(blocked) == 0 {
+		return fmt.Errorf("blocked issues list must not be empty")
+	}
+	if idempotencyKey == "" {
+		return fmt.Errorf("idempotencyKey must not be empty")
+	}
+
+	s.logger.Info("Posting dependency violation notifications",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("issue_number", issueNumber),
+		zap.Int("pr_number", prNumber),
+		zap.Int("blocked_count", len(blocked)),
+		zap.String("idempotency_key", idempotencyKey),
+	)
+
+	// Generate marker
+	marker := dependencyViolationMarkerPrefix + idempotencyKey + " -->"
+
+	// Format message body
+	body := FormatDependencyViolationBody(blocked, marker)
+
+	var aggErr error
+
+	// Post to Issue thread
+	if issueNumber > 0 {
+		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, issueNumber, marker)
+		if err != nil {
+			s.logger.Warn("Failed to scan issue comments for dependency violation marker",
+				zap.Error(err),
+				zap.Int("issue_number", issueNumber),
+			)
+			aggErr = err
+		} else if found && commentID != nil {
+			// Update existing comment
+			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
+				s.logger.Warn("Failed to update issue comment for dependency violation",
+					zap.Error(err),
+					zap.Int("issue_number", issueNumber),
+					zap.Int64("comment_id", *commentID),
+				)
+				aggErr = err
+			} else {
+				s.logger.Info("Updated issue comment for dependency violation",
+					zap.Int("issue_number", issueNumber),
+					zap.Int64("comment_id", *commentID),
+				)
+			}
+		} else {
+			// Create new comment
+			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
+				s.logger.Warn("Failed to post issue comment for dependency violation",
+					zap.Error(err),
+					zap.Int("issue_number", issueNumber),
+				)
+				aggErr = err
+			} else {
+				s.logger.Info("Posted issue comment for dependency violation",
+					zap.Int("issue_number", issueNumber),
+				)
+			}
+		}
+	}
+
+	// Post to PR thread (PR number can be used with Issues API)
+	if prNumber > 0 {
+		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, prNumber, marker)
+		if err != nil {
+			s.logger.Warn("Failed to scan PR comments for dependency violation marker",
+				zap.Error(err),
+				zap.Int("pr_number", prNumber),
+			)
+			if aggErr == nil {
+				aggErr = err
+			}
+		} else if found && commentID != nil {
+			// Update existing comment
+			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
+				s.logger.Warn("Failed to update PR comment for dependency violation",
+					zap.Error(err),
+					zap.Int("pr_number", prNumber),
+					zap.Int64("comment_id", *commentID),
+				)
+				if aggErr == nil {
+					aggErr = err
+				}
+			} else {
+				s.logger.Info("Updated PR comment for dependency violation",
+					zap.Int("pr_number", prNumber),
+					zap.Int64("comment_id", *commentID),
+				)
+			}
+		} else {
+			// Create new comment
+			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
+				s.logger.Warn("Failed to post PR comment for dependency violation",
+					zap.Error(err),
+					zap.Int("pr_number", prNumber),
+				)
+				if aggErr == nil {
+					aggErr = err
+				}
+			} else {
+				s.logger.Info("Posted PR comment for dependency violation",
+					zap.Int("pr_number", prNumber),
+				)
+			}
+		}
+	}
+
+	if aggErr != nil {
+		return aggErr
+	}
+
+	s.logger.Info("Dependency violation notifications posted (or updated)",
+		zap.Int("issue_number", issueNumber),
+		zap.Int("pr_number", prNumber),
+	)
+	return nil
 }
