@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // BlockedTaskResolver locates tasks (issues) that have become unblocked
@@ -312,7 +313,11 @@ func TriggerJobsForUnblockedTasks(
 
 		// Create Job
 		if _, err := jobService.CreateJobForAgentRun(ctx, agentRun, &updatedIssue, prompt); err != nil {
-			// Rollback to queued for retry if job creation fails
+			// If a job with same name already exists, treat as success (another handler created it)
+			if apierrors.IsAlreadyExists(err) {
+				continue
+			}
+			// Rollback to queued only when Job was not created
 			_ = stateMachine.TransitionToQueued(agentRun.ID)
 			return fmt.Errorf("failed to create job for run %d: %w", agentRun.ID, err)
 		}
