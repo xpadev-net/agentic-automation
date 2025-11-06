@@ -62,6 +62,22 @@ func InitDatabase() error {
 	}
 
 	// Open database connection
+	// Ensure charset/collation parameters are present
+	if !strings.Contains(strings.ToLower(dsn), "charset=") {
+		if strings.Contains(dsn, "?") {
+			dsn += "&charset=utf8mb4&collation=utf8mb4_0900_ai_ci"
+		} else {
+			dsn += "?charset=utf8mb4&collation=utf8mb4_0900_ai_ci"
+		}
+	} else if !strings.Contains(strings.ToLower(dsn), "collation=") {
+		// add collation if charset exists but collation missing
+		if strings.Contains(dsn, "?") {
+			dsn += "&collation=utf8mb4_0900_ai_ci"
+		} else {
+			dsn += "?collation=utf8mb4_0900_ai_ci"
+		}
+	}
+
 	database, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
 		Logger: gormLogger,
 		NowFunc: func() time.Time {
@@ -87,6 +103,13 @@ func InitDatabase() error {
 	// Test connection
 	if err := sqlDB.Ping(); err != nil {
 		return fmt.Errorf("failed to ping database: %w", sanitizeDBError(err))
+	}
+
+	// Force session charset/collation (defensive)
+	if err := sqlDB.Ping(); err == nil {
+		if errExec := database.Exec("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci").Error; errExec != nil {
+			log.Warn("Failed to SET NAMES utf8mb4 (continuing)", zap.Error(errExec))
+		}
 	}
 
 	db = database
