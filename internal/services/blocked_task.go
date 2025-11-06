@@ -208,13 +208,22 @@ func TriggerJobsForUnblockedTasks(
 	}
 
 	// Resolve unblocked issues based on the current graph and DB state
+	logger := config.LoggerWithTraceIDs(ctx).With(zap.String("component", "blocked_task"))
+	logger.Info("blocked_task.resume_evaluation_started",
+		zap.Int64("eventIssueID", eventIssueDBID),
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+	)
 	candidates, err := resolver.FindUnblockedTasks(ctx, eventIssueDBID)
 	if err != nil {
 		return err
 	}
 
 	// Process each candidate
+	evaluatedCount := 0
+	jobsTriggered := 0
 	for _, is := range candidates {
+		evaluatedCount++
 		// Respect context cancellation
 		if err := ctx.Err(); err != nil {
 			return err
@@ -222,6 +231,12 @@ func TriggerJobsForUnblockedTasks(
 
 		// Filter by repository (owner/repo)
 		if is.Repo != owner+"/"+repo {
+			logger.Info("blocked_task.resume_repo_mismatch",
+				zap.Int("taskId", is.ID),
+				zap.String("issueRepo", is.Repo),
+				zap.String("owner", owner),
+				zap.String("repo", repo),
+			)
 			continue
 		}
 
@@ -231,6 +246,7 @@ func TriggerJobsForUnblockedTasks(
 			return fmt.Errorf("failed to load agent runs for issue %d: %w", is.ID, runsErr)
 		}
 		skip := false
+		skippedStates := make([]string, 0, len(runs))
 		for _, run := range runs {
 			if run == nil {
 				continue
@@ -238,18 +254,36 @@ func TriggerJobsForUnblockedTasks(
 			s := run.State
 			if s == "queued" || s == "started" || s == "succeeded" {
 				skip = true
+				if len(skippedStates) < 3 {
+					skippedStates = append(skippedStates, s)
+				}
 				break
 			}
 		}
 		if skip {
+			logger.Info("blocked_task.resume_skipped_existing_run",
+				zap.Int("taskId", is.ID),
+				zap.Strings("agentRunStates", skippedStates),
+			)
 			continue
 		}
 
 		// Collect issue context and build prompt
 		issueCtx, ctxErr := issueCtxSvc.CollectIssueContext(ctx, owner, repo, is.Number)
 		if ctxErr != nil {
+			logger.Error("blocked_task.issue_context_failed",
+				zap.Int("taskId", is.ID),
+				zap.Int("issueNumber", is.Number),
+				zap.Error(ctxErr),
+			)
 			return fmt.Errorf("failed to collect issue context for #%d: %w", is.Number, ctxErr)
 		}
+		logger.Info("blocked_task.issue_context_collected",
+			zap.Int("taskId", is.ID),
+			zap.Int("issueNumber", is.Number),
+			zap.Int("labelsCount", len(issueCtx.Labels)),
+			zap.Int("commentsCount", len(issueCtx.Comments)),
+		)
 		prompt := issueCtxSvc.FormatPrompt(issueCtx)
 
 		// Respect labels from freshly fetched issue context for agent detection
@@ -289,6 +323,12 @@ func TriggerJobsForUnblockedTasks(
 		if createErr != nil {
 			return fmt.Errorf("failed to create agent run: %w", createErr)
 		}
+		logger.Info("blocked_task.agent_run_upserted",
+			zap.Int("taskId", is.ID),
+			zap.Int("agentRunId", agentRun.ID),
+			zap.Bool("isNew", isNew),
+			zap.String("agentType", agentType),
+		)
 
 		// If an existing run already exists, branch by state to avoid duplicate jobs
 		if !isNew {
@@ -307,22 +347,51 @@ func TriggerJobsForUnblockedTasks(
 		}
 
 		// Transition to started before Job creation (align with comment-trigger flow)
+		logger.Info("blocked_task.run_transition_started",
+			zap.Int("agentRunId", agentRun.ID),
+			zap.String("from", "queued"),
+			zap.String("to", "started"),
+		)
 		if err := stateMachine.TransitionToStarted(agentRun.ID); err != nil {
+			logger.Error("blocked_task.run_transition_failed",
+				zap.Int("agentRunId", agentRun.ID),
+				zap.Error(err),
+			)
 			return fmt.Errorf("failed to transition run %d to started: %w", agentRun.ID, err)
 		}
 
 		// Create Job
-		if _, err := jobService.CreateJobForAgentRun(ctx, agentRun, &updatedIssue, prompt); err != nil {
+		if job, err := jobService.CreateJobForAgentRun(ctx, agentRun, &updatedIssue, prompt); err != nil {
 			// If a job with same name already exists, treat as success (another handler created it)
 			if apierrors.IsAlreadyExists(err) {
+				logger.Info("blocked_task.job_already_exists",
+					zap.Int("agentRunId", agentRun.ID),
+					zap.Int("taskId", is.ID),
+				)
 				continue
 			}
 			// Rollback to queued only when Job was not created
 			_ = stateMachine.TransitionToQueued(agentRun.ID)
+			logger.Error("blocked_task.job_creation_failed",
+				zap.Int("agentRunId", agentRun.ID),
+				zap.Int("taskId", is.ID),
+				zap.Error(err),
+			)
 			return fmt.Errorf("failed to create job for run %d: %w", agentRun.ID, err)
+		} else {
+			jobsTriggered++
+			logger.Info("blocked_task.job_created",
+				zap.Int("agentRunId", agentRun.ID),
+				zap.Int("taskId", is.ID),
+				zap.String("jobName", job.Name),
+			)
 		}
 	}
 
+	logger.Info("blocked_task.resume_evaluation_completed",
+		zap.Int("evaluatedCount", evaluatedCount),
+		zap.Int("jobsTriggered", jobsTriggered),
+	)
 	return nil
 }
 
