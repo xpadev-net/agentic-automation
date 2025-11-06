@@ -258,7 +258,7 @@
 - [x] T123 [US5] Implement blocker graph builder from GitHub API dependency data in internal/services/blocker_graph.go
 - [x] T124 [US5] Create circular dependency detector with cycle detection algorithm in internal/services/circular_dependency_detector.go
 - [x] T125 [US5] Implement webhook handler for issues events (closed/reopened) in internal/webhooks/handlers/issues.go
-- [ ] T126 [US5] Create blocked task resolver finding unblocked tasks in internal/services/blocked_task.go
+- [x] T126 [US5] Create blocked task resolver finding unblocked tasks in internal/services/blocked_task.go
 - [x] T127 [US5] Implement dependency validation preventing out-of-order execution in internal/services/dependency_validator.go
 - [ ] T128 [US5] Implement automatic K8s Job trigger for unblocked tasks in internal/services/blocked_task.go
 - [ ] T129 [US5] Add GitHub status comment for dependency violations in internal/services/github_notification.go
