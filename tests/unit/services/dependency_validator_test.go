@@ -9,6 +9,8 @@ import (
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"go.uber.org/zap"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // fakeBuilder はテスト用の BlockerGraphBuilder。呼び出し回数を記録する。
@@ -23,7 +25,13 @@ func TestDependencyValidator_AllClosed_Allows(t *testing.T) {
 	t.Parallel()
 
 	logger := zap.NewNop()
-	db := appconfig.GetDB()
+	// initialize in-memory sqlite and inject into config
+	sdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	appconfig.SetDBForTesting(sdb)
+	db := sdb
 
 	issueRepo := repositories.NewIssueRepository()
 	edgeRepo := repositories.NewBlockerGraphRepository()
@@ -62,7 +70,12 @@ func TestDependencyValidator_HasOpen_Block(t *testing.T) {
 	t.Parallel()
 
 	logger := zap.NewNop()
-	db := appconfig.GetDB()
+	sdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	appconfig.SetDBForTesting(sdb)
+	db := sdb
 
 	issueRepo := repositories.NewIssueRepository()
 	edgeRepo := repositories.NewBlockerGraphRepository()
