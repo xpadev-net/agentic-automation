@@ -31,11 +31,15 @@ func TruncateWithSuffix(s string, maxBytes int, suffix string) string {
 	if len(suffix) >= maxBytes {
 		// cut suffix to maxBytes on rune boundary
 		cut := maxBytes
-		for cut > 0 && (suffix[cut-1]&0xC0) == 0x80 {
+		for cut > 0 {
+			_, size := utf8.DecodeLastRuneInString(suffix[:cut])
+			if size != 1 || suffix[cut-1] < utf8.RuneSelf {
+				break
+			}
 			cut--
 		}
-		if cut <= 0 {
-			cut = maxBytes
+		if cut < 0 {
+			cut = 0
 		}
 		return suffix[:cut]
 	}
@@ -47,12 +51,16 @@ func TruncateWithSuffix(s string, maxBytes int, suffix string) string {
 	}
 
 	cut := headLimit
-	// ensure we don't cut in the middle of a rune
-	for cut > 0 && (s[cut-1]&0xC0) == 0x80 {
+	// ensure we don't cut in the middle of a rune: backtrack until a valid boundary
+	for cut > 0 {
+		r, size := utf8.DecodeLastRuneInString(s[:cut])
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
 		cut--
 	}
-	if cut <= 0 {
-		cut = headLimit
+	if cut < 0 {
+		cut = 0
 	}
 	return s[:cut] + suffix
 }
