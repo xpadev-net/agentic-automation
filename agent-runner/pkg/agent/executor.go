@@ -174,6 +174,7 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 		// This prevents ErrTooLong errors when cursor-agent outputs large messages
 		buf := make([]byte, 0, 1024*1024) // 1MB initial buffer
 		scanner.Buffer(buf, 10*1024*1024) // 10MB max buffer
+		inProgress := false
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			lineCopy := make([]byte, len(line))
@@ -194,7 +195,19 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 				// Format and output the parsed entry with suppression of duplicate thinking progress logs
 				formatted, shouldOutput := logFormatter.FormatAndOutput(entry)
 				if shouldOutput {
-					fmt.Fprintf(os.Stderr, "%s\n", formatted)
+					isProcessingPiece := strings.HasPrefix(formatted, "[THINKING] processing") || formatted == "."
+					if isProcessingPiece {
+						// processing 系は改行しない（同一行で進捗を更新）
+						fmt.Fprintf(os.Stderr, "%s", formatted)
+						inProgress = true
+					} else {
+						if inProgress {
+							// 直前が進捗連結中なら行を確定
+							fmt.Fprintf(os.Stderr, "\n")
+							inProgress = false
+						}
+						fmt.Fprintf(os.Stderr, "%s\n", formatted)
+					}
 				}
 			}
 		}

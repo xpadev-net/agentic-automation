@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestSuppressDuplicateThinkingProcessingLogs(t *testing.T) {
+func TestProgressDotsIncrementOnConsecutiveProcessing(t *testing.T) {
 	// Prepare stream-json like lines for the same session
 	lines := []string{
 		`{"type":"thinking","subtype":"progress","session_id":"s1"}`,
@@ -34,16 +34,16 @@ func TestSuppressDuplicateThinkingProcessingLogs(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect only one processing line and one completed line
-	if strings.Count(out, "[THINKING] processing...") != 1 {
-		t.Fatalf("expected 1 processing line, got:\n%s", out)
+	// Expect first processing then one dot, then a newline before completed
+	if !strings.Contains(out, "[THINKING] processing.") {
+		t.Fatalf("expected '[THINKING] processing.' sequence, got:\n%s", out)
 	}
-	if strings.Count(out, "[THINKING] completed") != 1 {
-		t.Fatalf("expected 1 completed line, got:\n%s", out)
+	if !strings.Contains(out, "\n[THINKING] completed") {
+		t.Fatalf("expected newline before completed, got:\n%s", out)
 	}
 }
 
-func TestSuppressMultipleDuplicateThinkingProcessingLogs(t *testing.T) {
+func TestProgressDotsKeepIncreasingWithMoreProcessing(t *testing.T) {
 	// Test with many consecutive duplicate processing logs
 	lines := []string{
 		`{"type":"thinking","subtype":"progress","session_id":"s1"}`,
@@ -73,16 +73,16 @@ func TestSuppressMultipleDuplicateThinkingProcessingLogs(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect only one processing line (first one) and one completed line
-	if strings.Count(out, "[THINKING] processing...") != 1 {
-		t.Fatalf("expected 1 processing line, got %d:\n%s", strings.Count(out, "[THINKING] processing..."), out)
+	// Expect first processing then four dots (total 5 processing events)
+	if !strings.Contains(out, "[THINKING] processing....") {
+		t.Fatalf("expected '[THINKING] processing....', got:\n%s", out)
 	}
-	if strings.Count(out, "[THINKING] completed") != 1 {
-		t.Fatalf("expected 1 completed line, got %d:\n%s", strings.Count(out, "[THINKING] completed"), out)
+	if !strings.Contains(out, "[THINKING] completed") {
+		t.Fatalf("expected completed, got:\n%s", out)
 	}
 }
 
-func TestDifferentSessionsNotSuppressed(t *testing.T) {
+func TestDifferentSessionsDotsManagedIndependently(t *testing.T) {
 	// Test that different sessions don't suppress each other
 	lines := []string{
 		`{"type":"thinking","subtype":"progress","session_id":"s1"}`,
@@ -111,12 +111,12 @@ func TestDifferentSessionsNotSuppressed(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect 3 processing lines (s1 first, s2, s1 second) and 2 completed lines
-	// s1's second processing should be suppressed because it's duplicate for s1
-	if strings.Count(out, "[THINKING] processing...") != 2 {
-		t.Fatalf("expected 2 processing lines, got %d:\n%s", strings.Count(out, "[THINKING] processing..."), out)
+	// Expect concatenated order: s1 base + s2 base + s1 dot
+	prefix := "[THINKING] processing[THINKING] processing."
+	if !strings.Contains(out, prefix) {
+		t.Fatalf("expected concatenated processing sequence per session, got:\n%s", out)
 	}
 	if strings.Count(out, "[THINKING] completed") != 2 {
-		t.Fatalf("expected 2 completed lines, got %d:\n%s", strings.Count(out, "[THINKING] completed"), out)
+		t.Fatalf("expected 2 completed logs, got %d:\n%s", strings.Count(out, "[THINKING] completed"), out)
 	}
 }

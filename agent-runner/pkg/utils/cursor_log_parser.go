@@ -186,8 +186,9 @@ func (e *ResultEntry) Format() string {
 	return fmt.Sprintf("[RESULT] %s%s%s", status, duration, result)
 }
 
-// LogFormatter handles formatting and suppression of duplicate log entries.
-// It maintains state per session to suppress consecutive duplicate thinking progress logs.
+// LogFormatter handles formatting of log entries with simple stateful rules.
+// For THINKING progress logs, it appends an extra '.' for consecutive entries
+// in the same session (e.g., ..., ...., .....), to indicate ongoing progress.
 type LogFormatter struct {
 	mu                     sync.Mutex
 	lastFormattedBySession map[string]string
@@ -203,32 +204,42 @@ func NewLogFormatter() *LogFormatter {
 // ShouldOutput determines if a log entry should be output, suppressing duplicate
 // consecutive thinking progress logs for the same session.
 // formatted is the formatted string for the entry.
-func (lf *LogFormatter) ShouldOutput(entry LogEntry, formatted string) bool {
+func (lf *LogFormatter) ShouldOutput(entry LogEntry, formatted string) (string, bool) {
 	lf.mu.Lock()
 	defer lf.mu.Unlock()
 
 	sessionID := entry.GetSessionID()
 
 	if te, ok := entry.(*ThinkingEntry); ok {
-		// Only suppress when it's a processing (non-completed) thinking log
-		if te.Subtype != "completed" && formatted == "[THINKING] processing..." {
-			if last, ok := lf.lastFormattedBySession[sessionID]; ok && last == formatted {
-				// skip duplicate consecutive processing log for the same session
-				return false
+		base := "[THINKING] processing"
+		if te.Subtype == "completed" {
+			// Mark completion; next processing restarts from base
+			lf.lastFormattedBySession[sessionID] = "[THINKING] completed"
+			return formatted, true
+		}
+		// processing case: first -> base, subsequent -> "."
+		if strings.HasPrefix(formatted, base) || formatted == "[THINKING] processing..." {
+			last := lf.lastFormattedBySession[sessionID]
+			if strings.HasPrefix(last, base) {
+				formatted = "."
+			} else {
+				formatted = base
 			}
+			lf.lastFormattedBySession[sessionID] = base
+			return formatted, true
 		}
 	}
 
-	// Update the last formatted entry for this session
+	// Update the last formatted entry for this session (after mutation)
 	lf.lastFormattedBySession[sessionID] = formatted
-	return true
+	return formatted, true
 }
 
 // FormatAndOutput formats an entry and determines if it should be output.
 // Returns the formatted string and whether it should be output.
 func (lf *LogFormatter) FormatAndOutput(entry LogEntry) (string, bool) {
 	formatted := entry.Format()
-	shouldOutput := lf.ShouldOutput(entry, formatted)
+	formatted, shouldOutput := lf.ShouldOutput(entry, formatted)
 	return formatted, shouldOutput
 }
 
@@ -300,6 +311,7 @@ func ParseLogEntry(line []byte) (LogEntry, error) {
 func ParseAndFormatOutput(output string) {
 	formatter := NewLogFormatter()
 	lines := strings.Split(output, "\n")
+	inProgress := false
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -316,7 +328,19 @@ func ParseAndFormatOutput(output string) {
 		// Format and output the parsed entry with suppression of duplicate thinking progress logs
 		formatted, shouldOutput := formatter.FormatAndOutput(entry)
 		if shouldOutput {
-			fmt.Fprintf(os.Stderr, "%s\n", formatted)
+			isProcessingPiece := strings.HasPrefix(formatted, "[THINKING] processing") || formatted == "."
+			if isProcessingPiece {
+				// processing 系は改行しない（同一行で進捗を更新）
+				fmt.Fprintf(os.Stderr, "%s", formatted)
+				inProgress = true
+			} else {
+				// 非 processing が来たら、直前が進捗連結中なら行を確定
+				if inProgress {
+					fmt.Fprintf(os.Stderr, "\n")
+					inProgress = false
+				}
+				fmt.Fprintf(os.Stderr, "%s\n", formatted)
+			}
 		}
 	}
 }
