@@ -63,6 +63,7 @@ type Label struct {
 // User represents a GitHub user
 type User struct {
 	Login string `json:"login"`
+	ID    int64  `json:"id"`
 }
 
 const deliveryHeader = "X-GitHub-Delivery"
