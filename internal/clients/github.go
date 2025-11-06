@@ -849,3 +849,10 @@ func (c *GitHubClient) DoWithClientRetry(
 	}
 	return err
 }
+
+// SetTestServer sets the baseURL and httpClient for testing purposes
+// This allows tests in other packages to configure the client to use a test server
+func (c *GitHubClient) SetTestServer(baseURL *url.URL, httpClient *http.Client) {
+	c.baseURL = baseURL
+	c.httpClient = httpClient
+}
