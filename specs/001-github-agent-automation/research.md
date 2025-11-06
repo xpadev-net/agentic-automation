@@ -274,7 +274,7 @@
 **Data Model**:
 - Composite PK: (taskId, dependsOnTaskId)
 - Both columns FK to Issue.id
-- Fetch dependencies using GitHub Issue Dependencies API (`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies`)
+- Fetch dependencies using GitHub Issue Dependencies API (`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by` and `/blocking`)
 
 ### 4.5 Concurrent Execution
 

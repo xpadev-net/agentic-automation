@@ -107,8 +107,8 @@ Triggered when an Issue is opened, closed, or reopened.
 **Processing**:
 
 1. Fetch Issue dependencies from GitHub Issue Dependencies API:
-   - Endpoint: `GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies`
-   - Returns structured JSON with blocked_by and blocking relationships
+   - Endpoints: `GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by` and `/blocking`
+   - Returns structured JSON with dependency relationships
 2. Update BlockerGraphEdges table
 3. On `action: closed`:
    - Query BlockerGraphEdges for dependents
@@ -120,13 +120,14 @@ Triggered when an Issue is opened, closed, or reopened.
 
 API Reference: https://docs.github.com/en/rest/issues/issue-dependencies
 
+Endpoints:
 ```
-GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies
+GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by
+GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking
 ```
 
-Response structure includes:
-- `blocked_by`: Array of issues blocking this issue
-- `blocking`: Array of issues this issue is blocking
+- `blocked_by` endpoint returns array of issues blocking this issue
+- `blocking` endpoint returns array of issues this issue is blocking
 
 ---
 

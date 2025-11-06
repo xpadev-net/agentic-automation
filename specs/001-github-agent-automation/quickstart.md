@@ -263,7 +263,7 @@ To create task dependencies, use GitHub's native Issue Dependencies feature:
 3. Click "Add dependency" to link blocking/blocked issues
 4. Dependencies are managed through GitHub's structured API
 
-The system fetches dependency information from GitHub Issue Dependencies API (`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies`) and won't start execution until all blocking dependencies are closed.
+The system fetches dependency information from GitHub Issue Dependencies API (`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by` and `/blocking`) and won't start execution until all blocking dependencies are closed.
 
 **Note**: Dependencies are tracked through GitHub's native feature, not text parsing. This ensures reliable and structured dependency management.
 

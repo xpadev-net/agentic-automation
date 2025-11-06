@@ -176,8 +176,10 @@ Adjacency list for Issue dependency graph (directed graph)
 - Cycle detection via DFS before starting execution
 
 **Data Source**: Fetch from GitHub Issue Dependencies API:
-- Endpoint: `GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies`
-- Returns structured JSON with blocked_by and blocking relationships
+- Endpoints:
+  - `GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by` - issues blocking this issue
+  - `GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking` - issues this issue is blocking
+- Returns structured JSON with dependency relationships
 - No text parsing required - uses GitHub's native dependency tracking
 
 ### AuditLog
