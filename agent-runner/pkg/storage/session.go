@@ -186,33 +186,40 @@ func createTarGz(srcDir, destPath string) error {
 			return nil // Skip file
 		}
 
-		// Create tar header
+		// Directories: write header only
+		if info.IsDir() {
+			header, err := tar.FileInfoHeader(info, "")
+			if err != nil {
+				return fmt.Errorf("failed to create tar header: %w", err)
+			}
+			header.Name = relPath
+			if err := tarWriter.WriteHeader(header); err != nil {
+				return fmt.Errorf("failed to write tar header: %w", err)
+			}
+			return nil
+		}
+
+		// Non-regular files (sockets, pipes, devices, symlinks): skip entirely
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		// Regular files: write header and contents
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return fmt.Errorf("failed to create tar header: %w", err)
 		}
-
-		// Set header name to relative path (preserves directory structure)
 		header.Name = relPath
-
-		// Write header
 		if err := tarWriter.WriteHeader(header); err != nil {
 			return fmt.Errorf("failed to write tar header: %w", err)
 		}
 
-		// Skip directories (header is enough)
-		if info.IsDir() {
-			return nil
-		}
-
-		// Open file for reading
 		file, err := os.Open(filePath)
 		if err != nil {
 			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer file.Close()
 
-		// Copy file contents to tar archive
 		if _, err := io.Copy(tarWriter, file); err != nil {
 			return fmt.Errorf("failed to write file to archive: %w", err)
 		}
@@ -408,13 +415,22 @@ func copyDir(src, dest string) error {
 			return nil
 		}
 
-		// Handle files
+		// Skip non-regular files (sockets, pipes, devices, symlinks)
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
+		// Handle regular files
 		return copyFile(srcPath, destPath, info.Mode())
 	})
 }
 
 // copyFile copies a single file from src to dest with the given permissions.
 func copyFile(src, dest string, mode os.FileMode) error {
+	// Guard: only process regular files
+	if !mode.IsRegular() {
+		return nil
+	}
 	// Create parent directories
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return fmt.Errorf("failed to create parent directory: %w", err)

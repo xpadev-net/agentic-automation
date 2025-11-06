@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -540,6 +541,17 @@ func TestCopyDir(t *testing.T) {
 				assert.True(t, emptyInfo.IsDir())
 			},
 		},
+		{
+			name: "SkipsNonRegularFiles",
+			setupFiles: map[string]testFileInfo{
+				"keep.txt": {Content: "ok", Permissions: 0644},
+			},
+			wantErr: false,
+			verify: func(t *testing.T, destDir string) {
+				// Regular file should be copied; socket will be created separately and must be skipped
+				assert.FileExists(t, filepath.Join(destDir, "keep.txt"))
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -554,6 +566,19 @@ func TestCopyDir(t *testing.T) {
 
 			if tt.setupFiles != nil {
 				createTestSessionFiles(t, srcDir, tt.setupFiles)
+			}
+
+			// If the test is SkipsNonRegularFiles, create a UNIX socket in source
+			if tt.name == "SkipsNonRegularFiles" {
+				sockDir := filepath.Join(srcDir, "projects", "workspace")
+				os.MkdirAll(sockDir, 0755)
+				sockPath := filepath.Join(sockDir, "worker.sock")
+				l, err := net.Listen("unix", sockPath)
+				if err != nil {
+					t.Skipf("Skipping socket test: %v", err)
+					return
+				}
+				defer l.Close()
 			}
 
 			err := copyDir(srcDir, destDir)
@@ -789,6 +814,35 @@ func TestCreateTarGz_Exclusion(t *testing.T) {
 		[]string{"keep.txt"},
 		[]string{".env", "secret.pem", "api_key.txt", "node_modules/", ".git/", "cache/"},
 	)
+}
+
+// TestCreateTarGz_SkipsNonRegular verifies that sockets and other non-regular files are skipped
+func TestCreateTarGz_SkipsNonRegular(t *testing.T) {
+	srcDir, _ := setupTempDir(t)
+	tarPath := filepath.Join(t.TempDir(), "nonregular.tar.gz")
+
+	// Create a regular file
+	createTestSessionFiles(t, srcDir, map[string]testFileInfo{
+		"keep.txt": {Content: "ok", Permissions: 0644},
+	})
+
+	// Create a UNIX socket
+	sockDir := filepath.Join(srcDir, "projects", "workspace")
+	os.MkdirAll(sockDir, 0755)
+	sockPath := filepath.Join(sockDir, "worker.sock")
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Skipf("Skipping socket test: %v", err)
+		return
+	}
+	defer l.Close()
+
+	// Create archive
+	err = createTarGz(srcDir, tarPath)
+	assert.NoError(t, err)
+
+	// Verify socket path is not present, regular file is present
+	verifyArchiveContents(t, tarPath, []string{"keep.txt"}, []string{"worker.sock"})
 }
 
 // TestCreateTarGz_EmptyDirectory tests empty directory handling
