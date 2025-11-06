@@ -767,6 +767,52 @@ func TestSessionStorage_FileExclusion(t *testing.T) {
 	)
 }
 
+// TestSessionStorage_SkipsUnixSocket ensures SaveSession succeeds and excludes UNIX sockets for cursor-agent
+func TestSessionStorage_SkipsUnixSocket(t *testing.T) {
+	// Setup MinIO server
+	endpoint, bucket, _ := setupMinIOServer(t)
+
+	// Setup test home directory for cursor-agent
+	homeDir, _ := setupTestHomeDir(t, "cursor-agent")
+
+	agentRunID := 77777
+	agentType := "cursor-agent"
+
+	// Create a regular file and a UNIX socket under ~/.cursor/projects/.../worker.sock
+	regularPath := filepath.Join(homeDir, ".cursor", "session.json")
+	os.MkdirAll(filepath.Dir(regularPath), 0755)
+	os.WriteFile(regularPath, []byte(`{"ok":true}`), 0644)
+
+	sockDir := filepath.Join(homeDir, ".cursor", "projects", "workspace")
+	os.MkdirAll(sockDir, 0755)
+	sockPath := filepath.Join(sockDir, "worker.sock")
+	l, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Skipf("Skipping socket test: %v", err)
+		return
+	}
+	defer l.Close()
+
+	// SaveSession should succeed
+	err = storage.SaveSession(agentRunID, agentType)
+	require.NoError(t, err, "SaveSession should succeed with UNIX socket present")
+
+	// Download and verify archive contents
+	expectedKey := fmt.Sprintf("sessions/%d/session.tar.gz", agentRunID)
+	tarPath := downloadS3Object(t, endpoint, bucket, expectedKey)
+	defer os.Remove(tarPath)
+
+	// Regular file present, socket excluded
+	verifyArchiveContents(t, tarPath,
+		[]string{
+			".cursor/session.json",
+		},
+		[]string{
+			"worker.sock",
+		},
+	)
+}
+
 // TestSessionStorage_RestoreEarlyReturn tests that RestoreSession returns early when retryCount=0.
 func TestSessionStorage_RestoreEarlyReturn(t *testing.T) {
 	// Setup MinIO server (though it won't be used)
