@@ -7,6 +7,7 @@ import (
 
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
+	"agentic-automation/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -165,7 +166,26 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 		}
 	}
 
-	b.logger.Info("blocker graph updated",
+	// Reload current edges for this task to compute snapshot/hash.
+	currentEdges, curErr := b.edges.GetDependenciesForTask(root.ID)
+	if curErr != nil {
+		b.logger.Error("failed to reload edges for snapshot",
+			zap.Int("task_id", root.ID),
+			zap.Error(curErr),
+		)
+		return curErr
+	}
+
+	g := utils.NewDependencyGraph()
+	// Ensure root node is present even if it has no edges
+	g.AddNode(root.ID)
+	for _, e := range currentEdges {
+		g.AddEdge(e.DependsOnTaskID, e.TaskID)
+	}
+	const snapshotLimit = 100 * 1024 // 100KB
+	snapshotJSON, truncated, hash := utils.BuildGraphSnapshot(g, snapshotLimit)
+
+	b.logger.Info("blocker_graph.updated",
 		zap.String("owner", owner),
 		zap.String("repo", repo),
 		zap.Int("issue_number", issueNumber),
@@ -173,8 +193,14 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 		zap.Int("deps_fetched", len(deps)),
 		zap.Int("edges_deleted", len(toDelete)),
 		zap.Int("edges_created", len(toCreate)),
+		zap.Int("totalEdges", len(currentEdges)),
+		zap.String("graphHash", hash),
+		zap.Bool("snapshotTruncated", truncated),
 		zap.Duration("elapsed", time.Since(start)),
 	)
+
+	// Full snapshot only on debug to avoid log bloat
+	b.logger.Debug("blocker_graph.snapshot", zap.String("graphSnapshot", snapshotJSON))
 
 	return nil
 }
