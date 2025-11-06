@@ -37,7 +37,7 @@ func (s *StubIssueContext) CollectIssueContext(ctx context.Context, owner, repo 
 	return s.Context, nil
 }
 
-func (s *StubIssueContext) FormatPrompt(issueCtx *services.IssueContext) string {
+func (s *StubIssueContext) FormatPrompt(issueCtx *services.IssueContext, userInstruction string) string {
 	if issueCtx == nil {
 		return ""
 	}
@@ -79,7 +79,7 @@ type StubKubernetesJobService struct {
 }
 
 // CreateJobForAgentRun creates a Kubernetes Job for the given AgentRun and Issue
-func (s *StubKubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string) (*batchv1.Job, error) {
+func (s *StubKubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error) {
 	s.CreateJobCalled = true
 
 	if s.Error != nil {
@@ -113,7 +113,7 @@ func (s *StubKubernetesJobService) CreateJobForAgentRun(ctx context.Context, age
 }
 
 // CreateJobForAgentRunWithFeedback creates a Kubernetes Job with aggregated feedback for retry
-func (s *StubKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *services.AggregatedFeedback) (*batchv1.Job, error) {
+func (s *StubKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *services.AggregatedFeedback, branchName string) (*batchv1.Job, error) {
 	s.CreateJobCalled = true
 
 	if s.Error != nil {

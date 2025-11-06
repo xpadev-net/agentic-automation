@@ -138,7 +138,7 @@ func TestCreateBranch_InvalidInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CreateBranch(tt.workDir, tt.branchName, tt.retryCount)
+			err := CreateBranch(tt.workDir, tt.branchName, tt.retryCount, "")
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got nil")
@@ -177,7 +177,7 @@ func TestCreateBranch_NewBranch(t *testing.T) {
 
 	// Test creating new branch
 	branchName := "feature/test-branch"
-	err := CreateBranch(repoDir, branchName, 0)
+	err := CreateBranch(repoDir, branchName, 0, "")
 	if err != nil {
 		t.Fatalf("CreateBranch failed: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestCreateBranch_ExistingLocalBranch(t *testing.T) {
 	}
 
 	// Test checking out existing branch (retryCount > 0)
-	err := CreateBranch(repoDir, branchName, 1)
+	err := CreateBranch(repoDir, branchName, 1, "")
 	if err != nil {
 		t.Fatalf("CreateBranch failed: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestCreateBranch_NonExistentBranch(t *testing.T) {
 
 	// Try to checkout non-existent branch (retryCount > 0)
 	branchName := "feature/non-existent"
-	err := CreateBranch(repoDir, branchName, 1)
+	err := CreateBranch(repoDir, branchName, 1, "")
 	if err == nil {
 		t.Errorf("expected error for non-existent branch, got nil")
 		return

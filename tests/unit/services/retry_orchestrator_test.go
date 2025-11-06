@@ -80,16 +80,16 @@ type mockKubernetesJobService struct {
 	mock.Mock
 }
 
-func (m *mockKubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string) (*batchv1.Job, error) {
-	args := m.Called(ctx, agentRun, issue, prompt)
+func (m *mockKubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error) {
+	args := m.Called(ctx, agentRun, issue, prompt, branchName)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*batchv1.Job), args.Error(1)
 }
 
-func (m *mockKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *services.AggregatedFeedback) (*batchv1.Job, error) {
-	args := m.Called(ctx, agentRun, issue, prompt, feedback)
+func (m *mockKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *services.AggregatedFeedback, branchName string) (*batchv1.Job, error) {
+	args := m.Called(ctx, agentRun, issue, prompt, feedback, branchName)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

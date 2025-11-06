@@ -238,15 +238,17 @@ func (s *IssueContextService) CollectIssueContext(ctx context.Context, owner, re
 // The format follows the structure defined in contracts/ai-agent-execution.md:
 //   - Issue header: "Issue #<number>: <title>"
 //   - Description section with Issue body
-//   - Comments section with all comments (or "(none)" if empty)
+//   - User Instruction section (if provided, for follow-up requests)
+//   - Previous Conversation section with all comments (or "(none)" if empty)
 //   - Labels section with comma-separated labels (or "(none)" if empty)
 //
 // Parameters:
 //   - issueCtx: IssueContext to format (must not be nil)
+//   - userInstruction: Optional user instruction from comment (e.g., "/run-agent <instruction>")
 //
 // Returns:
 //   - string: Formatted prompt string ready for agent-runner
-func (s *IssueContextService) FormatPrompt(issueCtx *IssueContext) string {
+func (s *IssueContextService) FormatPrompt(issueCtx *IssueContext, userInstruction string) string {
 	if issueCtx == nil {
 		s.logger.Warn("FormatPrompt called with nil IssueContext, returning empty string")
 		return ""
@@ -266,8 +268,15 @@ func (s *IssueContextService) FormatPrompt(issueCtx *IssueContext) string {
 	}
 	builder.WriteString("\n\n")
 
-	// Comments section
-	builder.WriteString("Comments:\n")
+	// User Instruction section (if provided)
+	if userInstruction != "" {
+		builder.WriteString("User Instruction:\n")
+		builder.WriteString(userInstruction)
+		builder.WriteString("\n\n")
+	}
+
+	// Previous Conversation section (renamed from Comments)
+	builder.WriteString("Previous Conversation:\n")
 	if len(issueCtx.Comments) == 0 {
 		builder.WriteString("(none)\n")
 	} else {

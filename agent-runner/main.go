@@ -284,10 +284,16 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		fmt.Fprintf(os.Stderr, "Loaded manifest: version %s\n", manifest.Version)
 	}
 
-	// 7. Create feature branch
+	// 7. Create feature branch or checkout existing branch
 	branchName := fmt.Sprintf("feature/issue-%d", issueID)
-	fmt.Fprintf(os.Stderr, "Creating/checking out branch: %s\n", branchName)
-	if err := git.CreateBranch(envCfg.WorkDir, branchName, envCfg.RetryCount); err != nil {
+	existingBranchName := os.Getenv("EXISTING_BRANCH_NAME")
+	if existingBranchName != "" {
+		fmt.Fprintf(os.Stderr, "Checking out existing branch: %s\n", existingBranchName)
+		branchName = existingBranchName
+	} else {
+		fmt.Fprintf(os.Stderr, "Creating/checking out branch: %s\n", branchName)
+	}
+	if err := git.CreateBranch(envCfg.WorkDir, branchName, envCfg.RetryCount, existingBranchName); err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Branch creation failed: %v", err),
 			"",

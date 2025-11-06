@@ -127,7 +127,7 @@ type Authorization interface {
 
 type IssueContext interface {
 	CollectIssueContext(ctx context.Context, owner, repo string, issueNumber int) (*services.IssueContext, error)
-	FormatPrompt(issueCtx *services.IssueContext) string
+	FormatPrompt(issueCtx *services.IssueContext, userInstruction string) string
 }
 
 type GitHubNotification interface {
@@ -516,8 +516,69 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Step 10: Format prompt
-	prompt := issueContextService.FormatPrompt(issueContext)
+	// Step 9.5: Check for existing PR and extract user instruction
+	var existingBranchName string
+	userInstruction := utils.ExtractInstructionFromComment(payload.Comment.Body)
+
+	pullRequestRepo := repositories.NewPullRequestRepository(db)
+	// Prefer PR associated with this agent run if available
+	if agentRun.PRID != nil {
+		pr, prErr := pullRequestRepo.FindByID(*agentRun.PRID)
+		if prErr == nil && pr != nil && pr.Status == "open" {
+			existingBranchName = pr.Branch
+			logger.Info("Found PR associated with agent run, will checkout existing branch",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.Int("pr_number", pr.Number),
+				zap.String("branch", existingBranchName),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else if prErr != nil {
+			logger.Warn("Failed to find PR associated with agent run, falling back to issue PRs",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.Error(prErr),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else if pr != nil && pr.Status != "open" {
+			logger.Info("PR associated with agent run is not open, falling back to issue PRs",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("pr_id", *agentRun.PRID),
+				zap.String("pr_status", pr.Status),
+				zap.String("delivery_id", deliveryID),
+			)
+		}
+	}
+
+	// Fallback: scan all PRs for the issue if no branch found from agent run's PR
+	if existingBranchName == "" {
+		prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
+		if prErr == nil && len(prs) > 0 {
+			// Use the first open PR if multiple exist
+			for _, pr := range prs {
+				if pr.Status == "open" {
+					existingBranchName = pr.Branch
+					logger.Info("Found existing PR for issue, will checkout existing branch",
+						zap.Int("issue_id", issue.ID),
+						zap.Int("pr_number", pr.Number),
+						zap.String("branch", existingBranchName),
+						zap.String("delivery_id", deliveryID),
+					)
+					break
+				}
+			}
+		}
+	}
+
+	if userInstruction != "" {
+		logger.Info("Extracted user instruction from comment",
+			zap.String("instruction", userInstruction),
+			zap.String("delivery_id", deliveryID),
+		)
+	}
+
+	// Step 10: Format prompt with user instruction
+	prompt := issueContextService.FormatPrompt(issueContext, userInstruction)
 
 	// Step 10.5: Set labels from issueContext for agent type detection
 	if len(issueContext.Labels) > 0 {
@@ -709,7 +770,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	)
 
 	// Step 14: Create Kubernetes Job
-	job, err := jobService.CreateJobForAgentRun(ctx, agentRun, issue, prompt)
+	job, err := jobService.CreateJobForAgentRun(ctx, agentRun, issue, prompt, existingBranchName)
 	if err != nil {
 		logger.Error("Failed to create Kubernetes Job, rolling back state",
 			zap.Error(err),

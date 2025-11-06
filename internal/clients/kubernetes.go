@@ -34,6 +34,7 @@ type JobConfig struct {
 	AgentType        string
 	AgentRunnerImage string
 	TimeoutMinutes   int
+	BranchName       string // Optional: existing branch name to checkout (empty means create new branch)
 }
 
 // KubernetesClient wraps Kubernetes API client functionality
@@ -266,6 +267,14 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 			Name:  "RETRY_COUNT",
 			Value: strconv.Itoa(config.RetryCount),
 		},
+	}
+
+	// Add existing branch name if specified (for continuing work on existing PR)
+	if config.BranchName != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "EXISTING_BRANCH_NAME",
+			Value: config.BranchName,
+		})
 	}
 
 	// Get Secret names from environment variables with defaults
