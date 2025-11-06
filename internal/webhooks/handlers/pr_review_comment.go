@@ -324,6 +324,9 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 
 		// ReviewFeedbackレコード作成（承認検出時）
 		reviewFeedbackRepo := deps.ReviewFeedbackRepository
+		if reviewFeedbackRepo == nil {
+			reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
+		}
 		if reviewFeedbackRepo != nil {
 			commentID := int64(payload.Comment.ID)
 			content := payload.Comment.Body
