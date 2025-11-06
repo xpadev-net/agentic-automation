@@ -259,14 +259,14 @@
 - [x] T124 [US5] Create circular dependency detector with cycle detection algorithm in internal/services/circular_dependency_detector.go
 - [x] T125 [US5] Implement webhook handler for issues events (closed/reopened) in internal/webhooks/handlers/issues.go
 - [ ] T126 [US5] Create blocked task resolver finding unblocked tasks in internal/services/blocked_task.go
-- [ ] T127 [US5] Implement dependency validation preventing out-of-order execution in internal/services/dependency_validator.go
+- [x] T127 [US5] Implement dependency validation preventing out-of-order execution in internal/services/dependency_validator.go
 - [ ] T128 [US5] Implement automatic K8s Job trigger for unblocked tasks in internal/services/blocked_task.go
 - [ ] T129 [US5] Add GitHub status comment for dependency violations in internal/services/github_notification.go
 - [ ] T130 [US5] Add logging for blocker graph updates and task resumption in internal/services/blocked_task.go
 
 ### Tests for User Story 5 (Test-First Development)
 
-- [ ] T131 [P] [US5] Write unit tests for IssueDependencyFetcher (GitHub API integration, error handling)
+- [x] T131 [P] [US5] Write unit tests for IssueDependencyFetcher (GitHub API integration, error handling)
 - [ ] T132 [P] [US5] Write unit tests for CircularDependencyDetector (cycle detection)
 - [ ] T133 [US5] Write integration test for Issue close → unblock → auto-trigger flow
 
