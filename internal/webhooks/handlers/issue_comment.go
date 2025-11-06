@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -592,6 +593,39 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		return
 	}
 
+	// Step 12.5: Dependency validation (US5 T127)
+	// ジョブ開始前に依存が全てクローズ済みかを検証する。
+	// GitHubクライアント未注入のテスト/環境では安全にスキップする。
+	if deps.GitHubClient != nil {
+		edgesRepo := repositories.NewBlockerGraphRepository()
+		fetcher := services.NewIssueDependencyFetcher(deps.GitHubClient, logger)
+		builder := services.NewBlockerGraphBuilder(fetcher, issueRepo, edgesRepo, logger)
+		validator := services.NewDependencyValidator(builder, issueRepo, edgesRepo, logger)
+
+		vr, verr := validator.ValidateUnblocked(ctx, owner, repo, payload.Issue.Number)
+		if verr != nil {
+			if errors.Is(verr, services.ErrBlockedDependencies) {
+				logger.Info("Execution blocked due to dependencies",
+					zap.Int("agent_run_id", agentRun.ID),
+					zap.Int("issue_number", payload.Issue.Number),
+					zap.String("repo", payload.Repository.FullName),
+					zap.Int("blocked_count", len(vr.BlockedDeps)),
+					zap.Strings("blocked_deps", summarizeIssuesForLog(vr.BlockedDeps)),
+				)
+				c.Error(verr)
+				return
+			}
+			c.Error(verr)
+			return
+		}
+	} else {
+		logger.Info("Skipping dependency validation: GitHub client not provided",
+			zap.String("delivery_id", deliveryID),
+			zap.Int("issue_number", payload.Issue.Number),
+			zap.String("repo", payload.Repository.FullName),
+		)
+	}
+
 	// Step 13: State transition (queued -> started)
 	if err := stateMachine.TransitionToStarted(agentRun.ID); err != nil {
 		logger.Error("Failed to transition AgentRun to started state",
@@ -674,4 +708,16 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		"job_name":     job.Name,
 		"delivery_id":  deliveryID,
 	})
+}
+
+// summarizeIssuesForLog は repo#number 形式で配列化してログ出力向けに整形する。
+func summarizeIssuesForLog(issues []models.Issue) []string {
+	if len(issues) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(issues))
+	for _, is := range issues {
+		out = append(out, is.Repo+"#"+strconv.Itoa(is.Number))
+	}
+	return out
 }
