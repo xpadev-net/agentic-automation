@@ -231,9 +231,9 @@
 - [x] T112 [US4] Implement webhook handler for status events (CI completion) in internal/webhooks/handlers/status.go
 - [x] T113 [US4] Add merge condition re-evaluation on Codex approval comment in internal/webhooks/handlers/pr_review_comment.go
 - [x] T114 [US4] Add merge condition re-evaluation on CI success in internal/webhooks/handlers/check_suite.go
-- [ ] T115 [US4] Implement merge failure handling and notification in internal/services/auto_merge.go
-- [ ] T116 [US4] Add GitHub status comment for merge success/failure in internal/services/github_notification.go
-- [ ] T117 [US4] Add Discord notification for merge events in internal/services/discord_notification.go
+- [x] T115 [US4] Implement merge failure handling and notification in internal/services/auto_merge.go
+- [x] T116 [US4] Add GitHub status comment for merge success/failure in internal/services/github_notification.go
+- [x] T117 [US4] Add Discord notification for merge events in internal/services/discord_notification.go
 
 ### Tests for User Story 4 (Test-First Development)
 
