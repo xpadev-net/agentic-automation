@@ -41,6 +41,13 @@ func setupDBForUS4(t *testing.T) *gorm.DB {
 	})
 	require.NoError(t, err)
 
+	// Restrict to single connection to ensure all queries use the same :memory: database
+	// Without this, GORM's connection pool can create multiple connections, each getting
+	// a fresh empty database instance, causing "no such table" errors.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1) // Critical: prevents multiple connections to :memory:
+
 	// issues table
 	require.NoError(t, db.Exec(`
 		CREATE TABLE IF NOT EXISTS issues (
