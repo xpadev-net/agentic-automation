@@ -790,7 +790,9 @@ curl https://your-domain.com/health
 #### 9.2 テスト Issue の作成
 
 1. GitHub App がインストールされているリポジトリで新しい Issue を作成
-2. Issue に `/claude-code fix typo in README.md` などのコメントを追加
+2. Issue に `/run-agent` のコメントを追加（説明文を含めても検知されます: 例 `/run-agent fix typo in README.md`）
+   
+   エージェント種別はコメントではなく Issue ラベルで制御します（`agent:claude-code` / `agent:cursor-agents`）。ラベルが無い場合は `AI_AGENT_DEFAULT_TYPE` が使用されます。コメント実行には Collaborator 以上の権限が必要で、Issue は open である必要があります。
 3. Operator のログを確認:
 
 ```bash
