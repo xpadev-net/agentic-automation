@@ -4,6 +4,7 @@ import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
+	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"context"
 	"encoding/json"
