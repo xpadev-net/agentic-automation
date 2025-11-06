@@ -1,16 +1,20 @@
-package repositories_test
+package repositories
 
 import (
 	"testing"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
-	"agentic-automation/internal/repositories"
+	repoPkg "agentic-automation/internal/repositories"
 )
 
 // This test verifies that UpsertSelective does not clear existing metadata
 // when only a subset of fields are provided.
 func TestIssueRepository_UpsertSelective_PreservesMetadata(t *testing.T) {
-	repo := repositories.NewIssueRepository()
+	db := setupTestDB(t)
+	ensureIssuesTable(t, db)
+	config.SetDBForTesting(db)
+	repo := repoPkg.NewIssueRepository()
 
 	// Seed an existing issue with rich metadata
 	body := "original body"
