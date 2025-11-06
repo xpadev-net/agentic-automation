@@ -7,7 +7,8 @@ import (
 	"agentic-automation/internal/config"
 )
 
-const defaultDBOutputLimitBytes = 64 * 1024
+// Keep a safe margin under MySQL TEXT max (65535 bytes)
+const defaultDBOutputLimitBytes = 65520
 
 // SanitizeUTF8 converts invalid UTF-8 sequences into the replacement character.
 func SanitizeUTF8(s string) string {
@@ -25,13 +26,33 @@ func TruncateWithSuffix(s string, maxBytes int, suffix string) string {
 	if len(s) <= maxBytes {
 		return s
 	}
-	cut := maxBytes
+
+	// If suffix itself exceeds maxBytes, return truncated suffix only
+	if len(suffix) >= maxBytes {
+		// cut suffix to maxBytes on rune boundary
+		cut := maxBytes
+		for cut > 0 && (suffix[cut-1]&0xC0) == 0x80 {
+			cut--
+		}
+		if cut <= 0 {
+			cut = maxBytes
+		}
+		return suffix[:cut]
+	}
+
+	// We must leave space for suffix so that final length <= maxBytes
+	headLimit := maxBytes - len(suffix)
+	if headLimit < 0 {
+		headLimit = 0
+	}
+
+	cut := headLimit
 	// ensure we don't cut in the middle of a rune
 	for cut > 0 && (s[cut-1]&0xC0) == 0x80 {
 		cut--
 	}
 	if cut <= 0 {
-		cut = maxBytes
+		cut = headLimit
 	}
 	return s[:cut] + suffix
 }

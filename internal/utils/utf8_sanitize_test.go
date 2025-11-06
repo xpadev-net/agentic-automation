@@ -23,6 +23,16 @@ func TestTruncateWithSuffix_BoundaryRune(t *testing.T) {
 	}
 }
 
+func TestTruncateWithSuffix_RespectsMaxBytesIncludingSuffix(t *testing.T) {
+	s := string(make([]byte, 100)) // 100 bytes
+	max := 50
+	suffix := "...[truncated]"
+	out := TruncateWithSuffix(s, max, suffix)
+	if len(out) > max {
+		t.Fatalf("output length should be <= max (%d), got %d", max, len(out))
+	}
+}
+
 func TestGetDBOutputLimitBytes_Default(t *testing.T) {
 	if v := GetDBOutputLimitBytes(); v <= 0 {
 		t.Fatalf("expected positive default, got %d", v)
