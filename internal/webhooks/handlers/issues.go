@@ -245,6 +245,7 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 		}
 	}
 
+	// TODO(T128): 実行トリガはT128で実装。T126では「ブロック解除タスクの特定」のみを担う。
 	if deps.BlockedTaskResolver != nil {
 		if err := deps.BlockedTaskResolver.ResolveAndMaybeTrigger(ctx, owner, repo, payload.Issue.Number); err != nil {
 			logger.Error("Blocked task resolve/trigger failed",
