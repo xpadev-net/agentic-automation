@@ -310,6 +310,7 @@ LIST_SUCCESS:
 		Head:  &branchName,
 		Base:  &base,
 		Body:  &body,
+		Issue: &issueNumber,
 	}
 
 	pr, resp, err := client.PullRequests.Create(ctx, owner, repoName, newPR)
