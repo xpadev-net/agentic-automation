@@ -253,7 +253,7 @@
 
 ### Implementation for User Story 5
 
-- [ ] T121 [P] [US5] Implement Issue dependency fetcher using GitHub API (GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by and /blocking) in internal/services/issue_dependency_fetcher.go
+- [x] T121 [P] [US5] Implement Issue dependency fetcher using GitHub API (GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by and /blocking) in internal/services/issue_dependency_fetcher.go
 - [x] T122 [P] [US5] Create directed graph data structure for dependencies in internal/utils/dependency_graph.go
 - [ ] T123 [US5] Implement blocker graph builder from GitHub API dependency data in internal/services/blocker_graph.go
 - [ ] T124 [US5] Create circular dependency detector with cycle detection algorithm in internal/services/circular_dependency_detector.go
