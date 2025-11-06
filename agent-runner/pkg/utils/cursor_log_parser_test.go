@@ -34,15 +34,9 @@ func TestProgressDotsIncrementOnConsecutiveProcessing(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect two processing lines: "..." and then "...." and one completed line
-	if strings.Count(out, "[THINKING] processing...\n") != 1 {
-		t.Fatalf("expected 1 base processing line (...), got:\n%s", out)
-	}
-	if strings.Count(out, "[THINKING] processing....\n") != 1 {
-		t.Fatalf("expected 1 incremented processing line (....), got:\n%s", out)
-	}
-	if strings.Count(out, "[THINKING] completed\n") != 1 {
-		t.Fatalf("expected 1 completed line, got:\n%s", out)
+	// Expect concatenated processing updates on the same line followed by completed
+	if !strings.Contains(out, "[THINKING] processing...[THINKING] processing....[THINKING] completed") {
+		t.Fatalf("expected concatenated processing updates then completed, got:\n%s", out)
 	}
 }
 
@@ -76,7 +70,7 @@ func TestProgressDotsKeepIncreasingWithMoreProcessing(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect dots to increase: ..., ...., ....., ......, .......
+	// Expect dots to increase: ..., ...., ....., ......, ....... (concatenated)
 	want := []string{
 		"[THINKING] processing...",
 		"[THINKING] processing....",
@@ -89,8 +83,8 @@ func TestProgressDotsKeepIncreasingWithMoreProcessing(t *testing.T) {
 			t.Fatalf("expected to contain %q, got:\n%s", w, out)
 		}
 	}
-	if strings.Count(out, "[THINKING] completed\n") != 1 {
-		t.Fatalf("expected 1 completed line, got %d:\n%s", strings.Count(out, "[THINKING] completed"), out)
+	if !strings.Contains(out, "[THINKING] completed") {
+		t.Fatalf("expected completed, got:\n%s", out)
 	}
 }
 
@@ -123,14 +117,12 @@ func TestDifferentSessionsDotsManagedIndependently(t *testing.T) {
 	_ = r.Close()
 	out := string(outBytes)
 
-	// Expect two base processing (s1 first, s2 first) and one incremented for s1
-	if strings.Count(out, "[THINKING] processing...\n") != 2 {
-		t.Fatalf("expected 2 base processing lines (...), got %d:\n%s", strings.Count(out, "[THINKING] processing...\n"), out)
+	// Expect concatenated order: s1 "..." + s2 "..." + s1 "...."
+	prefix := "[THINKING] processing...[THINKING] processing...[THINKING] processing...."
+	if !strings.Contains(out, prefix) {
+		t.Fatalf("expected concatenated processing sequence per session, got:\n%s", out)
 	}
-	if strings.Count(out, "[THINKING] processing....\n") != 1 {
-		t.Fatalf("expected 1 incremented processing line (....), got %d:\n%s", strings.Count(out, "[THINKING] processing....\n"), out)
-	}
-	if strings.Count(out, "[THINKING] completed\n") != 2 {
-		t.Fatalf("expected 2 completed lines, got %d:\n%s", strings.Count(out, "[THINKING] completed\n"), out)
+	if strings.Count(out, "[THINKING] completed") != 2 {
+		t.Fatalf("expected 2 completed logs, got %d:\n%s", strings.Count(out, "[THINKING] completed"), out)
 	}
 }

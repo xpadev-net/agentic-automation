@@ -194,7 +194,12 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 				// Format and output the parsed entry with suppression of duplicate thinking progress logs
 				formatted, shouldOutput := logFormatter.FormatAndOutput(entry)
 				if shouldOutput {
-					fmt.Fprintf(os.Stderr, "%s\n", formatted)
+					// processing 系は改行しない（同一行で進捗を更新）
+					if strings.HasPrefix(formatted, "[THINKING] processing") {
+						fmt.Fprintf(os.Stderr, "%s", formatted)
+					} else {
+						fmt.Fprintf(os.Stderr, "%s\n", formatted)
+					}
 				}
 			}
 		}
