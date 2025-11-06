@@ -274,7 +274,7 @@
 **Data Model**:
 - Composite PK: (taskId, dependsOnTaskId)
 - Both columns FK to Issue.id
-- Parse "blocked by #123" from Issue body using regex
+- Fetch dependencies using GitHub Issue Dependencies API (`GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies`)
 
 ### 4.5 Concurrent Execution
 

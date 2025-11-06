@@ -175,9 +175,10 @@ Adjacency list for Issue dependency graph (directed graph)
 - Blocked task Y becomes unblocked when ALL its dependencies are closed
 - Cycle detection via DFS before starting execution
 
-**Parsing**: Extract from Issue body/comments using regex:
-- "blocked by #123" or "depends on #456"
-- "blocking #789" (inverse relationship)
+**Data Source**: Fetch from GitHub Issue Dependencies API:
+- Endpoint: `GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies`
+- Returns structured JSON with blocked_by and blocking relationships
+- No text parsing required - uses GitHub's native dependency tracking
 
 ### AuditLog
 

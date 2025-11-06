@@ -106,10 +106,9 @@ Triggered when an Issue is opened, closed, or reopened.
 
 **Processing**:
 
-1. Parse Issue body/comments for dependency keywords:
-   - "blocked by #N"
-   - "depends on #N"
-   - "blocking #N"
+1. Fetch Issue dependencies from GitHub Issue Dependencies API:
+   - Endpoint: `GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies`
+   - Returns structured JSON with blocked_by and blocking relationships
 2. Update BlockerGraphEdges table
 3. On `action: closed`:
    - Query BlockerGraphEdges for dependents
@@ -117,13 +116,17 @@ Triggered when an Issue is opened, closed, or reopened.
    - Trigger new AgentRun for unblocked Issues
 4. Log dependency changes to AuditLog
 
-**Dependency Parsing Regex**:
+**GitHub Issue Dependencies API**:
 
-```regex
-blocked by #(\d+)
-depends on #(\d+)
-blocking #(\d+)
+API Reference: https://docs.github.com/en/rest/issues/issue-dependencies
+
 ```
+GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies
+```
+
+Response structure includes:
+- `blocked_by`: Array of issues blocking this issue
+- `blocking`: Array of issues this issue is blocking
 
 ---
 
