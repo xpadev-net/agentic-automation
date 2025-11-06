@@ -240,12 +240,17 @@ func (v *verifyingAutoMergeService) AttemptAutoMerge(ctx context.Context, owner,
 }
 
 // createPRWithIssue creates a test Issue and associated PullRequest in the database
-func createPRWithIssue(t *testing.T, db *gorm.DB, repo, branch string, mergeable bool) (*models.Issue, *models.PullRequest) {
+// If issueNumber is 0, a unique number will be generated based on current timestamp
+func createPRWithIssue(t *testing.T, db *gorm.DB, repo, branch string, mergeable bool, issueNumber int) (*models.Issue, *models.PullRequest) {
 	body := "Test body"
+	if issueNumber == 0 {
+		// Generate unique issue number based on timestamp to avoid conflicts
+		issueNumber = int(time.Now().UnixNano() % 1000000)
+	}
 	issue := &models.Issue{
 		Repo:          repo,
-		Number:        123,
-		GitHubIssueID: 999123,
+		Number:        issueNumber,
+		GitHubIssueID: uint64(999000 + issueNumber),
 		Title:         "Test Issue",
 		Body:          &body,
 		Labels:        "[]",
@@ -578,14 +583,14 @@ func Test_ApproveAndCISuccess_TriggersAutoMerge(t *testing.T) {
 	repo := "test-org/test-repo"
 	branch := "feature/issue-123"
 	headSHA := "abc123def"
-	_, pr := createPRWithIssue(t, db, repo, branch, true)
+	_, pr := createPRWithIssue(t, db, repo, branch, true, 123)
 
 	// Create CI success status
 	checkSuiteID := int64(1001)
 	createCISuccess(t, db, pr.ID, checkSuiteID, headSHA)
 
-	// Create Codex approval
-	commentID := int64(999)
+	// Create Codex approval (pre-existing approval for status webhook test)
+	commentID := int64(888)
 	createCodexApproval(t, db, pr.ID, commentID)
 
 	// Setup repositories
@@ -708,7 +713,7 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	repo := "test-org/test-repo"
 	branch := "feature/issue-123"
 	headSHA := "abc123def"
-	_, pr := createPRWithIssue(t, db, repo, branch, true)
+	_, pr := createPRWithIssue(t, db, repo, branch, true, 123)
 
 	// Create CI success status
 	checkSuiteID := int64(1001)
