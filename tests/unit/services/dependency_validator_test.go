@@ -32,6 +32,31 @@ func TestDependencyValidator_AllClosed_Allows(t *testing.T) {
 	}
 	appconfig.SetDBForTesting(sdb)
 	db := sdb
+	// minimal schema
+	if err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT,
+            number INTEGER,
+            github_issue_id INTEGER,
+            title TEXT,
+            body TEXT,
+            labels TEXT,
+            state TEXT DEFAULT 'open',
+            created_at DATETIME,
+            updated_at DATETIME
+        );
+    `).Error; err != nil {
+		t.Fatalf("create issues: %v", err)
+	}
+	if err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS blocker_graph_edges (
+            task_id INTEGER,
+            depends_on_task_id INTEGER
+        );
+    `).Error; err != nil {
+		t.Fatalf("create edges: %v", err)
+	}
 
 	issueRepo := repositories.NewIssueRepository()
 	edgeRepo := repositories.NewBlockerGraphRepository()
@@ -76,6 +101,30 @@ func TestDependencyValidator_HasOpen_Block(t *testing.T) {
 	}
 	appconfig.SetDBForTesting(sdb)
 	db := sdb
+	if err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo TEXT,
+            number INTEGER,
+            github_issue_id INTEGER,
+            title TEXT,
+            body TEXT,
+            labels TEXT,
+            state TEXT DEFAULT 'open',
+            created_at DATETIME,
+            updated_at DATETIME
+        );
+    `).Error; err != nil {
+		t.Fatalf("create issues: %v", err)
+	}
+	if err := db.Exec(`
+        CREATE TABLE IF NOT EXISTS blocker_graph_edges (
+            task_id INTEGER,
+            depends_on_task_id INTEGER
+        );
+    `).Error; err != nil {
+		t.Fatalf("create edges: %v", err)
+	}
 
 	issueRepo := repositories.NewIssueRepository()
 	edgeRepo := repositories.NewBlockerGraphRepository()
