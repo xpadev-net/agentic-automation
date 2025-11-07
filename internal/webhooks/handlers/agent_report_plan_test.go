@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -27,7 +28,9 @@ import (
 )
 
 type fakePlanJobService struct {
-	capturedPlan string
+	capturedPlan  string
+	planErr       error
+	planCallCount int
 }
 
 func (f *fakePlanJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error) {
@@ -39,7 +42,11 @@ func (f *fakePlanJobService) CreateJobForAgentRunWithFeedback(ctx context.Contex
 }
 
 func (f *fakePlanJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
+	f.planCallCount++
 	f.capturedPlan = planContent
+	if f.planErr != nil {
+		return nil, f.planErr
+	}
 	return &batchv1.Job{}, nil
 }
 
@@ -271,6 +278,65 @@ func TestHandleAgentReportDispatchesPlanReport(t *testing.T) {
 	require.NoError(t, fixtures.db.First(&reviewFeedback, fixtures.reviewFeedback.ID).Error)
 	require.Equal(t, "created", reviewFeedback.PlanCreationStatus)
 	require.NotNil(t, reviewFeedback.ExecutionAgentRunID)
+}
+
+func TestHandlePlanCreatedRollsBackWhenJobCreationFails(t *testing.T) {
+	fixtures := setupPlanTestFixtures(t)
+	fakeJob := &fakePlanJobService{planErr: fmt.Errorf("boom")}
+
+	origClientFactory := kubernetesClientFactory
+	origJobFactory := kubernetesJobServiceFactory
+	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+		return nil, nil
+	}
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+		return fakeJob
+	}
+	defer func() {
+		kubernetesClientFactory = origClientFactory
+		kubernetesJobServiceFactory = origJobFactory
+	}()
+
+	agentRunRepo := repositories.NewAgentRunRepository(fixtures.db)
+	reviewFeedbackRepo := repositories.NewReviewFeedbackRepositoryWithDB(fixtures.db)
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+	ginCtx.Request = httptest.NewRequest("POST", "/", nil)
+
+	req := &PlanReportRequest{Status: "plan_created", AgentType: "claude-code", PlanContent: "Step detail line"}
+
+	handlePlanCreated(
+		ginCtx,
+		context.Background(),
+		fixtures.agentRun.ID,
+		fixtures.agentRun,
+		fixtures.reviewFeedback,
+		req,
+		"",
+		agentRunRepo,
+		reviewFeedbackRepo,
+		fixtures.db,
+	)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.Equal(t, 1, fakeJob.planCallCount)
+
+	var storedFeedback models.ReviewFeedback
+	require.NoError(t, fixtures.db.First(&storedFeedback, fixtures.reviewFeedback.ID).Error)
+	require.Equal(t, "pending", storedFeedback.PlanCreationStatus)
+	require.Nil(t, storedFeedback.PlanContent)
+	require.Nil(t, storedFeedback.PlanAgentRunID)
+	require.Nil(t, storedFeedback.ExecutionAgentRunID)
+
+	var storedRun models.AgentRun
+	require.NoError(t, fixtures.db.First(&storedRun, fixtures.agentRun.ID).Error)
+	require.Equal(t, "queued", storedRun.State)
+	require.Nil(t, storedRun.PlanContent)
+
+	var executionRuns int64
+	require.NoError(t, fixtures.db.Model(&models.AgentRun{}).Where("execution_mode = ?", "plan_execution").Count(&executionRuns).Error)
+	require.Equal(t, int64(0), executionRuns)
 }
 
 func TestHandlePlanReportIgnoresDuplicatePlanCreated(t *testing.T) {
