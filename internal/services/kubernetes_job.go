@@ -126,6 +126,19 @@ func getOptionalEnvInt(key string, defaultValue int, logger *zap.Logger) int {
 	return value
 }
 
+func resolveExecutionMode(agentRun *models.AgentRun) string {
+	if agentRun == nil {
+		return "normal"
+	}
+
+	mode := strings.TrimSpace(agentRun.ExecutionMode)
+	if mode == "" {
+		return "normal"
+	}
+
+	return mode
+}
+
 // extractPreviousAttemptsJSON extracts previous attempts JSON from AgentRun Input field
 // Parameters:
 //   - agentRun: AgentRun record
@@ -224,6 +237,8 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 	)
 
 	// Build JobConfig
+	executionMode := resolveExecutionMode(agentRun)
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
@@ -236,7 +251,7 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		AgentRunnerImage: agentRunnerImage,
 		TimeoutMinutes:   timeoutMinutes,
 		BranchName:       branchName,
-		ExecutionMode:    "normal",
+		ExecutionMode:    executionMode,
 		CursorAllowWrite: true,
 	}
 
@@ -345,6 +360,8 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 	)
 
 	// Build JobConfig
+	executionMode := resolveExecutionMode(agentRun)
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
@@ -357,7 +374,7 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		AgentRunnerImage: agentRunnerImage,
 		TimeoutMinutes:   timeoutMinutes,
 		BranchName:       branchName,
-		ExecutionMode:    "normal",
+		ExecutionMode:    executionMode,
 		CursorAllowWrite: true,
 	}
 
