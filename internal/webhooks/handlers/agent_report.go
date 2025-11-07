@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/gin-gonic/gin/binding"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -53,6 +52,11 @@ type PlanReportRequest struct {
 
 const planPreviewLogLimit = 100
 
+var (
+	kubernetesClientFactory     = clients.NewKubernetesClient
+	kubernetesJobServiceFactory = services.NewKubernetesJobService
+)
+
 // HandleAgentReport handles POST /api/agent-runs/:id/report requests
 // It receives execution results from agent-runner Pods and updates AgentRun state
 func HandleAgentReport(c *gin.Context) {
@@ -73,10 +77,9 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
-	var statusEnvelope struct {
-		Status string `json:"status" binding:"required"`
-	}
-	if err := c.ShouldBindBodyWith(&statusEnvelope, binding.JSON); err != nil {
+	// Parse request body
+	var req ReportRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Warn("Invalid request body",
 			zap.Error(err),
 			zap.Int("agent_run_id", agentRunID),
@@ -89,42 +92,9 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
-	status := strings.TrimSpace(statusEnvelope.Status)
-
+	// Get database connection and repository
 	db := config.GetDB()
 	agentRunRepo := repositories.NewAgentRunRepository(db)
-
-	if status == "plan_created" || status == "plan_rejected" {
-		var planReq PlanReportRequest
-		if err := c.ShouldBindBodyWith(&planReq, binding.JSON); err != nil {
-			logger.Warn("Invalid plan report body",
-				zap.Error(err),
-				zap.Int("agent_run_id", agentRunID),
-				zap.String("path", c.Request.URL.Path),
-			)
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":   "INVALID_REQUEST",
-				"message": "Invalid plan report body: " + err.Error(),
-			})
-			return
-		}
-		handlePlanReport(c, agentRunID, &planReq, agentRunRepo, db)
-		return
-	}
-
-	var req ReportRequest
-	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		logger.Warn("Invalid request body",
-			zap.Error(err),
-			zap.Int("agent_run_id", agentRunID),
-			zap.String("path", c.Request.URL.Path),
-		)
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "INVALID_REQUEST",
-			"message": "Invalid request body: " + err.Error(),
-		})
-		return
-	}
 
 	// Get AgentRun by ID
 	agentRun, err := agentRunRepo.GetByID(agentRunID)
@@ -716,8 +686,8 @@ func handlePlanCreated(
 		return
 	}
 
-	sanitizedContent := utils.SanitizeUTF8(planContent)
-	planContentForStorage := utils.TruncateWithSuffix(sanitizedContent, utils.GetDBOutputLimitBytes(), "… [truncated]")
+	sanitizedFullPlan := utils.SanitizeUTF8(planContent)
+	planContentForStorage := utils.TruncateWithSuffix(sanitizedFullPlan, utils.GetDBOutputLimitBytes(), "… [truncated]")
 
 	planRunID := agentRunID
 	reviewFeedback.PlanContent = &planContentForStorage
@@ -810,7 +780,7 @@ func handlePlanCreated(
 		branchName = trimmed
 	}
 
-	kubernetesClient, err := clients.NewKubernetesClient(logger)
+	kubernetesClient, err := kubernetesClientFactory(logger)
 	if err != nil {
 		logger.Error("Failed to initialize Kubernetes client for plan execution",
 			zap.Error(err),
@@ -822,8 +792,8 @@ func handlePlanCreated(
 		return
 	}
 
-	jobService := services.NewKubernetesJobService(kubernetesClient, logger)
-	job, err := jobService.CreateJobForPlanExecution(ctx, executionRun, issue, planContentForStorage, branchName)
+	jobService := kubernetesJobServiceFactory(kubernetesClient, logger)
+	job, err := jobService.CreateJobForPlanExecution(ctx, executionRun, issue, sanitizedFullPlan, branchName)
 	if err != nil {
 		logger.Error("Failed to create plan execution job",
 			zap.Error(err),

@@ -41,12 +41,6 @@ type KubernetesJobService interface {
 	//   - error: Error if Job creation fails
 	CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback, branchName string) (*batchv1.Job, error)
 	// CreateJobForPlanExecution creates a Kubernetes Job for executing a previously generated plan
-	// Parameters:
-	//   - ctx: Context for cancellation and timeout control
-	//   - agentRun: AgentRun record representing the plan execution (must not be nil)
-	//   - issue: Issue record for contextual information (must not be nil)
-	//   - planContent: Plan text to be provided to the agent (must not be empty)
-	//   - branchName: Branch to checkout (existing PR branch or new feature branch)
 	CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error)
 }
 
@@ -456,7 +450,10 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 		CursorAllowWrite: true,
 	}
 
+	// Generate job name
 	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+
+	// Create Kubernetes Job
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
 	if err != nil {
 		s.logger.Error("Failed to create plan execution job",
