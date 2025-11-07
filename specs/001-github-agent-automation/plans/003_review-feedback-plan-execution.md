@@ -57,18 +57,17 @@
    ```go
    // internal/webhooks/handlers/issue_comment.go
    // HandleIssueCommentWithDeps内で、/run-agentトリガー検出の前に追加
-   
+
    // Step 4.5: Codex approve検出（PRに関連するIssueコメントの場合のみ）
    // 注意: Codex bot判定は`issue_comment`（PRに関連する通常のコメント）でのみ行う
    // IssueがPRに関連しているかチェック
    prRepo := repositories.NewPullRequestRepository(db)
    pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.Issue.Number)
    if err == nil && pr != nil {
-       // PRに関連するIssueコメントの場合、Codex bot判定を行い、approveを検出
+       // PRに関連するIssueコメントの場合、approveを検出
+       // DetectApprovalはCodex bot判定を内部で行うため、外側での事前チェックは不要
        detector := services.NewCodexApprovalDetector(logger)
-       // Codex botからのコメントかどうかを判定
-       isCodexBot := detector.IsCodexBot(payload.Comment.User.Login, payload.Comment.User.ID)
-       if isCodexBot && detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login, payload.Comment.User.ID) {
+       if detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login, payload.Comment.User.ID) {
            logger.Info("Codex approval detected in issue comment; re-evaluating merge conditions",
                zap.String("delivery_id", deliveryID),
                zap.Int("issue_number", payload.Issue.Number),
@@ -125,9 +124,11 @@
    ```go
    // internal/services/codex_approval.go
    // CodexApprovalDetectorにpublicメソッドを追加
-   
+
    // IsCodexBot checks if the given username and user ID match the Codex bot.
    // This is a public wrapper around the private isCodexBot method.
+   // 注意: 通常はDetectApproval()を使用すれば内部でbot判定が行われるため、
+   // このメソッドは情報取得目的など、特別な理由がある場合にのみ使用すること
    func (s *CodexApprovalDetector) IsCodexBot(username string, userID int64) bool {
        return s.isCodexBot(username, userID)
    }
@@ -184,16 +185,30 @@
    // internal/models/review_feedback.go
    type ReviewFeedback struct {
        // ... 既存フィールド ...
-       
+
        // Sourceフィールドの拡張（すべてのレビューコメントに対応）
        Source string `gorm:"type:enum('Codex','Review');default:'Codex'"` // 'Review'を追加
-       
+
        // プラン作成・実行関連フィールド
-       PlanCreationStatus string    `gorm:"type:enum('pending','plan_created','plan_rejected','plan_executing','plan_executed');default:'pending'"`
+       // 状態遷移: pending → created → executed
+       //                   ↘ rejected
+       // 注意: 実行中の状態はAgentRunのExecutionModeで管理するため、ここでは省略
+       PlanCreationStatus string    `gorm:"type:enum('pending','created','rejected','executed');default:'pending'"`
        PlanContent        *string   `gorm:"type:text"` // プラン内容
        PlanAgentRunID     *int      `gorm:"column:plan_agent_run_id;index"` // プラン作成用AgentRun ID
        ExecutionAgentRunID *int     `gorm:"column:execution_agent_run_id;index"` // プラン実行用AgentRun ID
    }
+   ```
+
+   **状態遷移図**:
+   ```
+   pending (初期状態)
+      ↓
+      ├─→ created (プラン作成成功) → executed (プラン実行完了)
+      │                                   ↑
+      │                                   │ (失敗時は created に戻る)
+      │
+      └─→ rejected (プラン却下)
    ```
 
 2. **AgentRunモデルの拡張**
@@ -215,10 +230,11 @@
    -- Sourceフィールドのenumを拡張（'Review'を追加）
    ALTER TABLE review_feedback
        MODIFY COLUMN source ENUM('Codex','Review') DEFAULT 'Codex';
-   
+
    -- プラン作成・実行関連フィールドを追加
+   -- 状態: pending → created → executed (または rejected)
    ALTER TABLE review_feedback
-       ADD COLUMN plan_creation_status ENUM('pending','plan_created','plan_rejected','plan_executing','plan_executed') DEFAULT 'pending',
+       ADD COLUMN plan_creation_status ENUM('pending','created','rejected','executed') DEFAULT 'pending',
        ADD COLUMN plan_content TEXT,
        ADD COLUMN plan_agent_run_id INT,
        ADD COLUMN execution_agent_run_id INT,
@@ -274,18 +290,18 @@
    // agent-runner/main.go
    func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode string) error {
        // ... 既存の処理 ...
-       
+
        // プラン作成モードの場合
        if executionMode == "plan_creation" {
            // write権限を剥奪（CURSOR_ALLOW_WRITE=false）
            envCfg.CursorAllowWrite = false
-           
+
            // エージェント実行
            agentOutput, err := executor.Execute(envCfg.WorkDir, fullPrompt)
-           
+
            // ファイル変更チェックをスキップ
            // コミット/PR作成をスキップ
-           
+
            // プラン作成結果を報告
            // プランが作成されたか、却下されたかを判定
            planContent, rejected, rejectionReason := parsePlanResult(agentOutput)
@@ -294,19 +310,71 @@
            }
            return reporterClient.ReportPlanCreation(planContent, agentOutput)
        }
-       
+
        // プラン実行モードの場合
        if executionMode == "plan_execution" {
+           // プラン内容を環境変数から取得
+           planContent := os.Getenv("PLAN_CONTENT")
+           if planContent == "" {
+               return fmt.Errorf("PLAN_CONTENT environment variable is required for plan_execution mode")
+           }
            // プラン内容をプロンプトに含める
            fullPrompt = buildPlanExecutionPrompt(prompt, planContent)
            // 通常の実行フローを続行
        }
-       
+
        // ... 既存の処理 ...
    }
    ```
 
-3. **プラン作成用プロンプト構築**
+3. **parsePlanResult関数の実装**
+   ```go
+   // agent-runner/pkg/parser/plan.go (新規ファイル)
+   package parser
+
+   import (
+       "fmt"
+       "strings"
+   )
+
+   const (
+       PlanCreatedMarker  = "PLAN_CREATED\n\n"
+       PlanRejectedMarker = "PLAN_REJECTED\n\n"
+   )
+
+   // parsePlanResult parses the agent output to extract plan content or rejection reason.
+   // Returns: (planContent, rejected, rejectionReason)
+   func ParsePlanResult(output string) (string, bool, string) {
+       trimmed := strings.TrimSpace(output)
+
+       // Check for PLAN_CREATED marker
+       if strings.HasPrefix(trimmed, PlanCreatedMarker) {
+           content := strings.TrimPrefix(trimmed, PlanCreatedMarker)
+           content = strings.TrimSpace(content)
+           if content == "" {
+               // Empty plan content - treat as rejection
+               return "", true, "プラン内容が空です"
+           }
+           return content, false, ""
+       }
+
+       // Check for PLAN_REJECTED marker
+       if strings.HasPrefix(trimmed, PlanRejectedMarker) {
+           reason := strings.TrimPrefix(trimmed, PlanRejectedMarker)
+           reason = strings.TrimSpace(reason)
+           if reason == "" {
+               reason = "プランが却下されました（理由不明）"
+           }
+           return "", true, reason
+       }
+
+       // Neither marker found - parse error, treat as rejection
+       return "", true, fmt.Sprintf("プラン出力のパースに失敗しました。期待される形式: '%s[内容]' または '%s[理由]'",
+           PlanCreatedMarker, PlanRejectedMarker)
+   }
+   ```
+
+4. **プラン作成用プロンプト構築**
    ```go
    // agent-runner/pkg/context/issue.go
    func BuildPlanCreationPrompt(reviewFeedback string) string {
@@ -328,7 +396,7 @@
    }
    ```
 
-4. **プラン実行用プロンプト構築**
+5. **プラン実行用プロンプト構築**
    ```go
    // agent-runner/pkg/context/issue.go
    func BuildPlanExecutionPrompt(originalPrompt, planContent string) string {
@@ -344,7 +412,7 @@
    }
    ```
 
-5. **プラン作成結果報告メソッドの追加**
+6. **プラン作成結果報告メソッドの追加**
    ```go
    // agent-runner/pkg/reporter/client.go
    type PlanReportRequest struct {
@@ -439,14 +507,14 @@
        if req.Status == "plan_created" {
            // プラン内容を保存
            reviewFeedback.PlanContent = &req.PlanContent
-           reviewFeedback.PlanCreationStatus = "plan_created"
+           reviewFeedback.PlanCreationStatus = "created"
            reviewFeedback.PlanAgentRunID = &agentRunID
            reviewFeedbackRepo.Update(reviewFeedback)
            
            // プラン実行Podを起動
            issue, _ := repositories.NewIssueRepository().FindByID(agentRun.IssueID)
            pr, _ := repositories.NewPullRequestRepository().FindByID(*reviewFeedback.PRID)
-           
+
            executionAgentRun := &models.AgentRun{
                IssueID:          agentRun.IssueID,
                PRID:             reviewFeedback.PRID,
@@ -457,16 +525,24 @@
                State:            "queued",
            }
            agentRunRepo.Create(executionAgentRun)
-           
+
            jobService := services.NewKubernetesJobService(kubernetesClient, logger)
-           branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
+           // ブランチ名: 既存PRがあればそのブランチを使用、なければ新規作成
+           var branchName string
+           if pr != nil && pr.BranchName != "" {
+               // 既存PRのブランチを再利用（PRを更新する）
+               branchName = pr.BranchName
+           } else {
+               // 新規ブランチ作成
+               branchName = fmt.Sprintf("feature/issue-%d", issue.Number)
+           }
            job, err := jobService.CreateJobForPlanExecution(ctx, executionAgentRun, issue, req.PlanContent, branchName)
            if err != nil {
                // エラー処理
            }
            
            reviewFeedback.ExecutionAgentRunID = &executionAgentRun.ID
-           reviewFeedback.PlanCreationStatus = "plan_executing"
+           // 注意: 実行中の状態はAgentRunのStateで管理するため、ここでは変更しない
            reviewFeedbackRepo.Update(reviewFeedback)
            
            c.JSON(http.StatusOK, gin.H{
@@ -475,12 +551,22 @@
            })
        } else if req.Status == "plan_rejected" {
            // プラン却下時はPRにコメントを投稿
-           reviewFeedback.PlanCreationStatus = "plan_rejected"
+           reviewFeedback.PlanCreationStatus = "rejected"
            reviewFeedbackRepo.Update(reviewFeedback)
-           
+
            // PRにコメントを投稿
            pr, _ := repositories.NewPullRequestRepository().FindByID(reviewFeedback.PRID)
-           repoParts := strings.Split(pr.Repo, "/")
+           repoParts := strings.SplitN(pr.Repo, "/", 2)
+           if len(repoParts) != 2 {
+               logger.Error("Invalid repository full name format",
+                   zap.String("repo", pr.Repo),
+                   zap.Int("agent_run_id", agentRunID),
+               )
+               c.JSON(http.StatusInternalServerError, gin.H{
+                   "error": "Invalid repository format",
+               })
+               return
+           }
            owner, repo := repoParts[0], repoParts[1]
            
            githubClient, _ := clients.NewGitHubAppClient(logger)
@@ -567,8 +653,28 @@
    // すべてのレビューコメントを指摘事項として処理
    // Codex botのapprove検出は行わない（Phase 0でissue_commentに移行済み）
    // Codex botかユーザーかを区別せず、一律で処理する
-   // レビューコメントが空でない場合、プラン作成Podを起動
-   if strings.TrimSpace(payload.Comment.Body) != "" {
+
+   // レビューコメントのフィルタリング
+   commentBody := strings.TrimSpace(payload.Comment.Body)
+   if commentBody == "" {
+       logger.Info("Skipping empty review comment",
+           zap.Int("pr_number", pr.Number),
+           zap.String("delivery_id", deliveryID),
+       )
+       return
+   }
+   // 軽微なコメント（短文）をスキップ
+   minCommentLength := 20 // 設定可能な閾値（環境変数等で上書き可能）
+   if len(commentBody) < minCommentLength {
+       logger.Info("Skipping too-short review comment",
+           zap.Int("comment_length", len(commentBody)),
+           zap.Int("pr_number", pr.Number),
+       )
+       return
+   }
+
+   // プラン作成Pod起動処理
+   {
        // ReviewFeedbackを作成または更新（approval_detected=false）
        reviewFeedbackRepo := deps.ReviewFeedbackRepository
        if reviewFeedbackRepo == nil {
@@ -615,13 +721,17 @@
                logger.Error("Failed to get Issue for plan creation", zap.Error(err))
                return
            }
-           
+
+           // AgentTypeを検出（Issueラベルベース）
+           agentTypeDetectorService := services.NewAgentTypeDetector(logger)
+           agentType := agentTypeDetectorService.DetectAgentType(issue)
+
            // AgentRunを作成
            agentRunRepo := repositories.NewAgentRunRepository(config.GetDB())
            agentRun := &models.AgentRun{
                IssueID:          issue.Number,
                PRID:             &pr.ID,
-               AgentType:        "claude-code", // デフォルト、または設定から取得
+               AgentType:        agentType, // Issueラベルから検出
                ExecutionMode:    "plan_creation",
                ReviewFeedbackID: &reviewFeedback.ID,
                State:            "queued",
@@ -631,7 +741,15 @@
            // プラン作成Podを起動
            kubernetesClient := clients.NewKubernetesClient(logger)
            jobService := services.NewKubernetesJobService(kubernetesClient, logger)
-           branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
+           // ブランチ名: 既存PRがあればそのブランチを使用、なければ新規作成
+           var branchName string
+           if pr.BranchName != "" {
+               // 既存PRのブランチを再利用（PRを更新する）
+               branchName = pr.BranchName
+           } else {
+               // 新規ブランチ作成
+               branchName = fmt.Sprintf("feature/issue-%d", issue.Number)
+           }
            
            job, err := jobService.CreateJobForPlanCreation(ctx, agentRun, issue, reviewFeedback, branchName)
            if err != nil {
@@ -649,7 +767,7 @@
                zap.Int("review_feedback_id", reviewFeedback.ID),
            )
        }
-   }
+   } // プラン作成Pod起動処理終了
    ```
 
 2. **プラン作成Pod起動メソッドの追加**
@@ -723,7 +841,7 @@
    // internal/webhooks/handlers/agent_report.go
    func HandleAgentReport(c *gin.Context) {
        // ... 既存の処理 ...
-       
+
        // プラン実行モードの場合
        if agentRun.ExecutionMode == "plan_execution" {
            // ReviewFeedbackを更新
@@ -732,15 +850,29 @@
                reviewFeedback, err := reviewFeedbackRepo.FindByID(*agentRun.ReviewFeedbackID)
                if err == nil && reviewFeedback != nil {
                    if req.Status == "succeeded" {
-                       reviewFeedback.PlanCreationStatus = "plan_executed"
+                       // 成功時: 実行完了状態に遷移
+                       reviewFeedback.PlanCreationStatus = "executed"
+                       logger.Info("Plan execution completed successfully",
+                           zap.Int("review_feedback_id", reviewFeedback.ID),
+                           zap.Int("agent_run_id", agentRun.ID),
+                       )
                    } else {
-                       // 失敗時は状態を保持（再実行可能にする）
+                       // 失敗時: created状態に戻す（再実行可能にする）
+                       reviewFeedback.PlanCreationStatus = "created"
+                       logger.Warn("Plan execution failed, reverting to 'created' state for retry",
+                           zap.Int("review_feedback_id", reviewFeedback.ID),
+                           zap.Int("agent_run_id", agentRun.ID),
+                           zap.String("status", req.Status),
+                           zap.String("error_message", req.ErrorMessage),
+                       )
+                       // 注意: 既存のリトライ機構により、AgentRunのStateが'failed'で
+                       // リトライ上限に達していない場合は自動的に再実行される
                    }
                    reviewFeedbackRepo.Update(reviewFeedback)
                }
            }
        }
-       
+
        // ... 既存の処理 ...
    }
    ```
@@ -831,6 +963,91 @@
 - `issue_comment`でPRに関連するIssueかどうかを正確に判定
 - 統合テストでapprove検出からマージまでのフローを検証
 
+### リスク 7: 並行実行時の競合
+**問題**: 同じPRに対して複数のレビューコメントが短時間に投稿された場合、複数のプラン作成Podが起動する可能性
+
+**対策**:
+- ReviewFeedbackのステータス更新時にデータベーストランザクションを使用
+- または楽観的ロック（version カラム）を実装
+- プラン作成中（`created`状態）の場合は新規Pod起動をスキップ
+- コード例:
+  ```go
+  // トランザクション内でステータスチェックと更新を実施
+  tx := db.Begin()
+  defer tx.Rollback()
+
+  reviewFeedback, err := reviewFeedbackRepo.FindByIDForUpdate(tx, reviewFeedbackID)
+  if reviewFeedback.PlanCreationStatus != "pending" {
+      // 既にプラン作成が開始されている場合はスキップ
+      return nil
+  }
+  // プラン作成Pod起動...
+  tx.Commit()
+  ```
+
+### リスク 8: 環境変数のサイズ制限
+**問題**: プラン内容が大きい場合、環境変数（`PLAN_CONTENT`）のサイズ制限を超える可能性
+
+**対策**:
+- Kubernetesの環境変数サイズ制限: 1MB（ConfigMap/Secret経由でも同様）
+- プラン内容が大きい場合はConfigMapとして作成し、ボリュームマウントで渡す
+- または、プラン内容をファイルとして一時保存し、S3/オブジェクトストレージ経由で渡す
+- プラン作成時にサイズチェックを実施し、閾値を超えた場合は警告
+- コード例:
+  ```go
+  const maxPlanSize = 900 * 1024 // 900KB（余裕を持たせる）
+  if len(planContent) > maxPlanSize {
+      logger.Warn("Plan content exceeds size limit, using ConfigMap",
+          zap.Int("plan_size", len(planContent)),
+      )
+      // ConfigMapを作成してマウントする処理
+  }
+  ```
+
+### リスク 9: ログの機密情報漏洩
+**問題**: プラン内容やエージェント出力にGitHub tokenやAPI keyが含まれる可能性
+
+**対策**:
+- プラン内容のログ出力時は100文字にプレビュー切り詰め（既存のcodex_approval.goパターンに準拠）
+- エージェント出力のサニタイズ処理を実装
+- トークンパターン（`ghp_`, `gho_`, etc.）を検出して`***`に置換
+- コード例:
+  ```go
+  // agent-runner/pkg/reporter/client.go
+  func sanitizeLogs(logs string) string {
+      // GitHub token patterns
+      patterns := []string{
+          `ghp_[a-zA-Z0-9]{36}`,     // Personal access token
+          `gho_[a-zA-Z0-9]{36}`,     // OAuth token
+          `ghs_[a-zA-Z0-9]{36}`,     // Server token
+          `sk-[a-zA-Z0-9]{48}`,      // OpenAI API key
+          `ANTHROPIC_API_KEY.*`,     // Anthropic API key
+      }
+      sanitized := logs
+      for _, pattern := range patterns {
+          re := regexp.MustCompile(pattern)
+          sanitized = re.ReplaceAllString(sanitized, "***")
+      }
+      return sanitized
+  }
+
+  func (c *Client) ReportPlanCreation(planContent, logs string) error {
+      // プレビュー切り詰め
+      preview := planContent
+      if len(preview) > 100 {
+          preview = preview[:100] + "..."
+      }
+
+      req := &PlanReportRequest{
+          Status:      "plan_created",
+          AgentType:   c.agentType,
+          PlanContent: planContent,
+          Logs:        sanitizeLogs(logs), // サニタイズ
+      }
+      return sendPlanReport(c, req)
+  }
+  ```
+
 ---
 
 ## 検証項目
@@ -856,6 +1073,18 @@
 - [ ] レビューフィードバック受信からプラン作成・実行までのフローが正常に動作すること
 - [ ] 複数のレビューフィードバックがある場合の処理が正常であること
 - [ ] プラン実行失敗時のリトライが正常に動作すること
+
+### 追加テスト項目（指摘事項対応）
+- [ ] 並行実行時の競合テスト: 同時に複数のレビューコメントを投稿した場合、1つのプラン作成Podのみが起動されること
+- [ ] 既存PR更新時のブランチ名検証テスト: レビュー対応時に既存PRのブランチが正しく使用されること
+- [ ] 軽微なコメント（20文字未満）のフィルタリングテスト: 短いコメントがプラン作成をトリガーしないこと
+- [ ] AgentType検出のラベルベーステスト: Issueラベルに応じて正しいAgentTypeが選択されること
+- [ ] repoPartsバリデーションのエラーケーステスト: 不正なリポジトリ形式でエラーが正しくハンドリングされること
+- [ ] プラン失敗時の状態復帰テスト: プラン実行失敗時に`created`状態に戻り、再実行可能であること
+- [ ] 大きなプラン内容のサイズチェックテスト: 900KBを超えるプラン内容で警告が出ること
+- [ ] ログサニタイズテスト: GitHub tokenやAPI keyがログに含まれないこと
+- [ ] parsePlanResultのパースエラーテスト: 不正な形式の出力が却下として処理されること
+- [ ] PLAN_CONTENT環境変数の検証テスト: プラン実行モード時に環境変数が正しく渡されること
 
 ---
 
