@@ -781,3 +781,72 @@ func TestBuildReportURL_InvalidURL(t *testing.T) {
 		t.Errorf("Expected error message about invalid URL, got: %v", err)
 	}
 }
+
+func TestReportPlanCreation_SanitizesLogs(t *testing.T) {
+	received := struct {
+		Status      string `json:"status"`
+		AgentType   string `json:"agent_type"`
+		PlanContent string `json:"plan_content"`
+		Logs        string `json:"logs"`
+	}{}
+
+	server, client := setupTestServer(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read body: %v", err)
+		}
+		if err := json.Unmarshal(body, &received); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"message":"ok","agent_run_id":123}`)
+	})
+	defer server.Close()
+
+	logs := "execution failed with token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	plan := "1. do something"
+
+	if err := client.ReportPlanCreation(plan, "claude-code", logs); err != nil {
+		t.Fatalf("ReportPlanCreation returned error: %v", err)
+	}
+	if received.Status != "plan_created" {
+		t.Fatalf("expected status plan_created, got %s", received.Status)
+	}
+	if received.PlanContent != plan {
+		t.Fatalf("expected plan content %q, got %q", plan, received.PlanContent)
+	}
+	if strings.Contains(received.Logs, "ghp_") {
+		t.Fatalf("expected logs to be sanitized, got %q", received.Logs)
+	}
+}
+
+func TestReportPlanRejection_IncludesReason(t *testing.T) {
+	received := struct {
+		Status          string `json:"status"`
+		RejectionReason string `json:"rejection_reason"`
+	}{}
+
+	server, client := setupTestServer(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read body: %v", err)
+		}
+		if err := json.Unmarshal(body, &received); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"message":"ok","agent_run_id":123}`)
+	})
+	defer server.Close()
+
+	reason := "指摘が誤解でした"
+	if err := client.ReportPlanRejection(reason, "cursor-agent", "sk-secret"); err != nil {
+		t.Fatalf("ReportPlanRejection returned error: %v", err)
+	}
+	if received.Status != "plan_rejected" {
+		t.Fatalf("expected status plan_rejected, got %s", received.Status)
+	}
+	if received.RejectionReason != reason {
+		t.Fatalf("expected rejection reason %q, got %q", reason, received.RejectionReason)
+	}
+}

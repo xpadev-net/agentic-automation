@@ -15,6 +15,7 @@ import (
 	"agent-runner/pkg/context"
 	"agent-runner/pkg/git"
 	"agent-runner/pkg/hooks"
+	"agent-runner/pkg/parser"
 	"agent-runner/pkg/reporter"
 	"agent-runner/pkg/storage"
 	"agent-runner/pkg/version"
@@ -27,6 +28,7 @@ func main() {
 		prompt           string
 		previousAttempts string
 		ciLogs           string
+		executionMode    string
 	)
 
 	rootCmd := &cobra.Command{
@@ -44,7 +46,7 @@ It processes GitHub Issues, runs lint/typecheck, commits changes, and reports re
 			if err := validateArgs(issueID, repo, prompt); err != nil {
 				return fmt.Errorf("validation failed: %w", err)
 			}
-			return Run(issueID, repo, prompt, previousAttempts, ciLogs)
+			return Run(issueID, repo, prompt, previousAttempts, ciLogs, executionMode)
 		},
 	}
 
@@ -53,6 +55,7 @@ It processes GitHub Issues, runs lint/typecheck, commits changes, and reports re
 	rootCmd.Flags().StringVar(&prompt, "prompt", "", "Issue context prompt describing the task")
 	rootCmd.Flags().StringVar(&previousAttempts, "previous-attempts", "", "Previous retry attempts in JSON format (optional)")
 	rootCmd.Flags().StringVar(&ciLogs, "ci-logs", "", "CI failure logs for retry context (optional)")
+	rootCmd.Flags().StringVar(&executionMode, "execution-mode", "normal", "Execution mode: normal, plan_creation, plan_execution")
 
 	rootCmd.MarkFlagRequired("issue-id")
 	rootCmd.MarkFlagRequired("repo")
@@ -83,6 +86,48 @@ func validateArgs(issueID int, repo, prompt string) error {
 		return fmt.Errorf("--prompt must not be empty")
 	}
 
+	return nil
+}
+
+func normalizeExecutionMode(mode string) string {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	switch mode {
+	case "", "normal":
+		return "normal"
+	case "plan_creation":
+		return "plan_creation"
+	case "plan_execution":
+		return "plan_execution"
+	default:
+		return ""
+	}
+}
+
+func readContentFromEnvOrFile(envKey, fileKey string) (string, error) {
+	if value := os.Getenv(envKey); strings.TrimSpace(value) != "" {
+		return value, nil
+	}
+	if filePath := os.Getenv(fileKey); strings.TrimSpace(filePath) != "" {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read file %s: %w", filePath, err)
+		}
+		return string(data), nil
+	}
+	return "", nil
+}
+
+func handlePlanCreationResult(client *reporter.Client, agentType, output string) error {
+	planContent, rejected, reason := parser.ParsePlanResult(output)
+	if rejected {
+		if err := client.ReportPlanRejection(reason, agentType, output); err != nil {
+			return fmt.Errorf("failed to report plan rejection: %w", err)
+		}
+		return fmt.Errorf("plan was rejected: %s", reason)
+	}
+	if err := client.ReportPlanCreation(planContent, agentType, output); err != nil {
+		return fmt.Errorf("failed to report plan creation: %w", err)
+	}
 	return nil
 }
 
@@ -207,11 +252,41 @@ type envConfig struct {
 
 // Run executes the agent-runner workflow.
 // This function is exported for testing purposes.
-func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
+
+func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode string) error {
+	executionMode = normalizeExecutionMode(executionMode)
+	if executionMode == "" {
+		return fmt.Errorf("invalid execution mode")
+	}
 	// 1. Validate and load environment variables
 	envCfg, err := validateEnv()
 	if err != nil {
 		return fmt.Errorf("environment validation failed: %w", err)
+	}
+
+	if executionMode == "plan_creation" {
+		// プラン作成モードではwriteを不可に強制
+		envCfg.CursorAllowWrite = false
+	}
+
+	reviewContent := ""
+	planContent := ""
+	if executionMode == "plan_creation" {
+		reviewContent, err = readContentFromEnvOrFile("REVIEW_FEEDBACK_CONTENT", "REVIEW_FEEDBACK_CONTENT_FILE")
+		if err != nil {
+			return fmt.Errorf("failed to load review feedback content: %w", err)
+		}
+		if reviewContent == "" {
+			return fmt.Errorf("REVIEW_FEEDBACK_CONTENT is required for plan_creation mode")
+		}
+	} else if executionMode == "plan_execution" {
+		planContent, err = readContentFromEnvOrFile("PLAN_CONTENT", "PLAN_CONTENT_FILE")
+		if err != nil {
+			return fmt.Errorf("failed to load plan content: %w", err)
+		}
+		if planContent == "" {
+			return fmt.Errorf("PLAN_CONTENT is required for plan_execution mode")
+		}
 	}
 
 	// 2. Log arguments for debugging (basic info only, no sensitive data)
@@ -307,8 +382,16 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 	fmt.Fprintf(os.Stderr, "Created/checked out branch: %s\n", branchName)
 
 	// 8. Build prompt
-	fmt.Fprintf(os.Stderr, "Building prompt\n")
-	fullPrompt := context.BuildPrompt(prompt, previousAttempts, ciLogs)
+	fmt.Fprintf(os.Stderr, "Building prompt (mode: %s)\n", executionMode)
+	var fullPrompt string
+	switch executionMode {
+	case "plan_creation":
+		fullPrompt = context.BuildPlanCreationPrompt(reviewContent)
+	case "plan_execution":
+		fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent)
+	default:
+		fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs)
+	}
 	fmt.Fprintf(os.Stderr, "Built prompt (length: %d characters)\n", len(fullPrompt))
 
 	// 9. Run pre-hooks
@@ -357,6 +440,14 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs string) error {
 		return fmt.Errorf("agent execution failed: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+
+	// 11. Plan creationモードではここで終了処理に移行する
+	if executionMode == "plan_creation" {
+		if err := handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	// 11. Check for file changes
 	fmt.Fprintf(os.Stderr, "Checking for file changes\n")
