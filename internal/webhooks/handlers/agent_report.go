@@ -7,15 +7,18 @@ import (
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"agentic-automation/internal/utils"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -39,6 +42,17 @@ type ReportResponse struct {
 	PRURL      string `json:"pr_url,omitempty"`
 }
 
+// PlanReportRequest represents the request body for plan creation/execution reports.
+type PlanReportRequest struct {
+	Status          string `json:"status" binding:"required,oneof=plan_created plan_rejected"`
+	AgentType       string `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
+	PlanContent     string `json:"plan_content,omitempty"`
+	RejectionReason string `json:"rejection_reason,omitempty"`
+	Logs            string `json:"logs,omitempty"`
+}
+
+const planPreviewLogLimit = 100
+
 // HandleAgentReport handles POST /api/agent-runs/:id/report requests
 // It receives execution results from agent-runner Pods and updates AgentRun state
 func HandleAgentReport(c *gin.Context) {
@@ -59,9 +73,10 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
-	// Parse request body
-	var req ReportRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var statusEnvelope struct {
+		Status string `json:"status" binding:"required"`
+	}
+	if err := c.ShouldBindBodyWith(&statusEnvelope, binding.JSON); err != nil {
 		logger.Warn("Invalid request body",
 			zap.Error(err),
 			zap.Int("agent_run_id", agentRunID),
@@ -74,9 +89,42 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
-	// Get database connection and repository
+	status := strings.TrimSpace(statusEnvelope.Status)
+
 	db := config.GetDB()
 	agentRunRepo := repositories.NewAgentRunRepository(db)
+
+	if status == "plan_created" || status == "plan_rejected" {
+		var planReq PlanReportRequest
+		if err := c.ShouldBindBodyWith(&planReq, binding.JSON); err != nil {
+			logger.Warn("Invalid plan report body",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("path", c.Request.URL.Path),
+			)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "INVALID_REQUEST",
+				"message": "Invalid plan report body: " + err.Error(),
+			})
+			return
+		}
+		handlePlanReport(c, agentRunID, &planReq, agentRunRepo, db)
+		return
+	}
+
+	var req ReportRequest
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
+		logger.Warn("Invalid request body",
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRunID),
+			zap.String("path", c.Request.URL.Path),
+		)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "Invalid request body: " + err.Error(),
+		})
+		return
+	}
 
 	// Get AgentRun by ID
 	agentRun, err := agentRunRepo.GetByID(agentRunID)
@@ -549,4 +597,497 @@ RESP:
 		AgentRunID: agentRunID,
 		PRURL:      prURL,
 	})
+}
+
+func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, agentRunRepo repositories.AgentRunRepository, db *gorm.DB) {
+	logger := config.GetLogger()
+	ctx := c.Request.Context()
+
+	agentRun, err := agentRunRepo.GetByID(agentRunID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.Warn("AgentRun not found for plan report",
+				zap.Int("agent_run_id", agentRunID),
+			)
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":   "AGENT_RUN_NOT_FOUND",
+				"message": "AgentRun with ID " + strconv.Itoa(agentRunID) + " not found",
+			})
+			return
+		}
+		logger.Error("Failed to load AgentRun for plan report",
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRunID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to load agent run",
+		})
+		return
+	}
+
+	if agentRun.ExecutionMode != "plan_creation" {
+		logger.Warn("Plan report received for non plan-creation run",
+			zap.Int("agent_run_id", agentRunID),
+			zap.String("execution_mode", agentRun.ExecutionMode),
+		)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_PLAN_REPORT",
+			"message": "Plan report can only be submitted for plan creation runs",
+		})
+		return
+	}
+
+	if agentRun.ReviewFeedbackID == nil {
+		logger.Error("Plan report received without associated review feedback",
+			zap.Int("agent_run_id", agentRunID),
+		)
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   "REVIEW_FEEDBACK_NOT_LINKED",
+			"message": "Plan report missing associated review feedback",
+		})
+		return
+	}
+
+	reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
+	reviewFeedback, err := reviewFeedbackRepo.FindByID(*agentRun.ReviewFeedbackID)
+	if err != nil {
+		logger.Error("Failed to load ReviewFeedback for plan report",
+			zap.Error(err),
+			zap.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to load review feedback",
+		})
+		return
+	}
+	if reviewFeedback == nil {
+		logger.Warn("ReviewFeedback not found for plan report",
+			zap.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
+		)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   "REVIEW_FEEDBACK_NOT_FOUND",
+			"message": "ReviewFeedback not found",
+		})
+		return
+	}
+
+	sanitizedLogs := sanitizePlanLogs(req.Logs)
+	now := time.Now()
+	agentRun.AgentType = req.AgentType
+	agentRun.CompletedAt = &now
+
+	switch req.Status {
+	case "plan_created":
+		handlePlanCreated(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db)
+	case "plan_rejected":
+		handlePlanRejected(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db)
+	default:
+		logger.Warn("Unsupported plan report status",
+			zap.String("status", req.Status),
+		)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_PLAN_STATUS",
+			"message": "Unsupported plan report status",
+		})
+	}
+}
+
+func handlePlanCreated(
+	c *gin.Context,
+	ctx context.Context,
+	agentRunID int,
+	agentRun *models.AgentRun,
+	reviewFeedback *models.ReviewFeedback,
+	req *PlanReportRequest,
+	sanitizedLogs string,
+	agentRunRepo repositories.AgentRunRepository,
+	reviewFeedbackRepo *repositories.ReviewFeedbackRepository,
+	db *gorm.DB,
+) {
+	logger := config.GetLogger()
+	planContent := strings.TrimSpace(req.PlanContent)
+	if planContent == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_PLAN_CONTENT",
+			"message": "plan_content is required when status is plan_created",
+		})
+		return
+	}
+
+	sanitizedContent := utils.SanitizeUTF8(planContent)
+	planContentForStorage := utils.TruncateWithSuffix(sanitizedContent, utils.GetDBOutputLimitBytes(), "… [truncated]")
+
+	planRunID := agentRunID
+	reviewFeedback.PlanContent = &planContentForStorage
+	reviewFeedback.PlanCreationStatus = "created"
+	reviewFeedback.PlanAgentRunID = &planRunID
+
+	agentRun.PlanContent = &planContentForStorage
+	agentRun.State = "succeeded"
+	agentRun.ErrorMessage = nil
+	agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+
+	if err := agentRunRepo.Update(agentRun); err != nil {
+		logger.Error("Failed to update plan creation AgentRun",
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRunID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to update plan agent run",
+		})
+		return
+	}
+
+	if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+		logger.Error("Failed to update ReviewFeedback with plan content",
+			zap.Error(err),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to update review feedback",
+		})
+		return
+	}
+
+	issueRepo := repositories.NewIssueRepository()
+	issue, err := issueRepo.FindByID(agentRun.IssueID)
+	if err != nil {
+		logger.Error("Failed to load Issue for plan execution",
+			zap.Error(err),
+			zap.Int("issue_id", agentRun.IssueID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to load issue for plan execution",
+		})
+		return
+	}
+
+	prRepo := repositories.NewPullRequestRepository(db)
+	pr, err := prRepo.FindByID(reviewFeedback.PRID)
+	if err != nil {
+		logger.Error("Failed to load PullRequest for plan execution",
+			zap.Error(err),
+			zap.Int("pr_id", reviewFeedback.PRID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to load pull request",
+		})
+		return
+	}
+
+	executionPRID := reviewFeedback.PRID
+	executionRun := &models.AgentRun{
+		IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", reviewFeedback.ID, agentRunID, time.Now().UnixNano()),
+		IssueID:          agentRun.IssueID,
+		PRID:             &executionPRID,
+		State:            "queued",
+		AgentType:        req.AgentType,
+		ExecutionMode:    "plan_execution",
+		PlanContent:      &planContentForStorage,
+		ReviewFeedbackID: &reviewFeedback.ID,
+	}
+
+	if err := db.Create(executionRun).Error; err != nil {
+		logger.Error("Failed to create execution AgentRun",
+			zap.Error(err),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to create execution agent run",
+		})
+		return
+	}
+
+	branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
+	if trimmed := strings.TrimSpace(pr.Branch); trimmed != "" {
+		branchName = trimmed
+	}
+
+	kubernetesClient, err := clients.NewKubernetesClient(logger)
+	if err != nil {
+		logger.Error("Failed to initialize Kubernetes client for plan execution",
+			zap.Error(err),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "KUBERNETES_CLIENT_ERROR",
+			"message": "Failed to initialize Kubernetes client",
+		})
+		return
+	}
+
+	jobService := services.NewKubernetesJobService(kubernetesClient, logger)
+	job, err := jobService.CreateJobForPlanExecution(ctx, executionRun, issue, planContentForStorage, branchName)
+	if err != nil {
+		logger.Error("Failed to create plan execution job",
+			zap.Error(err),
+			zap.Int("execution_agent_run_id", executionRun.ID),
+		)
+		failureReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(err.Error()), utils.GetDBOutputLimitBytes(), "… [truncated]")
+		executionRun.State = "failed"
+		executionRun.ErrorMessage = &failureReason
+		if updateErr := agentRunRepo.Update(executionRun); updateErr != nil {
+			logger.Warn("Failed to record execution AgentRun failure state",
+				zap.Error(updateErr),
+				zap.Int("execution_agent_run_id", executionRun.ID),
+			)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "PLAN_EXECUTION_JOB_CREATION_FAILED",
+			"message": "Failed to create plan execution job",
+		})
+		return
+	}
+
+	reviewFeedback.ExecutionAgentRunID = &executionRun.ID
+	if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+		logger.Error("Failed to link execution AgentRun to ReviewFeedback",
+			zap.Error(err),
+			zap.Int("execution_agent_run_id", executionRun.ID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to update review feedback",
+		})
+		return
+	}
+
+	logger.Info("Plan created and execution job started",
+		zap.Int("plan_agent_run_id", agentRunID),
+		zap.Int("execution_agent_run_id", executionRun.ID),
+		zap.Int("review_feedback_id", reviewFeedback.ID),
+		zap.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "Plan created and execution job started",
+		"agent_run_id": executionRun.ID,
+		"job_name":     job.Name,
+	})
+}
+
+func handlePlanRejected(
+	c *gin.Context,
+	ctx context.Context,
+	agentRunID int,
+	agentRun *models.AgentRun,
+	reviewFeedback *models.ReviewFeedback,
+	req *PlanReportRequest,
+	sanitizedLogs string,
+	agentRunRepo repositories.AgentRunRepository,
+	reviewFeedbackRepo *repositories.ReviewFeedbackRepository,
+	db *gorm.DB,
+) {
+	logger := config.GetLogger()
+	reason := strings.TrimSpace(req.RejectionReason)
+	if reason == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REJECTION_REASON",
+			"message": "rejection_reason is required when status is plan_rejected",
+		})
+		return
+	}
+
+	sanitizedReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(reason), utils.GetDBOutputLimitBytes(), "… [truncated]")
+	planRunID := agentRunID
+	reviewFeedback.PlanCreationStatus = "rejected"
+	reviewFeedback.PlanAgentRunID = &planRunID
+	reviewFeedback.ExecutionAgentRunID = nil
+	reviewFeedback.PlanContent = nil
+
+	agentRun.PlanContent = nil
+	agentRun.State = "failed"
+	agentRun.ErrorMessage = &sanitizedReason
+	agentRun.Output = buildPlanOutputJSON("plan_rejected", req.AgentType, "", sanitizedLogs, sanitizedReason)
+
+	if err := agentRunRepo.Update(agentRun); err != nil {
+		logger.Error("Failed to update plan creation AgentRun after rejection",
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRunID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to update plan agent run",
+		})
+		return
+	}
+
+	if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+		logger.Error("Failed to update ReviewFeedback for plan rejection",
+			zap.Error(err),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to update review feedback",
+		})
+		return
+	}
+
+	prRepo := repositories.NewPullRequestRepository(db)
+	pr, err := prRepo.FindByID(reviewFeedback.PRID)
+	if err != nil {
+		logger.Error("Failed to load PullRequest for plan rejection comment",
+			zap.Error(err),
+			zap.Int("pr_id", reviewFeedback.PRID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to load pull request",
+		})
+		return
+	}
+
+	repoParts := strings.SplitN(pr.Repo, "/", 2)
+	if len(repoParts) != 2 {
+		logger.Error("Invalid repository format for pull request",
+			zap.String("repo", pr.Repo),
+			zap.Int("pr_id", pr.ID),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INVALID_REPOSITORY_FORMAT",
+			"message": "Pull request repository has invalid format",
+		})
+		return
+	}
+
+	owner, repoName := repoParts[0], repoParts[1]
+	if appGitHubClient == nil {
+		ghApp, err := clients.NewGitHubAppClient(logger)
+		if err != nil {
+			logger.Error("Failed to initialize GitHub App client for plan rejection",
+				zap.Error(err),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "GITHUB_CLIENT_ERROR",
+				"message": "Failed to initialize GitHub client",
+			})
+			return
+		}
+		appGitHubClient = ghApp
+	}
+
+	rawClient, err := appGitHubClient.ForRepo(ctx, owner, repoName)
+	if err != nil {
+		logger.Error("Failed to create per-repo GitHub client",
+			zap.Error(err),
+			zap.String("owner", owner),
+			zap.String("repo", repoName),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "GITHUB_CLIENT_ERROR",
+			"message": "Failed to initialize GitHub client",
+		})
+		return
+	}
+
+	githubClient := clients.NewFromGitHub(rawClient, logger)
+	comment := fmt.Sprintf("⚠️ プラン作成が却下されました。\n\n理由:\n%s", sanitizedReason)
+	if _, err := githubClient.CreateIssueComment(ctx, owner, repoName, pr.Number, comment); err != nil {
+		logger.Error("Failed to post plan rejection comment",
+			zap.Error(err),
+			zap.String("owner", owner),
+			zap.String("repo", repoName),
+			zap.Int("pr_number", pr.Number),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "GITHUB_COMMENT_ERROR",
+			"message": "Failed to post plan rejection comment",
+		})
+		return
+	}
+
+	logger.Info("Plan creation rejected",
+		zap.Int("plan_agent_run_id", agentRunID),
+		zap.Int("review_feedback_id", reviewFeedback.ID),
+		zap.String("reason_preview", previewString(sanitizedReason, planPreviewLogLimit)),
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Plan rejected",
+	})
+}
+
+var planLogSanitizePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`ghp_[A-Za-z0-9]{36}`),
+	regexp.MustCompile(`gho_[A-Za-z0-9]{36}`),
+	regexp.MustCompile(`ghs_[A-Za-z0-9]{36}`),
+	regexp.MustCompile(`sk-[A-Za-z0-9]{48}`),
+	regexp.MustCompile(`ANTHROPIC_API_KEY[=:\s]+[A-Za-z0-9-_]+`),
+	regexp.MustCompile(`CURSOR_API_KEY[=:\s]+[A-Za-z0-9-_]+`),
+}
+
+func sanitizePlanLogs(logs string) string {
+	trimmed := strings.TrimSpace(logs)
+	if trimmed == "" {
+		return ""
+	}
+	sanitized := utils.SanitizeUTF8(trimmed)
+	for _, pattern := range planLogSanitizePatterns {
+		sanitized = pattern.ReplaceAllString(sanitized, "***")
+	}
+	return utils.TruncateWithSuffix(sanitized, utils.GetDBOutputLimitBytes(), "… [truncated]")
+}
+
+func previewString(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	return s[:limit] + "..."
+}
+
+func buildPlanOutputJSON(status, agentType, planContent, logs, rejectionReason string) datatypes.JSON {
+	payload := map[string]any{
+		"schema_version": "plan/v1",
+		"status":         status,
+		"agent_type":     agentType,
+	}
+	if strings.TrimSpace(planContent) != "" {
+		payload["plan_content"] = planContent
+	}
+	if strings.TrimSpace(logs) != "" {
+		payload["logs"] = logs
+	}
+	if strings.TrimSpace(rejectionReason) != "" {
+		payload["rejection_reason"] = rejectionReason
+	}
+
+	bytes, err := json.Marshal(payload)
+	if err != nil {
+		config.GetLogger().Warn("Failed to marshal plan output payload", zap.Error(err))
+		return nil
+	}
+
+	limit := utils.GetDBOutputLimitBytes()
+	if len(bytes) <= limit {
+		return datatypes.JSON(bytes)
+	}
+
+	truncatedPayload := map[string]any{
+		"schema_version": "plan/v1",
+		"status":         status,
+		"agent_type":     agentType,
+		"truncated":      true,
+	}
+	if planContent != "" {
+		truncatedPayload["plan_preview"] = previewString(planContent, planPreviewLogLimit)
+	}
+	if rejectionReason != "" {
+		truncatedPayload["rejection_preview"] = previewString(rejectionReason, planPreviewLogLimit)
+	}
+	if logs != "" {
+		truncatedPayload["logs_preview"] = previewString(logs, planPreviewLogLimit)
+	}
+
+	if b, err := json.Marshal(truncatedPayload); err == nil {
+		return datatypes.JSON(b)
+	}
+
+	return datatypes.JSON(bytes[:limit])
 }

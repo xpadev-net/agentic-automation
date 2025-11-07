@@ -41,6 +41,10 @@ func (f *fakeJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, a
 	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job-1"}}, nil
 }
 
+func (f *fakeJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
+	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job-1"}}, nil
+}
+
 // minimal ObjectMeta shim to avoid importing k8s meta in test package usage
 // We alias to services.ObjectMeta which delegates to k8s meta types where needed.
 

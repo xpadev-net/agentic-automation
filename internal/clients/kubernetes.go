@@ -24,17 +24,21 @@ import (
 
 // JobConfig holds configuration for creating a Kubernetes Job
 type JobConfig struct {
-	AgentRunID       int
-	RetryCount       int
-	IssueID          int
-	Repo             string
-	Prompt           string
-	PreviousAttempts string
-	CILogs           string
-	AgentType        string
-	AgentRunnerImage string
-	TimeoutMinutes   int
-	BranchName       string // Optional: existing branch name to checkout (empty means create new branch)
+	AgentRunID            int
+	RetryCount            int
+	IssueID               int
+	Repo                  string
+	Prompt                string
+	PreviousAttempts      string
+	CILogs                string
+	AgentType             string
+	AgentRunnerImage      string
+	TimeoutMinutes        int
+	BranchName            string // Optional: existing branch name to checkout (empty means create new branch)
+	ExecutionMode         string
+	PlanContent           string
+	ReviewFeedbackContent string
+	CursorAllowWrite      bool
 }
 
 // KubernetesClient wraps Kubernetes API client functionality
@@ -267,6 +271,10 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 			Name:  "RETRY_COUNT",
 			Value: strconv.Itoa(config.RetryCount),
 		},
+		{
+			Name:  "CURSOR_ALLOW_WRITE",
+			Value: strconv.FormatBool(config.CursorAllowWrite),
+		},
 	}
 
 	// Add existing branch name if specified (for continuing work on existing PR)
@@ -393,10 +401,15 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 	serviceAccountName := appconfig.GetEnv("KUBERNETES_SERVICE_ACCOUNT", "agent-automation")
 
 	// Build container args
+	mode := strings.TrimSpace(config.ExecutionMode)
+	if mode == "" {
+		mode = "normal"
+	}
 	args := []string{
 		fmt.Sprintf("--issue-id=%d", config.IssueID),
 		fmt.Sprintf("--repo=%s", config.Repo),
 		fmt.Sprintf("--prompt=%s", config.Prompt),
+		fmt.Sprintf("--execution-mode=%s", mode),
 	}
 	if config.PreviousAttempts != "" {
 		args = append(args, fmt.Sprintf("--previous-attempts=%s", config.PreviousAttempts))
@@ -632,6 +645,93 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 		Spec: *jobSpec,
 	}
 
+	if len(job.Spec.Template.Spec.Containers) == 0 {
+		return nil, fmt.Errorf("job template has no containers configured")
+	}
+
+	container := &job.Spec.Template.Spec.Containers[0]
+	env := container.Env
+	volumes := job.Spec.Template.Spec.Volumes
+	volumeMounts := container.VolumeMounts
+
+	const maxInlineContentSize = 900 * 1024
+
+	if config.ExecutionMode == "plan_creation" {
+		reviewContent := strings.TrimSpace(config.ReviewFeedbackContent)
+		if reviewContent != "" {
+			if len(reviewContent) > maxInlineContentSize {
+				configMapName, err := c.createConfigMapForReviewContent(ctx, jobName, reviewContent)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create review feedback configmap: %w", err)
+				}
+				reviewVolumeName := fmt.Sprintf("%s-review", jobName)
+				volumes = append(volumes, corev1.Volume{
+					Name: reviewVolumeName,
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
+							Items:                []corev1.KeyToPath{{Key: "review_feedback_content.txt", Path: "review_feedback_content.txt"}},
+						},
+					},
+				})
+				volumeMounts = append(volumeMounts, corev1.VolumeMount{
+					Name:      reviewVolumeName,
+					MountPath: "/config/review",
+					ReadOnly:  true,
+				})
+				env = append(env, corev1.EnvVar{
+					Name:  "REVIEW_FEEDBACK_CONTENT_FILE",
+					Value: "/config/review/review_feedback_content.txt",
+				})
+			} else {
+				env = append(env, corev1.EnvVar{
+					Name:  "REVIEW_FEEDBACK_CONTENT",
+					Value: reviewContent,
+				})
+			}
+		}
+	}
+
+	if config.ExecutionMode == "plan_execution" {
+		planContent := strings.TrimSpace(config.PlanContent)
+		if planContent != "" {
+			if len(planContent) > maxInlineContentSize {
+				configMapName, err := c.createConfigMapForPlanContent(ctx, jobName, planContent)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create plan content configmap: %w", err)
+				}
+				planVolumeName := fmt.Sprintf("%s-plan", jobName)
+				volumes = append(volumes, corev1.Volume{
+					Name: planVolumeName,
+					VolumeSource: corev1.VolumeSource{
+						ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{Name: configMapName},
+							Items:                []corev1.KeyToPath{{Key: "plan_content.txt", Path: "plan_content.txt"}},
+						},
+					},
+				})
+				volumeMounts = append(volumeMounts, corev1.VolumeMount{
+					Name:      planVolumeName,
+					MountPath: "/config/plan",
+					ReadOnly:  true,
+				})
+				env = append(env, corev1.EnvVar{
+					Name:  "PLAN_CONTENT_FILE",
+					Value: "/config/plan/plan_content.txt",
+				})
+			} else {
+				env = append(env, corev1.EnvVar{
+					Name:  "PLAN_CONTENT",
+					Value: planContent,
+				})
+			}
+		}
+	}
+
+	container.Env = env
+	container.VolumeMounts = volumeMounts
+	job.Spec.Template.Spec.Volumes = volumes
+
 	// Try to set OwnerReference from Operator Pod
 	operatorPod, err := c.GetOperatorPod(ctx)
 	if err != nil {
@@ -683,6 +783,52 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 	)
 
 	return createdJob, nil
+}
+
+func (c *KubernetesClient) createConfigMapForReviewContent(ctx context.Context, jobName, content string) (string, error) {
+	configMapName := fmt.Sprintf("%s-review-content", jobName)
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: c.namespace,
+		},
+		Data: map[string]string{
+			"review_feedback_content.txt": content,
+		},
+	}
+
+	if _, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Create(ctx, configMap, metav1.CreateOptions{}); err != nil {
+		c.logger.Error("Failed to create review content ConfigMap",
+			zap.String("configmap", configMapName),
+			zap.Error(err),
+		)
+		return "", err
+	}
+
+	return configMapName, nil
+}
+
+func (c *KubernetesClient) createConfigMapForPlanContent(ctx context.Context, jobName, content string) (string, error) {
+	configMapName := fmt.Sprintf("%s-plan-content", jobName)
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      configMapName,
+			Namespace: c.namespace,
+		},
+		Data: map[string]string{
+			"plan_content.txt": content,
+		},
+	}
+
+	if _, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Create(ctx, configMap, metav1.CreateOptions{}); err != nil {
+		c.logger.Error("Failed to create plan content ConfigMap",
+			zap.String("configmap", configMapName),
+			zap.Error(err),
+		)
+		return "", err
+	}
+
+	return configMapName, nil
 }
 
 // GetJob retrieves a Kubernetes Job by name
