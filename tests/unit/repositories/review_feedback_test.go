@@ -49,6 +49,10 @@ func setupTestDBForReviewFeedback(t *testing.T) *gorm.DB {
 			status TEXT DEFAULT 'requested',
 			approval_detected BOOLEAN DEFAULT FALSE,
 			github_comment_id INTEGER,
+			plan_creation_status TEXT DEFAULT 'pending',
+			plan_content TEXT,
+			plan_agent_run_id INTEGER,
+			execution_agent_run_id INTEGER,
 			created_at DATETIME,
 			updated_at DATETIME,
 			FOREIGN KEY(pr_id) REFERENCES pull_requests(id) ON DELETE CASCADE

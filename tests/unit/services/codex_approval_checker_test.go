@@ -35,6 +35,10 @@ func setupTestDBForCodexApproval(t *testing.T) *gorm.DB {
         status TEXT,
         approval_detected BOOLEAN,
         github_comment_id INTEGER,
+        plan_creation_status TEXT DEFAULT 'pending',
+        plan_content TEXT,
+        plan_agent_run_id INTEGER,
+        execution_agent_run_id INTEGER,
         created_at DATETIME,
         updated_at DATETIME
     )`)
