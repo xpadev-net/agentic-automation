@@ -191,9 +191,6 @@
    type ReviewFeedback struct {
        // ... 既存フィールド ...
 
-       // Sourceフィールドの拡張（すべてのレビューコメントに対応）
-       Source string `gorm:"type:enum('Codex','Review');default:'Codex'"` // 'Review'を追加
-
        // プラン作成・実行関連フィールド
        // 状態遷移: pending → creating → created → executed
        //                              ↘ rejected
@@ -234,10 +231,6 @@
 3. **マイグレーションファイル作成**
    ```sql
    -- migrations/000006_add_review_feedback_plan_fields.sql
-   -- Sourceフィールドのenumを拡張（'Review'を追加）
-   ALTER TABLE review_feedback
-       MODIFY COLUMN source ENUM('Codex','Review') DEFAULT 'Codex';
-
    -- プラン作成・実行関連フィールドを追加
    -- 状態: pending → creating → created → executed (または rejected)
    -- creating: プラン作成Pod起動済み（多重起動防止用）
@@ -261,7 +254,6 @@
 
 **テスト項目**:
 - [ ] マイグレーションが正常に実行されること
-- [ ] ReviewFeedbackモデルのSourceフィールドが'Review'をサポートすること
 - [ ] ReviewFeedbackモデルでプラン関連フィールドが正しく保存・取得できること
 - [ ] AgentRunモデルで実行モード関連フィールドが正しく保存・取得できること
 
@@ -663,7 +655,6 @@
 - **すべてのレビューコメント**（Codexかユーザーかを区別せず）に対してプラン作成Podを起動する
 - `pr_review_comment`ではCodex bot判定を行わず、一律で処理する
 - Codex bot判定は`issue_comment`（PRに関連する通常のコメント）でのみ行う
-- `pr_review_comment`ではSourceフィールドは一律"Review"を使用する
 
 **修正対象ファイル**:
 - `internal/webhooks/handlers/pr_review_comment.go`
@@ -710,27 +701,16 @@
        
        commentID := int64(payload.Comment.ID)
        var reviewFeedback *models.ReviewFeedback
-       
-       // pr_review_commentではCodex bot判定を行わず、一律"Review"を使用
-       source := "Review"
-       
+
        // 既存の'requested'があれば'received'へ更新
        if list, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested"); err == nil && len(list) > 0 {
            latest := list[0]
            reviewFeedbackRepo.UpdateToReceived(latest.ID, payload.Comment.Body, false, &commentID)
            reviewFeedback = latest
-           // Sourceを更新（既存レコードの場合、一律"Review"に設定）
-           if reviewFeedback.Source != source {
-               reviewFeedback.Source = source
-               reviewFeedbackRepo.Update(reviewFeedback)
-           }
        } else {
            // 新規作成（approval_detected=false）
-           // CreateReceivedReviewを拡張してSourceを指定できるようにするか、
-           // 直接Createメソッドを使用
            reviewFeedback = &models.ReviewFeedback{
                PRID:             pr.ID,
-               Source:           source, // 一律"Review"
                Content:          &payload.Comment.Body,
                Status:           "received",
                ApprovalDetected: false,
@@ -1060,7 +1040,6 @@
 - [ ] Codex botからのレビューコメントでプラン作成Podが起動されること
 - [ ] 通常のユーザーからのレビューコメントでプラン作成Podが起動されること
 - [ ] `pr_review_comment`ではCodex bot判定が行われないこと
-- [ ] ReviewFeedbackのSourceフィールドが一律"Review"に設定されること
 - [ ] プラン作成Podでwrite権限が剥奪されること
 - [ ] プラン作成用プロンプトが正しく構築されること
 - [ ] ReviewFeedbackの状態が正しく更新されること
