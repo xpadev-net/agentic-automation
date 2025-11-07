@@ -220,13 +220,19 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.PullRequest.Number)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			logger.Error("PullRequest not found",
-				zap.Error(err),
+			// PRレコードが見つからない場合（無関係なリポジトリや古いPR）は、
+			// エラーを返さずにプラン作成をスキップして成功を返す
+			// これにより、GitHubが通常のコメントでもwebhookをリトライしないようにする
+			logger.Info("PullRequest not found, skipping plan creation",
 				zap.String("delivery_id", deliveryID),
 				zap.Int("pr_number", payload.PullRequest.Number),
 				zap.String("repo", payload.Repository.FullName),
 			)
-			c.Error(errors.New("pull request not found"))
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "no_trigger",
+				"reason":      "pr_not_found",
+				"delivery_id": deliveryID,
+			})
 			return
 		}
 		logger.Error("Failed to get PullRequest",
@@ -246,7 +252,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		zap.String("delivery_id", deliveryID),
 	)
 
-	planResult, planErr := startPlanCreationIfNeeded(ctx, deps, logger, pr, commentBody, int64(payload.Comment.ID), deliveryID)
+	planResult, planErr := startPlanCreationIfNeeded(ctx, deps, logger, pr, commentBody, int64(payload.Comment.ID), payload.Comment.User.Login, payload.Comment.User.ID, deliveryID)
 	if planErr != nil {
 		c.Error(planErr)
 		return
@@ -517,6 +523,8 @@ func startPlanCreationIfNeeded(
 	pr *models.PullRequest,
 	commentBody string,
 	commentID int64,
+	commentUserLogin string,
+	commentUserID int64,
 	deliveryID string,
 ) (*planCreationResult, error) {
 	commentBody = strings.TrimSpace(commentBody)
@@ -573,8 +581,43 @@ func startPlanCreationIfNeeded(
 			zap.String("plan_creation_status", reviewFeedback.PlanCreationStatus),
 			zap.String("delivery_id", deliveryID),
 		)
+
+		// If the existing record is in "requested" status and this is a Codex comment,
+		// update it to "received" to match the original behavior
+		if reviewFeedback.Status == "requested" {
+			codexDetector := services.NewCodexApprovalDetector(logger)
+			isCodexComment := codexDetector.IsCodexBot(commentUserLogin, commentUserID)
+			if isCodexComment {
+				if updateErr := reviewFeedbackRepo.UpdateToReceived(reviewFeedback.ID, commentBody, false, commentIDPtr); updateErr != nil {
+					logger.Error("Failed to update existing requested review feedback to received",
+						zap.Error(updateErr),
+						zap.Int("review_feedback_id", reviewFeedback.ID),
+						zap.String("delivery_id", deliveryID),
+					)
+					return nil, updateErr
+				}
+				reviewFeedback, err = reviewFeedbackRepo.FindByID(reviewFeedback.ID)
+				if err != nil {
+					logger.Error("Failed to reload review feedback after update",
+						zap.Error(err),
+						zap.Int("review_feedback_id", reviewFeedback.ID),
+						zap.String("delivery_id", deliveryID),
+					)
+					return nil, err
+				}
+				logger.Info("Updated existing requested review feedback to received (Codex comment)",
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+					zap.Int64("github_comment_id", commentID),
+					zap.String("delivery_id", deliveryID),
+				)
+			}
+		}
 	} else {
 		// No existing record found by comment ID, proceed with the original logic
+		// Check if the comment is from Codex bot to determine if we should update existing requested records
+		codexDetector := services.NewCodexApprovalDetector(logger)
+		isCodexComment := codexDetector.IsCodexBot(commentUserLogin, commentUserID)
+
 		requestedList, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested")
 		if err != nil {
 			logger.Error("Failed to load requested review feedback records",
@@ -587,22 +630,55 @@ func startPlanCreationIfNeeded(
 
 		if len(requestedList) > 0 {
 			latest := requestedList[0]
-			if updateErr := reviewFeedbackRepo.UpdateToReceived(latest.ID, commentBody, false, commentIDPtr); updateErr != nil {
-				logger.Error("Failed to update review feedback to received",
-					zap.Error(updateErr),
-					zap.Int("review_feedback_id", latest.ID),
+			// Only update requested records if:
+			// 1. The comment is from Codex bot, AND
+			// 2. The requested record's GitHubCommentID matches the current comment ID
+			// This prevents human comments from overwriting Codex review requests
+			shouldUpdate := isCodexComment && latest.GitHubCommentID != nil && *latest.GitHubCommentID == commentID
+
+			if shouldUpdate {
+				if updateErr := reviewFeedbackRepo.UpdateToReceived(latest.ID, commentBody, false, commentIDPtr); updateErr != nil {
+					logger.Error("Failed to update review feedback to received",
+						zap.Error(updateErr),
+						zap.Int("review_feedback_id", latest.ID),
+						zap.String("delivery_id", deliveryID),
+					)
+					return nil, updateErr
+				}
+				reviewFeedback, err = reviewFeedbackRepo.FindByID(latest.ID)
+				if err != nil {
+					logger.Error("Failed to reload review feedback after update",
+						zap.Error(err),
+						zap.Int("review_feedback_id", latest.ID),
+						zap.String("delivery_id", deliveryID),
+					)
+					return nil, err
+				}
+				logger.Info("Updated existing requested review feedback to received",
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+					zap.Int64("github_comment_id", commentID),
+					zap.Bool("is_codex_comment", isCodexComment),
 					zap.String("delivery_id", deliveryID),
 				)
-				return nil, updateErr
-			}
-			reviewFeedback, err = reviewFeedbackRepo.FindByID(latest.ID)
-			if err != nil {
-				logger.Error("Failed to reload review feedback after update",
-					zap.Error(err),
-					zap.Int("review_feedback_id", latest.ID),
+			} else {
+				// Human comment or comment ID mismatch: create a new received record
+				// This preserves the existing requested record for Codex to respond to later
+				reviewFeedback, err = reviewFeedbackRepo.CreateReceivedReview(pr.ID, commentBody, false, commentIDPtr)
+				if err != nil {
+					logger.Error("Failed to create received review feedback",
+						zap.Error(err),
+						zap.Int("pr_id", pr.ID),
+						zap.String("delivery_id", deliveryID),
+					)
+					return nil, err
+				}
+				logger.Info("Created new received review feedback (preserving existing requested record)",
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+					zap.Int64("github_comment_id", commentID),
+					zap.Bool("is_codex_comment", isCodexComment),
+					zap.Int("existing_requested_count", len(requestedList)),
 					zap.String("delivery_id", deliveryID),
 				)
-				return nil, err
 			}
 		} else {
 			reviewFeedback, err = reviewFeedbackRepo.CreateReceivedReview(pr.ID, commentBody, false, commentIDPtr)

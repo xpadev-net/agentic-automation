@@ -408,3 +408,183 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationWithCompletedPl
 func stringPtr(s string) *string {
 	return &s
 }
+
+func TestHandlePullRequestReviewComment_HumanCommentDoesNotUpdateCodexRequested(t *testing.T) {
+	db := setupPlanCreationDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	_, pr := setupPlanCreationFixtures(t, db)
+
+	// Create an existing Codex review request
+	codexCommentID := int64(5001)
+	codexRequestedFeedback := &models.ReviewFeedback{
+		PRID:             pr.ID,
+		Source:           "Codex",
+		Status:           "requested",
+		Content:          nil,
+		ApprovalDetected: false,
+		GitHubCommentID:  &codexCommentID,
+	}
+	require.NoError(t, db.Create(codexRequestedFeedback).Error)
+
+	jobService := &recordingPlanJobService{}
+	deps := PullRequestReviewCommentDeps{
+		Logger:                   zap.NewNop(),
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+		KubernetesJobService:     jobService,
+	}
+
+	// Human reviewer's comment (different comment ID)
+	humanCommentID := int64(5002)
+	payload := &PullRequestReviewCommentPayload{
+		Action: models.PullRequestReviewCommentActionCreated,
+		Comment: PullRequestReviewCommentComment{
+			ID:   int(humanCommentID),
+			Body: "This is a detailed review comment from a human reviewer that should trigger plan creation.",
+			User: User{Login: "human-reviewer", ID: 12345},
+		},
+		PullRequest: PullRequestReviewCommentPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewCommentRepository{FullName: pr.Repo},
+	}
+
+	w := invokeReviewCommentHandler(t, payload, deps)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "plan_creation_started", resp["status"])
+
+	// Verify that the Codex requested record is still in "requested" status
+	var codexFeedback models.ReviewFeedback
+	require.NoError(t, db.First(&codexFeedback, codexRequestedFeedback.ID).Error)
+	require.Equal(t, "requested", codexFeedback.Status, "Codex requested record should remain in requested status")
+	require.Equal(t, codexCommentID, *codexFeedback.GitHubCommentID)
+
+	// Verify that a new received record was created for the human comment
+	var allFeedbacks []models.ReviewFeedback
+	require.NoError(t, db.Where("pr_id = ?", pr.ID).Find(&allFeedbacks).Error)
+	require.Len(t, allFeedbacks, 2, "Should have 2 feedback records: one requested (Codex) and one received (human)")
+
+	// Find the human comment's feedback record
+	var humanFeedback *models.ReviewFeedback
+	for i := range allFeedbacks {
+		if allFeedbacks[i].ID != codexFeedback.ID {
+			humanFeedback = &allFeedbacks[i]
+			break
+		}
+	}
+	require.NotNil(t, humanFeedback, "Human comment feedback record should exist")
+	require.Equal(t, "received", humanFeedback.Status)
+	require.Equal(t, humanCommentID, *humanFeedback.GitHubCommentID)
+}
+
+func TestHandlePullRequestReviewComment_CodexCommentUpdatesMatchingRequested(t *testing.T) {
+	db := setupPlanCreationDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	_, pr := setupPlanCreationFixtures(t, db)
+
+	// Create an existing Codex review request with a specific comment ID
+	codexCommentID := int64(6001)
+	codexRequestedFeedback := &models.ReviewFeedback{
+		PRID:             pr.ID,
+		Source:           "Codex",
+		Status:           "requested",
+		Content:          nil,
+		ApprovalDetected: false,
+		GitHubCommentID:  &codexCommentID,
+	}
+	require.NoError(t, db.Create(codexRequestedFeedback).Error)
+
+	jobService := &recordingPlanJobService{}
+	deps := PullRequestReviewCommentDeps{
+		Logger:                   zap.NewNop(),
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+		KubernetesJobService:     jobService,
+	}
+
+	// Codex bot's comment with matching comment ID
+	codexBotUsername := "chatgpt-codex-connector[bot]"
+	codexBotUserID := int64(199175422)
+	payload := &PullRequestReviewCommentPayload{
+		Action: models.PullRequestReviewCommentActionCreated,
+		Comment: PullRequestReviewCommentComment{
+			ID:   int(codexCommentID),
+			Body: "This is Codex's review response that matches the requested review.",
+			User: User{Login: codexBotUsername, ID: codexBotUserID},
+		},
+		PullRequest: PullRequestReviewCommentPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewCommentRepository{FullName: pr.Repo},
+	}
+
+	w := invokeReviewCommentHandler(t, payload, deps)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "plan_creation_started", resp["status"])
+
+	// Verify that the Codex requested record was updated to "received"
+	var updatedFeedback models.ReviewFeedback
+	require.NoError(t, db.First(&updatedFeedback, codexRequestedFeedback.ID).Error)
+	require.Equal(t, "received", updatedFeedback.Status, "Codex requested record should be updated to received")
+	require.Equal(t, codexCommentID, *updatedFeedback.GitHubCommentID)
+	require.NotNil(t, updatedFeedback.Content)
+	require.Contains(t, *updatedFeedback.Content, "This is Codex's review response")
+
+	// Verify that no new record was created
+	var feedbackCount int64
+	require.NoError(t, db.Model(&models.ReviewFeedback{}).Where("pr_id = ?", pr.ID).Count(&feedbackCount).Error)
+	require.Equal(t, int64(1), feedbackCount, "Should have only 1 feedback record (updated from requested to received)")
+}
+
+func TestHandlePullRequestReviewComment_MissingPRReturns200(t *testing.T) {
+	db := setupPlanCreationDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	jobService := &recordingPlanJobService{}
+	deps := PullRequestReviewCommentDeps{
+		Logger:                   zap.NewNop(),
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+		KubernetesJobService:     jobService,
+	}
+
+	// Comment for a PR that doesn't exist in the database
+	payload := &PullRequestReviewCommentPayload{
+		Action: models.PullRequestReviewCommentActionCreated,
+		Comment: PullRequestReviewCommentComment{
+			ID:   7001,
+			Body: "This is a review comment for a PR that doesn't exist in our database.",
+			User: User{Login: "reviewer", ID: 12345},
+		},
+		PullRequest: PullRequestReviewCommentPullRequest{Number: 999},
+		Repository:  PullRequestReviewCommentRepository{FullName: "owner/repo"},
+	}
+
+	w := invokeReviewCommentHandler(t, payload, deps)
+	require.Equal(t, http.StatusOK, w.Code, "Should return 200 even when PR is not found")
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "no_trigger", resp["status"])
+	require.Equal(t, "pr_not_found", resp["reason"])
+	require.False(t, jobService.called, "Plan creation job should not be called when PR is not found")
+}
