@@ -693,6 +693,22 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 		return
 	}
 
+	currentStatus := strings.TrimSpace(reviewFeedback.PlanCreationStatus)
+	if currentStatus == "created" || currentStatus == "rejected" || currentStatus == "executed" {
+		logger.Info("Duplicate plan report ignored",
+			zap.Int("agent_run_id", agentRunID),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("plan_creation_status", currentStatus),
+		)
+		c.JSON(http.StatusOK, gin.H{
+			"message":                "Plan report already processed",
+			"plan_creation_status":   currentStatus,
+			"plan_agent_run_id":      reviewFeedback.PlanAgentRunID,
+			"execution_agent_run_id": reviewFeedback.ExecutionAgentRunID,
+		})
+		return
+	}
+
 	sanitizedLogs := sanitizePlanLogs(req.Logs)
 	now := time.Now()
 	agentRun.AgentType = req.AgentType

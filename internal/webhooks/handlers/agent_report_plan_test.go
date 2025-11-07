@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
@@ -270,4 +271,89 @@ func TestHandleAgentReportDispatchesPlanReport(t *testing.T) {
 	require.NoError(t, fixtures.db.First(&reviewFeedback, fixtures.reviewFeedback.ID).Error)
 	require.Equal(t, "created", reviewFeedback.PlanCreationStatus)
 	require.NotNil(t, reviewFeedback.ExecutionAgentRunID)
+}
+
+func TestHandlePlanReportIgnoresDuplicatePlanCreated(t *testing.T) {
+	fixtures := setupPlanTestFixtures(t)
+	fakeJob := &fakePlanJobService{}
+
+	origClientFactory := kubernetesClientFactory
+	origJobFactory := kubernetesJobServiceFactory
+	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+		return nil, nil
+	}
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+		return fakeJob
+	}
+	defer func() {
+		kubernetesClientFactory = origClientFactory
+		kubernetesJobServiceFactory = origJobFactory
+	}()
+
+	agentRunRepo := repositories.NewAgentRunRepository(fixtures.db)
+	planRepo := repositories.NewReviewFeedbackRepositoryWithDB(fixtures.db)
+
+	// seed initial plan report handling
+	firstReq := &PlanReportRequest{Status: "plan_created", AgentType: "claude-code", PlanContent: "Step A"}
+	w1 := httptest.NewRecorder()
+	ctx1, _ := gin.CreateTestContext(w1)
+	ctx1.Request = httptest.NewRequest("POST", "/", nil)
+	handlePlanCreated(
+		ctx1,
+		context.Background(),
+		fixtures.agentRun.ID,
+		fixtures.agentRun,
+		fixtures.reviewFeedback,
+		firstReq,
+		"",
+		agentRunRepo,
+		planRepo,
+		fixtures.db,
+	)
+	require.Equal(t, 200, w1.Code)
+	require.Len(t, fakeJob.capturedPlan, len(utils.SanitizeUTF8("Step A")))
+
+	// fetch updated records to assert preconditions
+	var refreshedReview models.ReviewFeedback
+	require.NoError(t, fixtures.db.First(&refreshedReview, fixtures.reviewFeedback.ID).Error)
+	require.Equal(t, "created", refreshedReview.PlanCreationStatus)
+
+	var executionRun models.AgentRun
+	require.NoError(t, fixtures.db.Where("execution_mode = ?", "plan_execution").First(&executionRun).Error)
+	originalExecutionID := executionRun.ID
+
+	// prepare duplicate report payload
+	payload := map[string]any{
+		"status":       "plan_created",
+		"agent_type":   "claude-code",
+		"plan_content": "Step B",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	w2 := httptest.NewRecorder()
+	ctx2, _ := gin.CreateTestContext(w2)
+	path := "/api/agent-runs/" + strconv.Itoa(fixtures.agentRun.ID) + "/report"
+	ctx2.Request = httptest.NewRequest("POST", path, bytes.NewReader(body))
+	ctx2.Request.Header.Set("Content-Type", "application/json")
+	ctx2.Params = gin.Params{gin.Param{Key: "id", Value: strconv.Itoa(fixtures.agentRun.ID)}}
+
+	HandleAgentReport(ctx2)
+
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	// ensure response signals duplicate processing
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
+	require.Equal(t, "Plan report already processed", resp["message"])
+	require.Equal(t, "created", resp["plan_creation_status"])
+
+	// ensure no new execution run/job was created
+	var executionRuns []models.AgentRun
+	require.NoError(t, fixtures.db.Where("execution_mode = ?", "plan_execution").Find(&executionRuns).Error)
+	require.Len(t, executionRuns, 1)
+	require.Equal(t, originalExecutionID, executionRuns[0].ID)
+
+	// ensure job service did not receive a second plan
+	require.Equal(t, utils.SanitizeUTF8("Step A"), fakeJob.capturedPlan)
 }
