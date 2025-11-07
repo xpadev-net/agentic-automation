@@ -98,6 +98,14 @@ func (s *CodexApprovalDetector) DetectApproval(reviewBody string, reviewerUserna
 	return detected
 }
 
+// IsCodexBot checks if the given username and user ID match the Codex bot.
+// This is a public wrapper around the private isCodexBot method.
+// 注意: 通常はDetectApproval()を使用すれば内部でbot判定が行われるため、
+// このメソッドは情報取得目的など、特別な理由がある場合にのみ使用すること
+func (s *CodexApprovalDetector) IsCodexBot(username string, userID int64) bool {
+	return s.isCodexBot(username, userID)
+}
+
 // isCodexBot checks if the given username and user ID match the Codex bot.
 // It matches by username (case-insensitive, with [bot] suffix handling) or by user ID.
 func (s *CodexApprovalDetector) isCodexBot(username string, userID int64) bool {
