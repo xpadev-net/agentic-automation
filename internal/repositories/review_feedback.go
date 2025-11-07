@@ -119,6 +119,34 @@ func (r *ReviewFeedbackRepository) FindLatestByPRID(prID int) (*models.ReviewFee
 	return &feedback, nil
 }
 
+// FindByGitHubCommentID finds a review feedback by GitHub comment ID.
+// This is used to prevent duplicate processing of the same review comment.
+//
+// Usage:
+//   - T094 (startPlanCreationIfNeeded): Check if a review comment has already been processed
+//
+// Parameters:
+//   - githubCommentID: GitHub comment ID (must be > 0)
+//
+// Returns:
+//   - *models.ReviewFeedback: Found ReviewFeedback record, or nil if not found
+//   - error: Error if query fails
+func (r *ReviewFeedbackRepository) FindByGitHubCommentID(githubCommentID int64) (*models.ReviewFeedback, error) {
+	if githubCommentID <= 0 {
+		return nil, errors.New("githubCommentID must be greater than 0")
+	}
+
+	var feedback models.ReviewFeedback
+	err := r.db.Where("github_comment_id = ?", githubCommentID).First(&feedback).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &feedback, nil
+}
+
 // Update updates an existing review feedback record
 func (r *ReviewFeedbackRepository) Update(feedback *models.ReviewFeedback) error {
 	if feedback == nil {

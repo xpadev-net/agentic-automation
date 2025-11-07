@@ -549,44 +549,71 @@ func startPlanCreationIfNeeded(
 
 	var reviewFeedback *models.ReviewFeedback
 	commentIDPtr := &commentID
-	requestedList, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested")
+
+	// First, check if a ReviewFeedback record already exists for this GitHub comment ID.
+	// This prevents duplicate processing when the same comment is reprocessed (e.g., webhook retries).
+	existingByCommentID, err := reviewFeedbackRepo.FindByGitHubCommentID(commentID)
 	if err != nil {
-		logger.Error("Failed to load requested review feedback records",
+		logger.Error("Failed to load review feedback by GitHub comment ID",
 			zap.Error(err),
+			zap.Int64("github_comment_id", commentID),
 			zap.Int("pr_id", pr.ID),
 			zap.String("delivery_id", deliveryID),
 		)
 		return nil, err
 	}
 
-	if len(requestedList) > 0 {
-		latest := requestedList[0]
-		if updateErr := reviewFeedbackRepo.UpdateToReceived(latest.ID, commentBody, false, commentIDPtr); updateErr != nil {
-			logger.Error("Failed to update review feedback to received",
-				zap.Error(updateErr),
-				zap.Int("review_feedback_id", latest.ID),
-				zap.String("delivery_id", deliveryID),
-			)
-			return nil, updateErr
-		}
-		reviewFeedback, err = reviewFeedbackRepo.FindByID(latest.ID)
-		if err != nil {
-			logger.Error("Failed to reload review feedback after update",
-				zap.Error(err),
-				zap.Int("review_feedback_id", latest.ID),
-				zap.String("delivery_id", deliveryID),
-			)
-			return nil, err
-		}
+	if existingByCommentID != nil {
+		// Use the existing record to prevent duplicate plan creation
+		reviewFeedback = existingByCommentID
+		logger.Info("Found existing review feedback for GitHub comment ID",
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.Int64("github_comment_id", commentID),
+			zap.String("status", reviewFeedback.Status),
+			zap.String("plan_creation_status", reviewFeedback.PlanCreationStatus),
+			zap.String("delivery_id", deliveryID),
+		)
 	} else {
-		reviewFeedback, err = reviewFeedbackRepo.CreateReceivedReview(pr.ID, commentBody, false, commentIDPtr)
+		// No existing record found by comment ID, proceed with the original logic
+		requestedList, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested")
 		if err != nil {
-			logger.Error("Failed to create received review feedback",
+			logger.Error("Failed to load requested review feedback records",
 				zap.Error(err),
 				zap.Int("pr_id", pr.ID),
 				zap.String("delivery_id", deliveryID),
 			)
 			return nil, err
+		}
+
+		if len(requestedList) > 0 {
+			latest := requestedList[0]
+			if updateErr := reviewFeedbackRepo.UpdateToReceived(latest.ID, commentBody, false, commentIDPtr); updateErr != nil {
+				logger.Error("Failed to update review feedback to received",
+					zap.Error(updateErr),
+					zap.Int("review_feedback_id", latest.ID),
+					zap.String("delivery_id", deliveryID),
+				)
+				return nil, updateErr
+			}
+			reviewFeedback, err = reviewFeedbackRepo.FindByID(latest.ID)
+			if err != nil {
+				logger.Error("Failed to reload review feedback after update",
+					zap.Error(err),
+					zap.Int("review_feedback_id", latest.ID),
+					zap.String("delivery_id", deliveryID),
+				)
+				return nil, err
+			}
+		} else {
+			reviewFeedback, err = reviewFeedbackRepo.CreateReceivedReview(pr.ID, commentBody, false, commentIDPtr)
+			if err != nil {
+				logger.Error("Failed to create received review feedback",
+					zap.Error(err),
+					zap.Int("pr_id", pr.ID),
+					zap.String("delivery_id", deliveryID),
+				)
+				return nil, err
+			}
 		}
 	}
 

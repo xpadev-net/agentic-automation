@@ -257,3 +257,154 @@ func TestHandlePullRequestReviewComment_PlanCreationStarted(t *testing.T) {
 	require.NotNil(t, resp["plan_agent_run_id"])
 	require.Equal(t, float64(run.ID), resp["plan_agent_run_id"].(float64))
 }
+
+func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *testing.T) {
+	db := setupPlanCreationDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	_, pr := setupPlanCreationFixtures(t, db)
+
+	jobService := &recordingPlanJobService{}
+	deps := PullRequestReviewCommentDeps{
+		Logger:                   zap.NewNop(),
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+		KubernetesJobService:     jobService,
+	}
+
+	commentID := int64(3003)
+	commentBody := "This is a detailed review comment that should trigger plan creation."
+
+	// First invocation: should create a new ReviewFeedback and start plan creation
+	payload1 := &PullRequestReviewCommentPayload{
+		Action: models.PullRequestReviewCommentActionCreated,
+		Comment: PullRequestReviewCommentComment{
+			ID:   int(commentID),
+			Body: commentBody,
+			User: User{Login: "reviewer"},
+		},
+		PullRequest: PullRequestReviewCommentPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewCommentRepository{FullName: pr.Repo},
+	}
+
+	w1 := invokeReviewCommentHandler(t, payload1, deps)
+	require.Equal(t, http.StatusOK, w1.Code)
+
+	var resp1 map[string]any
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
+	require.Equal(t, "plan_creation_started", resp1["status"])
+	require.True(t, jobService.called)
+	require.NotZero(t, jobService.lastReviewFeedback)
+
+	// Verify that a ReviewFeedback was created
+	var feedback1 models.ReviewFeedback
+	require.NoError(t, db.First(&feedback1, jobService.lastReviewFeedback).Error)
+	require.Equal(t, commentID, *feedback1.GitHubCommentID)
+	require.Equal(t, "creating", feedback1.PlanCreationStatus)
+
+	// Reset the job service call counter
+	jobService.called = false
+	jobService.lastAgentRunID = 0
+	jobService.lastReviewFeedback = 0
+
+	// Second invocation with the same comment ID: should reuse existing ReviewFeedback and skip plan creation
+	payload2 := &PullRequestReviewCommentPayload{
+		Action: models.PullRequestReviewCommentActionCreated,
+		Comment: PullRequestReviewCommentComment{
+			ID:   int(commentID),
+			Body: commentBody,
+			User: User{Login: "reviewer"},
+		},
+		PullRequest: PullRequestReviewCommentPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewCommentRepository{FullName: pr.Repo},
+	}
+
+	w2 := invokeReviewCommentHandler(t, payload2, deps)
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	var resp2 map[string]any
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	require.Equal(t, "no_trigger", resp2["status"])
+	require.Equal(t, "skipped_plan_already_started", resp2["plan_creation_status"])
+	require.False(t, jobService.called, "Plan creation job should not be called again for the same comment ID")
+
+	// Verify that no new ReviewFeedback was created
+	var feedbackCount int64
+	require.NoError(t, db.Model(&models.ReviewFeedback{}).Count(&feedbackCount).Error)
+	require.Equal(t, int64(1), feedbackCount, "Only one ReviewFeedback should exist")
+
+	// Verify that the existing ReviewFeedback is still in "creating" status
+	var feedback2 models.ReviewFeedback
+	require.NoError(t, db.First(&feedback2, feedback1.ID).Error)
+	require.Equal(t, feedback1.ID, feedback2.ID)
+	require.Equal(t, "creating", feedback2.PlanCreationStatus)
+}
+
+func TestHandlePullRequestReviewComment_PlanCreationDeduplicationWithCompletedPlan(t *testing.T) {
+	db := setupPlanCreationDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	_, pr := setupPlanCreationFixtures(t, db)
+
+	// Create an existing ReviewFeedback with plan creation already completed
+	commentID := int64(4004)
+	existingFeedback := &models.ReviewFeedback{
+		PRID:               pr.ID,
+		Source:             "Codex",
+		Status:             "received",
+		Content:            stringPtr("This is a review comment."),
+		ApprovalDetected:   false,
+		GitHubCommentID:    &commentID,
+		PlanCreationStatus: "created",
+	}
+	require.NoError(t, db.Create(existingFeedback).Error)
+
+	jobService := &recordingPlanJobService{}
+	deps := PullRequestReviewCommentDeps{
+		Logger:                   zap.NewNop(),
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+		KubernetesJobService:     jobService,
+	}
+
+	// Reprocess the same comment: should skip plan creation since it's already completed
+	payload := &PullRequestReviewCommentPayload{
+		Action: models.PullRequestReviewCommentActionCreated,
+		Comment: PullRequestReviewCommentComment{
+			ID:   int(commentID),
+			Body: "This is a review comment.",
+			User: User{Login: "reviewer"},
+		},
+		PullRequest: PullRequestReviewCommentPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewCommentRepository{FullName: pr.Repo},
+	}
+
+	w := invokeReviewCommentHandler(t, payload, deps)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "no_trigger", resp["status"])
+	require.Equal(t, "skipped_plan_already_started", resp["plan_creation_status"])
+	require.Equal(t, "created", resp["plan_creation_state"])
+	require.False(t, jobService.called, "Plan creation job should not be called for already completed plan")
+
+	// Verify that no new ReviewFeedback was created
+	var feedbackCount int64
+	require.NoError(t, db.Model(&models.ReviewFeedback{}).Count(&feedbackCount).Error)
+	require.Equal(t, int64(1), feedbackCount, "Only one ReviewFeedback should exist")
+}
+
+func stringPtr(s string) *string {
+	return &s
+}
