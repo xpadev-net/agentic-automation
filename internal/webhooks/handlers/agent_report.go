@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -77,9 +78,10 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
-	// Parse request body
-	var req ReportRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var statusEnvelope struct {
+		Status string `json:"status"`
+	}
+	if err := c.ShouldBindBodyWith(&statusEnvelope, binding.JSON); err != nil {
 		logger.Warn("Invalid request body",
 			zap.Error(err),
 			zap.Int("agent_run_id", agentRunID),
@@ -92,9 +94,57 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
+	status := strings.TrimSpace(statusEnvelope.Status)
+	if status == "" {
+		logger.Warn("Missing status field in request body",
+			zap.Int("agent_run_id", agentRunID),
+			zap.String("path", c.Request.URL.Path),
+		)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "Invalid request body: status is required",
+		})
+		return
+	}
+
+	isPlanReport := status == "plan_created" || status == "plan_rejected"
+
 	// Get database connection and repository
 	db := config.GetDB()
 	agentRunRepo := repositories.NewAgentRunRepository(db)
+
+	if isPlanReport {
+		var planReq PlanReportRequest
+		if err := c.ShouldBindBodyWith(&planReq, binding.JSON); err != nil {
+			logger.Warn("Invalid plan report body",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("path", c.Request.URL.Path),
+			)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "INVALID_REQUEST",
+				"message": "Invalid plan report body: " + err.Error(),
+			})
+			return
+		}
+
+		handlePlanReport(c, agentRunID, &planReq, agentRunRepo, db)
+		return
+	}
+
+	var req ReportRequest
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
+		logger.Warn("Invalid request body",
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRunID),
+			zap.String("path", c.Request.URL.Path),
+		)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "Invalid request body: " + err.Error(),
+		})
+		return
+	}
 
 	// Get AgentRun by ID
 	agentRun, err := agentRunRepo.GetByID(agentRunID)

@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -39,7 +42,15 @@ func (f *fakePlanJobService) CreateJobForPlanExecution(ctx context.Context, agen
 	return &batchv1.Job{}, nil
 }
 
-func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
+type planTestFixtures struct {
+	db             *gorm.DB
+	agentRun       *models.AgentRun
+	reviewFeedback *models.ReviewFeedback
+	issue          *models.Issue
+}
+
+func setupPlanTestFixtures(t *testing.T) *planTestFixtures {
+	t.Helper()
 	t.Setenv("AGENT_OUTPUT_DB_LIMIT_BYTES", "64")
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -140,6 +151,16 @@ func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
 	}
 	require.NoError(t, db.Create(agentRun).Error)
 
+	return &planTestFixtures{
+		db:             db,
+		agentRun:       agentRun,
+		reviewFeedback: reviewFeedback,
+		issue:          issue,
+	}
+}
+
+func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
+	fixtures := setupPlanTestFixtures(t)
 	fakeJob := &fakePlanJobService{}
 
 	origClientFactory := kubernetesClientFactory
@@ -155,8 +176,8 @@ func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
 		kubernetesJobServiceFactory = origJobFactory
 	}()
 
-	agentRunRepo := repositories.NewAgentRunRepository(db)
-	reviewFeedbackRepo := repositories.NewReviewFeedbackRepositoryWithDB(db)
+	agentRunRepo := repositories.NewAgentRunRepository(fixtures.db)
+	reviewFeedbackRepo := repositories.NewReviewFeedbackRepositoryWithDB(fixtures.db)
 
 	w := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(w)
@@ -168,14 +189,14 @@ func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
 	handlePlanCreated(
 		ginCtx,
 		context.Background(),
-		agentRun.ID,
-		agentRun,
-		reviewFeedback,
+		fixtures.agentRun.ID,
+		fixtures.agentRun,
+		fixtures.reviewFeedback,
 		req,
 		"",
 		agentRunRepo,
 		reviewFeedbackRepo,
-		db,
+		fixtures.db,
 	)
 
 	response := w.Result()
@@ -185,15 +206,68 @@ func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
 	require.Equal(t, expectedPlan, fakeJob.capturedPlan)
 
 	var storedExecution models.AgentRun
-	require.NoError(t, db.Where("execution_mode = ?", "plan_execution").First(&storedExecution).Error)
+	require.NoError(t, fixtures.db.Where("execution_mode = ?", "plan_execution").First(&storedExecution).Error)
 	require.NotNil(t, storedExecution.PlanContent)
 	require.Less(t, len(*storedExecution.PlanContent), len(largePlan))
 	require.True(t, strings.HasSuffix(*storedExecution.PlanContent, "… [truncated]"))
 
 	var storedCreation models.AgentRun
-	require.NoError(t, db.First(&storedCreation, agentRun.ID).Error)
+	require.NoError(t, fixtures.db.First(&storedCreation, fixtures.agentRun.ID).Error)
 	require.NotNil(t, storedCreation.PlanContent)
 	require.Less(t, len(*storedCreation.PlanContent), len(largePlan))
 
 	require.NotEqual(t, len(expectedPlan), len(*storedCreation.PlanContent))
+}
+
+func TestHandleAgentReportDispatchesPlanReport(t *testing.T) {
+	fixtures := setupPlanTestFixtures(t)
+	fakeJob := &fakePlanJobService{}
+
+	origClientFactory := kubernetesClientFactory
+	origJobFactory := kubernetesJobServiceFactory
+	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+		return nil, nil
+	}
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+		return fakeJob
+	}
+	defer func() {
+		kubernetesClientFactory = origClientFactory
+		kubernetesJobServiceFactory = origJobFactory
+	}()
+
+	largePlan := strings.Repeat("Step detail line\n", 150)
+	payload := map[string]any{
+		"status":       "plan_created",
+		"agent_type":   "claude-code",
+		"plan_content": largePlan,
+		"logs":         "sample log",
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+	requestPath := "/api/agent-runs/" + strconv.Itoa(fixtures.agentRun.ID) + "/report"
+	ginCtx.Request = httptest.NewRequest("POST", requestPath, bytes.NewReader(body))
+	ginCtx.Request.Header.Set("Content-Type", "application/json")
+	ginCtx.Params = gin.Params{gin.Param{Key: "id", Value: strconv.Itoa(fixtures.agentRun.ID)}}
+
+	HandleAgentReport(ginCtx)
+
+	response := w.Result()
+	require.Equal(t, 200, response.StatusCode)
+
+	expectedPlan := utils.SanitizeUTF8(strings.TrimSpace(largePlan))
+	require.Equal(t, expectedPlan, fakeJob.capturedPlan)
+
+	var executionRun models.AgentRun
+	require.NoError(t, fixtures.db.Where("execution_mode = ?", "plan_execution").First(&executionRun).Error)
+	require.NotNil(t, executionRun.PlanContent)
+	require.True(t, strings.HasSuffix(*executionRun.PlanContent, "… [truncated]"))
+
+	var reviewFeedback models.ReviewFeedback
+	require.NoError(t, fixtures.db.First(&reviewFeedback, fixtures.reviewFeedback.ID).Error)
+	require.Equal(t, "created", reviewFeedback.PlanCreationStatus)
+	require.NotNil(t, reviewFeedback.ExecutionAgentRunID)
 }
