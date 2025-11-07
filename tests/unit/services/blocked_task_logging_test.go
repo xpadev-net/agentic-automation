@@ -41,6 +41,10 @@ func (f *fakeJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, a
 	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job-1"}}, nil
 }
 
+func (f *fakeJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
+	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job-1"}}, nil
+}
+
 func (f *fakeJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
 	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "job-1"}}, nil
 }

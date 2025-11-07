@@ -64,12 +64,14 @@ func (s *StubGitHubNotification) NotifyDependencyViolation(ctx context.Context, 
 
 // CreatedJobInfo represents information about a Job created by StubKubernetesJobService
 type CreatedJobInfo struct {
-	AgentRunID  int
-	RetryCount  int
-	Prompt      string
-	Feedback    *services.AggregatedFeedback
-	JobName     string
-	PlanContent string
+	AgentRunID       int
+	RetryCount       int
+	Prompt           string
+	Feedback         *services.AggregatedFeedback
+	JobName          string
+	PlanContent      string
+	Mode             string
+	ReviewFeedbackID int
 }
 
 // StubKubernetesJobService implements services.KubernetesJobService interface for testing
@@ -90,11 +92,13 @@ func (s *StubKubernetesJobService) CreateJobForAgentRun(ctx context.Context, age
 	jobName := fmt.Sprintf("agent-runner-%d", agentRun.ID)
 
 	info := CreatedJobInfo{
-		AgentRunID: agentRun.ID,
-		RetryCount: agentRun.RetryCount,
-		Prompt:     prompt,
-		Feedback:   nil,
-		JobName:    jobName,
+		AgentRunID:  agentRun.ID,
+		RetryCount:  agentRun.RetryCount,
+		Prompt:      prompt,
+		Feedback:    nil,
+		JobName:     jobName,
+		PlanContent: "",
+		Mode:        "normal",
 	}
 	s.CreatedJobs = append(s.CreatedJobs, info)
 
@@ -130,6 +134,44 @@ func (s *StubKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.
 		Feedback:    feedback,
 		JobName:     jobName,
 		PlanContent: "",
+		Mode:        "retry",
+	}
+	s.CreatedJobs = append(s.CreatedJobs, info)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: "default",
+			Labels: map[string]string{
+				"app":          "agent-runner",
+				"agent-run-id": strconv.Itoa(agentRun.ID),
+				"issue-id":     strconv.Itoa(issue.Number),
+			},
+		},
+	}
+
+	return job, nil
+}
+
+// CreateJobForPlanCreation creates a Kubernetes Job for generating a remediation plan.
+func (s *StubKubernetesJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
+	s.CreateJobCalled = true
+
+	if s.Error != nil {
+		return nil, s.Error
+	}
+
+	jobName := fmt.Sprintf("agent-runner-%d", agentRun.ID)
+
+	info := CreatedJobInfo{
+		AgentRunID:       agentRun.ID,
+		RetryCount:       agentRun.RetryCount,
+		Prompt:           fmt.Sprintf("Plan creation for issue #%d", issue.Number),
+		Feedback:         nil,
+		JobName:          jobName,
+		PlanContent:      "",
+		Mode:             "plan_creation",
+		ReviewFeedbackID: reviewFeedback.ID,
 	}
 	s.CreatedJobs = append(s.CreatedJobs, info)
 
@@ -165,6 +207,7 @@ func (s *StubKubernetesJobService) CreateJobForPlanExecution(ctx context.Context
 		Feedback:    nil,
 		JobName:     jobName,
 		PlanContent: planContent,
+		Mode:        "plan_execution",
 	}
 	s.CreatedJobs = append(s.CreatedJobs, info)
 

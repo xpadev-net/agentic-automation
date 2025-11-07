@@ -96,6 +96,14 @@ func (m *mockKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.
 	return args.Get(0).(*batchv1.Job), args.Error(1)
 }
 
+func (m *mockKubernetesJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
+	args := m.Called(ctx, agentRun, issue, reviewFeedback, branchName)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*batchv1.Job), args.Error(1)
+}
+
 func (m *mockKubernetesJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
 	args := m.Called(ctx, agentRun, issue, planContent, branchName)
 	if args.Get(0) == nil {
