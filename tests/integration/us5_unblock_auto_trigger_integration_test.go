@@ -184,9 +184,15 @@ func Test_US5_Unblock_AutoTrigger(t *testing.T) {
 		jobSvc:      stubJob,
 	}
 
+	// Setup GitHub client and authorization service for testing
+	ghClient := tu.NewDummyGitHubClient()
+	authService := &tu.StubAuthorization{Allow: true} // Allow all requests in test
+
 	deps := handlers.IssuesDeps{
-		Logger:              logger,
-		BlockedTaskResolver: testResolver,
+		Logger:               logger,
+		GitHubClient:         ghClient,
+		AuthorizationService: authService,
+		BlockedTaskResolver:  testResolver,
 	}
 	router := setupIssuesRouterForTest(deps)
 
