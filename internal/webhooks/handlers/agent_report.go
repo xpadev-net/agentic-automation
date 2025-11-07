@@ -53,9 +53,113 @@ type PlanReportRequest struct {
 
 const planPreviewLogLimit = 100
 
+type planRejectionHTTPError struct {
+	status  int
+	code    string
+	message string
+	err     error
+}
+
+func (e *planRejectionHTTPError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return e.message
+}
+
 var (
 	kubernetesClientFactory     = clients.NewKubernetesClient
 	kubernetesJobServiceFactory = services.NewKubernetesJobService
+	postPlanRejectionComment    = func(
+		ctx context.Context,
+		logger *zap.Logger,
+		db *gorm.DB,
+		reviewFeedback *models.ReviewFeedback,
+		sanitizedReason string,
+	) error {
+		prRepo := repositories.NewPullRequestRepository(db)
+		pr, err := prRepo.FindByID(reviewFeedback.PRID)
+		if err != nil {
+			logger.Error("Failed to load PullRequest for plan rejection comment",
+				zap.Error(err),
+				zap.Int("pr_id", reviewFeedback.PRID),
+			)
+			return &planRejectionHTTPError{
+				status:  http.StatusInternalServerError,
+				code:    "INTERNAL_ERROR",
+				message: "Failed to load pull request",
+				err:     fmt.Errorf("load pull request: %w", err),
+			}
+		}
+
+		repoParts := strings.SplitN(pr.Repo, "/", 2)
+		if len(repoParts) != 2 {
+			logger.Error("Invalid repository format for pull request",
+				zap.String("repo", pr.Repo),
+				zap.Int("pr_id", pr.ID),
+			)
+			return &planRejectionHTTPError{
+				status:  http.StatusInternalServerError,
+				code:    "INVALID_REPOSITORY_FORMAT",
+				message: "Pull request repository has invalid format",
+				err:     fmt.Errorf("invalid repository format: %s", pr.Repo),
+			}
+		}
+
+		owner, repoName := repoParts[0], repoParts[1]
+		if appGitHubClient == nil {
+			ghApp, err := clients.NewGitHubAppClient(logger)
+			if err != nil {
+				logger.Error("Failed to initialize GitHub App client for plan rejection",
+					zap.Error(err),
+				)
+				return &planRejectionHTTPError{
+					status:  http.StatusInternalServerError,
+					code:    "GITHUB_CLIENT_ERROR",
+					message: "Failed to initialize GitHub client",
+					err:     fmt.Errorf("init github app client: %w", err),
+				}
+			}
+			appGitHubClient = ghApp
+		}
+
+		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repoName)
+		if err != nil {
+			logger.Error("Failed to create per-repo GitHub client",
+				zap.Error(err),
+				zap.String("owner", owner),
+				zap.String("repo", repoName),
+			)
+			return &planRejectionHTTPError{
+				status:  http.StatusInternalServerError,
+				code:    "GITHUB_CLIENT_ERROR",
+				message: "Failed to initialize GitHub client",
+				err:     fmt.Errorf("init repo github client: %w", err),
+			}
+		}
+
+		githubClient := clients.NewFromGitHub(rawClient, logger)
+		comment := fmt.Sprintf("⚠️ プラン作成が却下されました。\n\n理由:\n%s", sanitizedReason)
+		if _, err := githubClient.CreateIssueComment(ctx, owner, repoName, pr.Number, comment); err != nil {
+			logger.Error("Failed to post plan rejection comment",
+				zap.Error(err),
+				zap.String("owner", owner),
+				zap.String("repo", repoName),
+				zap.Int("pr_number", pr.Number),
+			)
+			return &planRejectionHTTPError{
+				status:  http.StatusInternalServerError,
+				code:    "GITHUB_COMMENT_ERROR",
+				message: "Failed to post plan rejection comment",
+				err:     fmt.Errorf("post rejection comment: %w", err),
+			}
+		}
+
+		return nil
+	}
 )
 
 // HandleAgentReport handles POST /api/agent-runs/:id/report requests
@@ -1004,10 +1108,32 @@ func handlePlanRejected(
 
 	sanitizedReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(reason), utils.GetDBOutputLimitBytes(), "… [truncated]")
 	planRunID := agentRunID
-	reviewFeedback.PlanCreationStatus = "rejected"
-	reviewFeedback.PlanAgentRunID = &planRunID
-	reviewFeedback.ExecutionAgentRunID = nil
-	reviewFeedback.PlanContent = nil
+
+	previousStatus := reviewFeedback.PlanCreationStatus
+	previousPlanContent := reviewFeedback.PlanContent
+	previousPlanAgentRunID := reviewFeedback.PlanAgentRunID
+	previousExecutionID := reviewFeedback.ExecutionAgentRunID
+
+	previousAgentRunPlan := agentRun.PlanContent
+	previousAgentRunState := agentRun.State
+	previousAgentRunError := agentRun.ErrorMessage
+	previousAgentRunOutput := agentRun.Output
+	previousAgentRunCompletedAt := agentRun.CompletedAt
+
+	restoreAgentRun := func() {
+		agentRun.PlanContent = previousAgentRunPlan
+		agentRun.State = previousAgentRunState
+		agentRun.ErrorMessage = previousAgentRunError
+		agentRun.Output = previousAgentRunOutput
+		agentRun.CompletedAt = previousAgentRunCompletedAt
+	}
+
+	restoreReviewFeedback := func() {
+		reviewFeedback.PlanCreationStatus = previousStatus
+		reviewFeedback.PlanContent = previousPlanContent
+		reviewFeedback.PlanAgentRunID = previousPlanAgentRunID
+		reviewFeedback.ExecutionAgentRunID = previousExecutionID
+	}
 
 	agentRun.PlanContent = nil
 	agentRun.State = "failed"
@@ -1019,6 +1145,7 @@ func handlePlanRejected(
 			zap.Error(err),
 			zap.Int("agent_run_id", agentRunID),
 		)
+		restoreAgentRun()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "INTERNAL_ERROR",
 			"message": "Failed to update plan agent run",
@@ -1026,87 +1153,42 @@ func handlePlanRejected(
 		return
 	}
 
+	if err := postPlanRejectionComment(ctx, logger, db, reviewFeedback, sanitizedReason); err != nil {
+		restoreAgentRun()
+		if updateErr := agentRunRepo.Update(agentRun); updateErr != nil {
+			logger.Warn("Failed to rollback plan AgentRun state after rejection error",
+				zap.Error(updateErr),
+				zap.Int("agent_run_id", agentRunID),
+			)
+		}
+		if httpErr, ok := err.(*planRejectionHTTPError); ok {
+			c.JSON(httpErr.status, gin.H{
+				"error":   httpErr.code,
+				"message": httpErr.message,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "GITHUB_COMMENT_ERROR",
+			"message": "Failed to post plan rejection comment",
+		})
+		return
+	}
+
+	reviewFeedback.PlanCreationStatus = "rejected"
+	reviewFeedback.PlanAgentRunID = &planRunID
+	reviewFeedback.ExecutionAgentRunID = nil
+	reviewFeedback.PlanContent = nil
+
 	if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
 		logger.Error("Failed to update ReviewFeedback for plan rejection",
 			zap.Error(err),
 			zap.Int("review_feedback_id", reviewFeedback.ID),
 		)
+		restoreReviewFeedback()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "INTERNAL_ERROR",
 			"message": "Failed to update review feedback",
-		})
-		return
-	}
-
-	prRepo := repositories.NewPullRequestRepository(db)
-	pr, err := prRepo.FindByID(reviewFeedback.PRID)
-	if err != nil {
-		logger.Error("Failed to load PullRequest for plan rejection comment",
-			zap.Error(err),
-			zap.Int("pr_id", reviewFeedback.PRID),
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to load pull request",
-		})
-		return
-	}
-
-	repoParts := strings.SplitN(pr.Repo, "/", 2)
-	if len(repoParts) != 2 {
-		logger.Error("Invalid repository format for pull request",
-			zap.String("repo", pr.Repo),
-			zap.Int("pr_id", pr.ID),
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INVALID_REPOSITORY_FORMAT",
-			"message": "Pull request repository has invalid format",
-		})
-		return
-	}
-
-	owner, repoName := repoParts[0], repoParts[1]
-	if appGitHubClient == nil {
-		ghApp, err := clients.NewGitHubAppClient(logger)
-		if err != nil {
-			logger.Error("Failed to initialize GitHub App client for plan rejection",
-				zap.Error(err),
-			)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "GITHUB_CLIENT_ERROR",
-				"message": "Failed to initialize GitHub client",
-			})
-			return
-		}
-		appGitHubClient = ghApp
-	}
-
-	rawClient, err := appGitHubClient.ForRepo(ctx, owner, repoName)
-	if err != nil {
-		logger.Error("Failed to create per-repo GitHub client",
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repoName),
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "GITHUB_CLIENT_ERROR",
-			"message": "Failed to initialize GitHub client",
-		})
-		return
-	}
-
-	githubClient := clients.NewFromGitHub(rawClient, logger)
-	comment := fmt.Sprintf("⚠️ プラン作成が却下されました。\n\n理由:\n%s", sanitizedReason)
-	if _, err := githubClient.CreateIssueComment(ctx, owner, repoName, pr.Number, comment); err != nil {
-		logger.Error("Failed to post plan rejection comment",
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repoName),
-			zap.Int("pr_number", pr.Number),
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "GITHUB_COMMENT_ERROR",
-			"message": "Failed to post plan rejection comment",
 		})
 		return
 	}

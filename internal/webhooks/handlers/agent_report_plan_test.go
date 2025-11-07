@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -337,6 +338,121 @@ func TestHandlePlanCreatedRollsBackWhenJobCreationFails(t *testing.T) {
 	var executionRuns int64
 	require.NoError(t, fixtures.db.Model(&models.AgentRun{}).Where("execution_mode = ?", "plan_execution").Count(&executionRuns).Error)
 	require.Equal(t, int64(0), executionRuns)
+}
+
+func TestHandlePlanRejectedRollsBackWhenCommentFails(t *testing.T) {
+	fixtures := setupPlanTestFixtures(t)
+	originalPost := postPlanRejectionComment
+	defer func() { postPlanRejectionComment = originalPost }()
+
+	callCount := 0
+	postPlanRejectionComment = func(ctx context.Context, logger *zap.Logger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
+		callCount++
+		require.Equal(t, fixtures.reviewFeedback.ID, reviewFeedback.ID)
+		require.Equal(t, utils.TruncateWithSuffix(utils.SanitizeUTF8("Needs more detail"), utils.GetDBOutputLimitBytes(), "… [truncated]"), sanitizedReason)
+		return &planRejectionHTTPError{
+			status:  http.StatusInternalServerError,
+			code:    "GITHUB_COMMENT_ERROR",
+			message: "Failed to post plan rejection comment",
+			err:     errors.New("comment failure"),
+		}
+	}
+
+	agentRunRepo := repositories.NewAgentRunRepository(fixtures.db)
+	reviewFeedbackRepo := repositories.NewReviewFeedbackRepositoryWithDB(fixtures.db)
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+	ginCtx.Request = httptest.NewRequest("POST", "/", nil)
+
+	req := &PlanReportRequest{Status: "plan_rejected", AgentType: "claude-code", RejectionReason: "Needs more detail"}
+
+	handlePlanRejected(
+		ginCtx,
+		context.Background(),
+		fixtures.agentRun.ID,
+		fixtures.agentRun,
+		fixtures.reviewFeedback,
+		req,
+		"",
+		agentRunRepo,
+		reviewFeedbackRepo,
+		fixtures.db,
+	)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.Equal(t, 1, callCount)
+
+	var refreshedFeedback models.ReviewFeedback
+	require.NoError(t, fixtures.db.First(&refreshedFeedback, fixtures.reviewFeedback.ID).Error)
+	require.Equal(t, "pending", refreshedFeedback.PlanCreationStatus)
+	require.Nil(t, refreshedFeedback.PlanAgentRunID)
+	require.Nil(t, refreshedFeedback.PlanContent)
+	require.Nil(t, refreshedFeedback.ExecutionAgentRunID)
+
+	var refreshedRun models.AgentRun
+	require.NoError(t, fixtures.db.First(&refreshedRun, fixtures.agentRun.ID).Error)
+	require.Equal(t, "queued", refreshedRun.State)
+	require.Nil(t, refreshedRun.PlanContent)
+	require.Nil(t, refreshedRun.ErrorMessage)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "GITHUB_COMMENT_ERROR", resp["error"])
+}
+
+func TestHandlePlanRejectedUpdatesStatusAfterComment(t *testing.T) {
+	fixtures := setupPlanTestFixtures(t)
+	originalPost := postPlanRejectionComment
+	defer func() { postPlanRejectionComment = originalPost }()
+
+	callCount := 0
+	postPlanRejectionComment = func(ctx context.Context, logger *zap.Logger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
+		callCount++
+		require.Equal(t, fixtures.reviewFeedback.ID, reviewFeedback.ID)
+		require.Equal(t, utils.TruncateWithSuffix(utils.SanitizeUTF8("Missing acceptance tests"), utils.GetDBOutputLimitBytes(), "… [truncated]"), sanitizedReason)
+		return nil
+	}
+
+	agentRunRepo := repositories.NewAgentRunRepository(fixtures.db)
+	reviewFeedbackRepo := repositories.NewReviewFeedbackRepositoryWithDB(fixtures.db)
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+	ginCtx.Request = httptest.NewRequest("POST", "/", nil)
+
+	req := &PlanReportRequest{Status: "plan_rejected", AgentType: "claude-code", RejectionReason: "Missing acceptance tests"}
+
+	handlePlanRejected(
+		ginCtx,
+		context.Background(),
+		fixtures.agentRun.ID,
+		fixtures.agentRun,
+		fixtures.reviewFeedback,
+		req,
+		"",
+		agentRunRepo,
+		reviewFeedbackRepo,
+		fixtures.db,
+	)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, 1, callCount)
+
+	var refreshedFeedback models.ReviewFeedback
+	require.NoError(t, fixtures.db.First(&refreshedFeedback, fixtures.reviewFeedback.ID).Error)
+	require.Equal(t, "rejected", refreshedFeedback.PlanCreationStatus)
+	require.NotNil(t, refreshedFeedback.PlanAgentRunID)
+	require.Equal(t, fixtures.agentRun.ID, *refreshedFeedback.PlanAgentRunID)
+	require.Nil(t, refreshedFeedback.PlanContent)
+	require.Nil(t, refreshedFeedback.ExecutionAgentRunID)
+
+	var refreshedRun models.AgentRun
+	require.NoError(t, fixtures.db.First(&refreshedRun, fixtures.agentRun.ID).Error)
+	require.Equal(t, "failed", refreshedRun.State)
+	require.Nil(t, refreshedRun.PlanContent)
+	require.NotNil(t, refreshedRun.ErrorMessage)
+	require.Contains(t, *refreshedRun.ErrorMessage, "Missing acceptance tests")
 }
 
 func TestHandlePlanReportIgnoresDuplicatePlanCreated(t *testing.T) {
