@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -71,6 +72,15 @@ type ReportResponse struct {
 	AgentRunID int    `json:"agent_run_id"`
 }
 
+// PlanReportRequest represents the request body for plan creation/execution results.
+type PlanReportRequest struct {
+	Status          string `json:"status"` // "plan_created" | "plan_rejected"
+	AgentType       string `json:"agent_type"`
+	PlanContent     string `json:"plan_content,omitempty"`
+	RejectionReason string `json:"rejection_reason,omitempty"`
+	Logs            string `json:"logs,omitempty"`
+}
+
 // Client is the Operator API client
 type Client struct {
 	apiURL     string
@@ -81,7 +91,6 @@ type Client struct {
 
 // NewClient creates a new Operator API client
 func NewClient(apiURL, apiToken string, agentRunID int) (*Client, error) {
-	// Validate API URL
 	apiURL = strings.TrimSpace(apiURL)
 	if apiURL == "" {
 		return nil, fmt.Errorf("apiURL cannot be empty")
@@ -109,6 +118,42 @@ func NewClient(apiURL, apiToken string, agentRunID int) (*Client, error) {
 		agentRunID: agentRunID,
 		httpClient: httpClient,
 	}, nil
+}
+
+func validatePlanReportRequest(req *PlanReportRequest) error {
+	if req.Status != "plan_created" && req.Status != "plan_rejected" {
+		return fmt.Errorf("status must be 'plan_created' or 'plan_rejected', got: %q", req.Status)
+	}
+	if req.AgentType != "claude-code" && req.AgentType != "cursor-agent" {
+		return fmt.Errorf("agent_type must be 'claude-code' or 'cursor-agent', got: %q", req.AgentType)
+	}
+	if req.Status == "plan_created" && strings.TrimSpace(req.PlanContent) == "" {
+		return fmt.Errorf("plan_content is required when status is 'plan_created'")
+	}
+	if req.Status == "plan_rejected" && strings.TrimSpace(req.RejectionReason) == "" {
+		return fmt.Errorf("rejection_reason is required when status is 'plan_rejected'")
+	}
+	return nil
+}
+
+func sanitizeLogs(logs string) string {
+	if logs == "" {
+		return logs
+	}
+	patterns := []string{
+		`ghp_[A-Za-z0-9]{36}`,
+		`gho_[A-Za-z0-9]{36}`,
+		`ghs_[A-Za-z0-9]{36}`,
+		`sk-[A-Za-z0-9]{48}`,
+		`ANTHROPIC_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
+		`CURSOR_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
+	}
+	sanitized := logs
+	for _, pattern := range patterns {
+		re := regexp.MustCompile(pattern)
+		sanitized = re.ReplaceAllString(sanitized, "***")
+	}
+	return sanitized
 }
 
 // validateReportRequest validates the report request
@@ -217,6 +262,20 @@ func buildHTTPRequest(url string, req *ReportRequest, token string) (*http.Reque
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	httpReq.Header.Set("Content-Type", "application/json")
 
+	return httpReq, nil
+}
+
+func buildPlanHTTPRequest(url string, req *PlanReportRequest, token string) (*http.Request, error) {
+	bodyBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode plan report body: %w", err)
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create plan HTTP request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	httpReq.Header.Set("Content-Type", "application/json")
 	return httpReq, nil
 }
 
@@ -369,6 +428,68 @@ func sendReport(client *Client, req *ReportRequest) error {
 	}
 }
 
+func sendPlanReport(client *Client, req *PlanReportRequest) error {
+	if err := validatePlanReportRequest(req); err != nil {
+		return fmt.Errorf("invalid plan report request: %w", err)
+	}
+	reportURL, err := buildReportURL(client.apiURL, client.agentRunID)
+	if err != nil {
+		return fmt.Errorf("failed to build report URL: %w", err)
+	}
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		httpReq, err := buildPlanHTTPRequest(reportURL, req, client.apiToken)
+		if err != nil {
+			return fmt.Errorf("failed to build plan HTTP request: %w", err)
+		}
+		resp, err := client.httpClient.Do(httpReq)
+		if err != nil {
+			statusCode := 0
+			var httpErr *HTTPError
+			if errors.As(err, &httpErr) {
+				statusCode = httpErr.StatusCode
+			}
+			if isRetryableError(err, statusCode) {
+				lastErr = err
+				fmt.Fprintf(os.Stderr, "Plan report retry attempt %d/%d failed: %v\n", attempt, maxRetries, err)
+				if attempt >= maxRetries {
+					break
+				}
+				backoff := calculateBackoffDelay(attempt + 1)
+				fmt.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
+				time.Sleep(backoff)
+				continue
+			}
+			return fmt.Errorf("non-retryable error: %w", err)
+		}
+		reportResp, err := parseHTTPResponse(resp)
+		if err != nil {
+			var httpErr *HTTPError
+			if errors.As(err, &httpErr) {
+				if isRetryableError(httpErr, httpErr.StatusCode) {
+					lastErr = httpErr
+					fmt.Fprintf(os.Stderr, "Plan report retry attempt %d/%d failed: %v\n", attempt, maxRetries, httpErr)
+					if attempt >= maxRetries {
+						break
+					}
+					backoff := calculateBackoffDelay(attempt + 1)
+					fmt.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
+					time.Sleep(backoff)
+					continue
+				}
+				return httpErr
+			}
+			return fmt.Errorf("failed to parse plan report response: %w", err)
+		}
+		if attempt > 1 {
+			fmt.Fprintf(os.Stderr, "Plan report sent successfully after %d attempts\n", attempt)
+		}
+		fmt.Fprintf(os.Stderr, "Plan report received: %s (AgentRun ID: %d)\n", reportResp.Message, reportResp.AgentRunID)
+		return nil
+	}
+	return &MaxRetriesExceededError{MaxAttempts: maxRetries, LastError: lastErr}
+}
+
 // ReportSuccess reports successful execution to the Operator API
 func (c *Client) ReportSuccess(prNumber int, branch, commitSHA, agentType string) error {
 	req := &ReportRequest{
@@ -399,5 +520,37 @@ func (c *Client) ReportFailure(errorMsg, logs, agentType string) error {
 		return fmt.Errorf("failed to report failure: %w", err)
 	}
 
+	return nil
+}
+
+// ReportPlanCreation reports a successfully generated plan to the Operator API.
+func (c *Client) ReportPlanCreation(planContent, agentType, logs string) error {
+	preview := strings.TrimSpace(planContent)
+	if len(preview) > 100 {
+		preview = preview[:100] + "..."
+	}
+	req := &PlanReportRequest{
+		Status:      "plan_created",
+		AgentType:   agentType,
+		PlanContent: planContent,
+		Logs:        sanitizeLogs(logs),
+	}
+	if err := sendPlanReport(c, req); err != nil {
+		return fmt.Errorf("failed to report plan creation (preview: %s): %w", preview, err)
+	}
+	return nil
+}
+
+// ReportPlanRejection reports a rejected plan to the Operator API.
+func (c *Client) ReportPlanRejection(reason, agentType, logs string) error {
+	req := &PlanReportRequest{
+		Status:          "plan_rejected",
+		AgentType:       agentType,
+		RejectionReason: reason,
+		Logs:            sanitizeLogs(logs),
+	}
+	if err := sendPlanReport(c, req); err != nil {
+		return fmt.Errorf("failed to report plan rejection: %w", err)
+	}
 	return nil
 }

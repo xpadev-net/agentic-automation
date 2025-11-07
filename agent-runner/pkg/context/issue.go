@@ -181,3 +181,35 @@ func ParseIssueContext(issueID int, repo, prompt, previousAttemptsJSON, ciLogs s
 
 	return issue, nil
 }
+
+// BuildPlanCreationPrompt constructs the prompt for plan creation mode.
+func BuildPlanCreationPrompt(reviewFeedback string) string {
+	return fmt.Sprintf(`以下のレビューフィードバックを分析し、対応プランを作成してください。
+
+レビューフィードバック:
+%s
+
+プラン作成の要件:
+1. 指摘事項を整理し、対応が必要な項目を特定してください
+2. 各項目に対する具体的な対応方法を提案してください
+3. 対応が困難または不要な場合は、却下理由を明確にしてください
+
+プランの形式:
+- プランを作成する場合: "PLAN_CREATED\n\n[プラン内容]"
+- プランを却下する場合: "PLAN_REJECTED\n\n[却下理由]"
+
+注意: このモードではファイルの変更は行いません。プランの作成のみを行ってください。`, reviewFeedback)
+}
+
+// BuildPlanExecutionPrompt constructs the prompt for plan execution mode.
+func BuildPlanExecutionPrompt(originalPrompt, planContent string) string {
+	return fmt.Sprintf(`以下のプランに従って実装を行ってください。
+
+元のタスク:
+%s
+
+実行すべきプラン:
+%s
+
+プランに従って実装を完了してください。`, originalPrompt, planContent)
+}
