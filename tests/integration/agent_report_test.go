@@ -87,6 +87,9 @@ func setupTestDB(t *testing.T) *gorm.DB {
 			pr_id INTEGER,
 			state TEXT DEFAULT 'queued',
 			agent_type TEXT DEFAULT 'claude-code',
+		execution_mode TEXT DEFAULT 'normal',
+		plan_content TEXT,
+		review_feedback_id INTEGER,
 			input TEXT,
 			output TEXT,
 			retry_count INTEGER DEFAULT 0,
@@ -125,6 +128,10 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		CREATE TABLE IF NOT EXISTS review_feedback (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			pr_id INTEGER,
+		plan_creation_status TEXT DEFAULT 'pending',
+		plan_content TEXT,
+		plan_agent_run_id INTEGER,
+		execution_agent_run_id INTEGER,
 			created_at DATETIME,
 			updated_at DATETIME
 		);
