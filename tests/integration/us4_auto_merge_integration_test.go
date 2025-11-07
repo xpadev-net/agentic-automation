@@ -269,7 +269,7 @@ func createPRWithIssue(t *testing.T, db *gorm.DB, repo, branch string, mergeable
 	issueID := issue.ID
 	pr := &models.PullRequest{
 		Repo:       repo,
-		Number:     456,
+		Number:     issueNumber, // PRのNumberはIssueのNumberと同じ（PRはIssueの一種なので）
 		IssueID:    &issueID,
 		Branch:     branch,
 		BaseBranch: "main",
@@ -486,6 +486,49 @@ func sendPRReviewCommentWebhook(t *testing.T, router *gin.Engine, secret, delive
 	return w
 }
 
+// sendIssueCommentWebhook sends an issue_comment webhook to the router
+// issueNumber should be the same as prNumber (PRs are issues in GitHub)
+func sendIssueCommentWebhook(t *testing.T, router *gin.Engine, secret, deliveryID string, action string, commentBody, commentUser string, commentID int, issueNumber int, repoFullName string, userID int64, issueState string) *httptest.ResponseRecorder {
+	repoParts := strings.Split(repoFullName, "/")
+	require.Len(t, repoParts, 2, "repoFullName must be in format 'owner/repo'")
+
+	payload := handlers.IssueCommentPayload{
+		Action: action,
+		Issue: handlers.IssueCommentIssue{
+			ID:     issueNumber, // GitHub issue ID (using number as ID for simplicity in tests)
+			Number: issueNumber, // Issue number (same as PR number)
+			Title:  "Test Issue",
+			Body:   nil,
+			State:  issueState,
+			Labels: []handlers.Label{},
+			User:   handlers.User{Login: "test-user", ID: 1},
+		},
+		Comment: handlers.IssueCommentComment{
+			ID:        commentID,
+			Body:      commentBody,
+			User:      handlers.User{Login: commentUser, ID: userID},
+			CreatedAt: time.Now().Format(time.RFC3339),
+		},
+		Repository: handlers.IssueCommentRepository{
+			FullName: repoFullName,
+			Owner:    handlers.User{Login: repoParts[0], ID: 1},
+			Name:     repoParts[1],
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(body))
+	req.Header.Set("X-GitHub-Event", "issue_comment")
+	req.Header.Set("X-GitHub-Delivery", deliveryID)
+	req.Header.Set("X-Hub-Signature-256", tu.ComputeGitHubSignature(secret, body))
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
 // assertAutoMergeCalled verifies that the auto-merge service was called with the expected parameters
 func assertAutoMergeCalled(t *testing.T, service *verifyingAutoMergeService, owner, repo string, prNumber int) {
 	assert.True(t, service.Called, "AutoMergeService.AttemptAutoMerge should have been called")
@@ -541,6 +584,20 @@ func setupRouterForUS4(
 		PullRequestRepository: prRepo,
 		CIStatusRepository:    ciRepo,
 	}
+	// Setup appGitHubClient for issue_comment handler
+	// Create a GitHubAppClient for testing (using test mode)
+	os.Setenv("GITHUB_APP_TEST_MODE", "1")
+	os.Setenv("GITHUB_APP_ID", "1")
+	os.Setenv("GITHUB_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nMIIB...test...\n-----END PRIVATE KEY-----\n")
+	appGitHubClient, err := clients.NewGitHubAppClient(logger)
+	if err != nil {
+		// If GitHubAppClient creation fails, log warning but continue
+		// (some tests may not need it)
+		logger.Warn("Failed to create GitHubAppClient for testing", zap.Error(err))
+	} else {
+		handlers.SetAppGitHubClient(appGitHubClient)
+	}
+
 	r.POST("/webhooks/github",
 		middleware.VerifyWebhookSignature(),
 		middleware.IdempotencyMiddleware(),
@@ -559,6 +616,25 @@ func setupRouterForUS4(
 					AutoMergeService:         autoMergeService,
 				}
 				handlers.HandlePullRequestReviewCommentWithDeps(c, prrcDeps)
+			case "issue_comment":
+				// KubernetesClient is required for issue_comment handler
+				k8sClient, k8sErr := clients.NewKubernetesClient(logger)
+				if k8sErr != nil {
+					// Use a stub client if initialization fails (for testing)
+					k8sClient = clients.NewKubernetesClientWithClientset(logger)
+				}
+				icDeps := handlers.IssueCommentDeps{
+					Logger:                    logger,
+					GitHubClient:              githubClient,
+					KubernetesClient:          k8sClient,
+					AuthorizationService:      &tu.StubAuthorization{Allow: true},
+					IssueContextService:       &tu.StubIssueContext{Context: &services.IssueContext{}},
+					AgentTypeDetectorService:  services.NewAgentTypeDetectorService(logger),
+					StateMachine:              services.NewAgentRunStateMachine(repositories.NewAgentRunRepository(config.GetDB()), logger),
+					GitHubNotificationService: &tu.StubGitHubNotification{},
+					AutoMergeService:          autoMergeService, // Inject mock AutoMergeService for testing
+				}
+				handlers.HandleIssueCommentWithDeps(c, icDeps)
 			default:
 				c.JSON(http.StatusBadRequest, gin.H{"error": "unknown event type"})
 			}
@@ -700,7 +776,8 @@ func (m *mockPRTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // Test_CodexApprovalComment_TriggersAutoMerge tests the auto-merge flow when
-// Codex approval comment is detected via pull_request_review_comment webhook.
+// Codex approval comment is detected via issue_comment webhook (PR-related issue comment).
+// Phase 0: Codex approve検出はissue_commentイベントで行うように変更されました。
 func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	// Setup environment
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
@@ -765,13 +842,15 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	// Setup router
 	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker, githubClient)
 
-	// Send pull_request_review_comment webhook with Codex approval comment
-	commentDeliveryID := "delivery-pr-comment-1"
+	// Send issue_comment webhook with Codex approval comment
+	// Note: PRs are issues in GitHub, so issue number should be the same as PR number
+	commentDeliveryID := "delivery-issue-comment-1"
 	commentBody := "Codex Review: Didn't find any major issues."
 	commentUser := "chatgpt-codex-connector[bot]"
 	commentID := 999
 	commentUserID := int64(199175422) // Default Codex bot user ID
-	w := sendPRReviewCommentWebhook(t, router, "test-secret", commentDeliveryID, "created", commentBody, commentUser, commentID, pr.Number, repo, commentUserID)
+	// PRのNumberと同じIssue Numberを使用（PRはIssueの一種なので）
+	w := sendIssueCommentWebhook(t, router, "test-secret", commentDeliveryID, "created", commentBody, commentUser, commentID, pr.Number, repo, commentUserID, "open")
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Verify auto-merge was called

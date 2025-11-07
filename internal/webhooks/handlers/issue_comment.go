@@ -236,6 +236,7 @@ type IssueCommentDeps struct {
 	AgentTypeDetectorService  *services.AgentTypeDetectorService
 	StateMachine              services.AgentRunStateMachine
 	GitHubNotificationService GitHubNotification
+	AutoMergeService          services.AutoMergeService // Optional: for testing
 }
 
 // HandleIssueCommentWithDeps handles issue_comment webhook with injected dependencies (for tests)
@@ -469,7 +470,20 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			)
 
 			if res.Mergeable {
-				am := services.NewAutoMergeService(appGitHubClient, logger)
+				// Use injected AutoMergeService if available (for testing), otherwise create new one
+				var am services.AutoMergeService
+				if deps.AutoMergeService != nil {
+					am = deps.AutoMergeService
+				} else {
+					if appGitHubClient == nil {
+						logger.Error("appGitHubClient is nil and AutoMergeService not injected",
+							zap.String("delivery_id", deliveryID),
+						)
+						c.Error(errors.New("appGitHubClient is nil and AutoMergeService not injected"))
+						return
+					}
+					am = services.NewAutoMergeService(appGitHubClient, logger)
+				}
 				mergeRes, mergeErr := am.AttemptAutoMerge(ctx, owner, repo, pr.Number)
 				if mergeErr != nil {
 					// 予期しないエラー（通常はAutoMergeResultで返却される）
