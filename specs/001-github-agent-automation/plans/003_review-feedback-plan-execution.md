@@ -23,6 +23,150 @@
 
 ## 実装計画
 
+### Phase 0: Codex approve検出機能の移行
+
+**目的**: Codexのapprove検出を`pr_review_comment`から`issue_comment`に移行
+
+**背景**:
+- Codexのapproveは`pr_review_comment`ではなく通常の`issue_comment`（PRに関連する通常のコメント）で届く
+- Codexの`pr_review_comment`は原則レビュー内容が含まれる場合のみなので、approve検出の特化対応は不要
+- レビュー指摘の監視は`pr_review_comment`のままで良い
+- Codex bot判定は`issue_comment`でのみ行い、`pr_review_comment`では行わない
+
+**修正対象ファイル**:
+- `internal/webhooks/handlers/pr_review_comment.go`
+- `internal/webhooks/handlers/issue_comment.go`
+- `internal/services/codex_approval.go` (IsCodexBot()メソッドの追加)
+
+**実装内容**:
+
+1. **`pr_review_comment`ハンドラーからapprove検出処理を削除**
+   ```go
+   // internal/webhooks/handlers/pr_review_comment.go
+   // HandlePullRequestReviewCommentWithDeps内で、以下の処理を削除:
+   
+   // 削除対象: Step 4.5のCodex承認コメント検知処理
+   // detector := services.NewCodexApprovalDetector(logger)
+   // if detector.DetectApproval(...) {
+   //     // マージ条件再評価処理
+   //     // ...
+   // }
+   ```
+
+2. **`issue_comment`ハンドラーにapprove検出処理を追加**
+   ```go
+   // internal/webhooks/handlers/issue_comment.go
+   // HandleIssueCommentWithDeps内で、/run-agentトリガー検出の前に追加
+   
+   // Step 4.5: Codex approve検出（PRに関連するIssueコメントの場合のみ）
+   // 注意: Codex bot判定は`issue_comment`（PRに関連する通常のコメント）でのみ行う
+   // IssueがPRに関連しているかチェック
+   prRepo := repositories.NewPullRequestRepository(db)
+   pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.Issue.Number)
+   if err == nil && pr != nil {
+       // PRに関連するIssueコメントの場合、Codex bot判定を行い、approveを検出
+       detector := services.NewCodexApprovalDetector(logger)
+       // Codex botからのコメントかどうかを判定
+       isCodexBot := detector.IsCodexBot(payload.Comment.User.Login, payload.Comment.User.ID)
+       if isCodexBot && detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login, payload.Comment.User.ID) {
+           logger.Info("Codex approval detected in issue comment; re-evaluating merge conditions",
+               zap.String("delivery_id", deliveryID),
+               zap.Int("issue_number", payload.Issue.Number),
+               zap.String("repo", payload.Repository.FullName),
+           )
+           
+           // ReviewFeedbackレコード作成（承認検出時）
+           reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
+           commentID := int64(payload.Comment.ID)
+           content := payload.Comment.Body
+           
+           // 既存の'requested'があれば'received'へ更新、無ければ'received'を新規作成
+           if list, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested"); err == nil && len(list) > 0 {
+               latest := list[0]
+               reviewFeedbackRepo.UpdateToReceived(latest.ID, content, true, &commentID)
+           } else {
+               reviewFeedbackRepo.CreateReceivedReview(pr.ID, content, true, &commentID)
+           }
+           
+           // マージ条件再評価処理（既存のpr_review_commentハンドラーの処理を再利用）
+           // CIStatusProvider/CodexApprovalCheckerのアダプタを作成
+           ciRepo := repositories.NewCIStatusRepository()
+           ciProvider := &ciStatusProviderAdapter{repo: ciRepo, prID: pr.ID}
+           conflictDetector := services.NewMergeConflictDetector(githubClient, logger)
+           checker := services.NewMergeConditionChecker(ciProvider, &alwaysApprovedChecker{}, conflictDetector, logger)
+           
+           res, err := checker.Check(ctx, owner, repo, pr.Number)
+           if err != nil {
+               logger.Error("merge condition check failed", zap.Error(err))
+               c.Error(err)
+               return
+           }
+           
+           if res.Mergeable {
+               // 自動マージ処理
+               am := services.NewAutoMergeService(appGitHubClient, logger)
+               mergeRes, mergeErr := am.AttemptAutoMerge(ctx, owner, repo, pr.Number)
+               // ... マージ結果処理 ...
+           }
+           
+           // approve検出時は処理を終了（/run-agentトリガー検出はスキップ）
+           c.JSON(http.StatusOK, gin.H{
+               "status":      "codex_approval_detected",
+               "delivery_id": deliveryID,
+           })
+           return
+       }
+   }
+   
+   // 以降は既存の/run-agentトリガー検出処理を続行
+   ```
+
+3. **CodexApprovalDetectorにIsCodexBot()メソッドを追加**
+   ```go
+   // internal/services/codex_approval.go
+   // CodexApprovalDetectorにpublicメソッドを追加
+   
+   // IsCodexBot checks if the given username and user ID match the Codex bot.
+   // This is a public wrapper around the private isCodexBot method.
+   func (s *CodexApprovalDetector) IsCodexBot(username string, userID int64) bool {
+       return s.isCodexBot(username, userID)
+   }
+   ```
+
+4. **ヘルパー関数の追加（必要に応じて）**
+   ```go
+   // internal/webhooks/handlers/issue_comment.go
+   // pr_review_commentハンドラーから移植
+   
+   // ciStatusProviderAdapter は PR に紐づく最新の aggregated CI 状態を返す軽量アダプタ
+   type ciStatusProviderAdapter struct {
+       repo *repositories.CIStatusRepository
+       prID int
+   }
+   
+   func (a *ciStatusProviderAdapter) GetAggregatedState(_ context.Context, _ string, _ string, _ int) (services.CIState, error) {
+       // pr_review_comment.goの実装をそのまま移植
+   }
+   
+   // alwaysApprovedChecker は本イベントで承認検知済みのため常に true を返すアダプタ
+   type alwaysApprovedChecker struct{}
+   
+   func (a *alwaysApprovedChecker) IsApproved(_ context.Context, _ string, _ string, _ int) (bool, error) {
+       return true, nil
+   }
+   ```
+
+**テスト項目**:
+- [ ] `CodexApprovalDetector.IsCodexBot()`メソッドが正しく動作すること
+- [ ] `pr_review_comment`ハンドラーからapprove検出処理が削除されていること
+- [ ] `issue_comment`ハンドラーでPRに関連するIssueコメントの場合にapprove検出が動作すること
+- [ ] `issue_comment`ハンドラーでPRに関連しないIssueコメントの場合はapprove検出がスキップされること
+- [ ] approve検出時にReviewFeedbackレコードが正しく作成/更新されること
+- [ ] approve検出時にマージ条件再評価が正常に動作すること
+- [ ] approve検出時に/run-agentトリガー検出がスキップされること
+
+---
+
 ### Phase 1: データモデル拡張
 
 **目的**: プラン作成・実行の状態を追跡するためのデータモデルを拡張
@@ -40,6 +184,9 @@
    // internal/models/review_feedback.go
    type ReviewFeedback struct {
        // ... 既存フィールド ...
+       
+       // Sourceフィールドの拡張（すべてのレビューコメントに対応）
+       Source string `gorm:"type:enum('Codex','Review');default:'Codex'"` // 'Review'を追加
        
        // プラン作成・実行関連フィールド
        PlanCreationStatus string    `gorm:"type:enum('pending','plan_created','plan_rejected','plan_executing','plan_executed');default:'pending'"`
@@ -65,6 +212,11 @@
 3. **マイグレーションファイル作成**
    ```sql
    -- migrations/000006_add_review_feedback_plan_fields.sql
+   -- Sourceフィールドのenumを拡張（'Review'を追加）
+   ALTER TABLE review_feedback
+       MODIFY COLUMN source ENUM('Codex','Review') DEFAULT 'Codex';
+   
+   -- プラン作成・実行関連フィールドを追加
    ALTER TABLE review_feedback
        ADD COLUMN plan_creation_status ENUM('pending','plan_created','plan_rejected','plan_executing','plan_executed') DEFAULT 'pending',
        ADD COLUMN plan_content TEXT,
@@ -85,6 +237,7 @@
 
 **テスト項目**:
 - [ ] マイグレーションが正常に実行されること
+- [ ] ReviewFeedbackモデルのSourceフィールドが'Review'をサポートすること
 - [ ] ReviewFeedbackモデルでプラン関連フィールドが正しく保存・取得できること
 - [ ] AgentRunモデルで実行モード関連フィールドが正しく保存・取得できること
 
@@ -391,6 +544,14 @@
 
 **目的**: レビューフィードバック受信時にプラン作成Podを起動
 
+**注意事項**:
+- `pr_review_comment`イベントではapprove検出を行わない（Phase 0で`issue_comment`に移行済み）
+- レビュー指摘の監視は`pr_review_comment`イベントのままで良い
+- **すべてのレビューコメント**（Codexかユーザーかを区別せず）に対してプラン作成Podを起動する
+- `pr_review_comment`ではCodex bot判定を行わず、一律で処理する
+- Codex bot判定は`issue_comment`（PRに関連する通常のコメント）でのみ行う
+- `pr_review_comment`ではSourceフィールドは一律"Review"を使用する
+
 **修正対象ファイル**:
 - `internal/webhooks/handlers/pr_review_comment.go`
 - `internal/services/kubernetes_job.go`
@@ -400,11 +561,15 @@
 1. **プラン作成Pod起動ロジックの追加**
    ```go
    // internal/webhooks/handlers/pr_review_comment.go
-   // HandlePullRequestReviewCommentWithDeps内で、承認検出後
+   // HandlePullRequestReviewCommentWithDeps内で、@codex reviewトリガー検出後
+   // または、レビューコメント受信時（approve検出は行わない）
    
-   // 承認が検出されなかった場合（approval_detected=false）
-   if !detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login, payload.Comment.User.ID) {
-       // ReviewFeedbackを作成または更新
+   // すべてのレビューコメントを指摘事項として処理
+   // Codex botのapprove検出は行わない（Phase 0でissue_commentに移行済み）
+   // Codex botかユーザーかを区別せず、一律で処理する
+   // レビューコメントが空でない場合、プラン作成Podを起動
+   if strings.TrimSpace(payload.Comment.Body) != "" {
+       // ReviewFeedbackを作成または更新（approval_detected=false）
        reviewFeedbackRepo := deps.ReviewFeedbackRepository
        if reviewFeedbackRepo == nil {
            reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
@@ -413,18 +578,36 @@
        commentID := int64(payload.Comment.ID)
        var reviewFeedback *models.ReviewFeedback
        
+       // pr_review_commentではCodex bot判定を行わず、一律"Review"を使用
+       source := "Review"
+       
        // 既存の'requested'があれば'received'へ更新
        if list, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested"); err == nil && len(list) > 0 {
            latest := list[0]
            reviewFeedbackRepo.UpdateToReceived(latest.ID, payload.Comment.Body, false, &commentID)
            reviewFeedback = latest
+           // Sourceを更新（既存レコードの場合、一律"Review"に設定）
+           if reviewFeedback.Source != source {
+               reviewFeedback.Source = source
+               reviewFeedbackRepo.Update(reviewFeedback)
+           }
        } else {
-           // 新規作成
-           reviewFeedback, _ = reviewFeedbackRepo.CreateReceivedReview(pr.ID, payload.Comment.Body, false, &commentID)
+           // 新規作成（approval_detected=false）
+           // CreateReceivedReviewを拡張してSourceを指定できるようにするか、
+           // 直接Createメソッドを使用
+           reviewFeedback = &models.ReviewFeedback{
+               PRID:             pr.ID,
+               Source:           source, // 一律"Review"
+               Content:          &payload.Comment.Body,
+               Status:           "received",
+               ApprovalDetected: false,
+               GitHubCommentID:  &commentID,
+           }
+           reviewFeedbackRepo.Create(reviewFeedback)
        }
        
-       // プラン作成Podを起動
-       if reviewFeedback != nil && reviewFeedback.PlanCreationStatus == "pending" {
+       // プラン作成Podを起動（approval_detected=falseの場合のみ）
+       if reviewFeedback != nil && !reviewFeedback.ApprovalDetected && reviewFeedback.PlanCreationStatus == "pending" {
            // Issueを取得
            issueRepo := repositories.NewIssueRepository()
            issue, err := issueRepo.FindByID(*pr.IssueID)
@@ -515,7 +698,11 @@
    ```
 
 **テスト項目**:
-- [ ] レビューフィードバック受信時にプラン作成Podが起動されること
+- [ ] すべてのレビューコメント（Codex botかユーザーかを区別せず）受信時にプラン作成Podが起動されること
+- [ ] Codex botからのレビューコメントでプラン作成Podが起動されること
+- [ ] 通常のユーザーからのレビューコメントでプラン作成Podが起動されること
+- [ ] `pr_review_comment`ではCodex bot判定が行われないこと
+- [ ] ReviewFeedbackのSourceフィールドが一律"Review"に設定されること
 - [ ] プラン作成Podでwrite権限が剥奪されること
 - [ ] プラン作成用プロンプトが正しく構築されること
 - [ ] ReviewFeedbackの状態が正しく更新されること
@@ -567,9 +754,10 @@
 ## 実装順序の推奨
 
 ### 推奨順序
-1. **Phase 1** → **Phase 2** → **Phase 3** → **Phase 4** → **Phase 5**
+1. **Phase 0** → **Phase 1** → **Phase 2** → **Phase 3** → **Phase 4** → **Phase 5**
 
 ### 理由
+- Phase 0でapprove検出機能を移行し、既存機能への影響を最小化する
 - Phase 1でデータモデルを拡張してから、各機能を実装する
 - Phase 2でagent-runnerを拡張し、Phase 3でOperator APIを拡張する
 - Phase 4でレビューフィードバック処理を拡張し、Phase 5で完了処理を追加する
@@ -581,14 +769,15 @@
 
 | Phase | 内容 | 開発工数 | テスト工数 |
 |-------|------|----------|-----------|
+| Phase 0 | Codex approve検出機能の移行 | 0.5 日 | 0.5 日 |
 | Phase 1 | データモデル拡張 | 0.5 日 | 0.5 日 |
 | Phase 2 | agent-runner拡張 | 1.5 日 | 1.0 日 |
 | Phase 3 | Operator API拡張 | 1.0 日 | 1.0 日 |
 | Phase 4 | レビューフィードバック処理拡張 | 1.0 日 | 1.0 日 |
 | Phase 5 | プラン実行完了時の処理 | 0.5 日 | 0.5 日 |
-| **合計** | | **4.5 日** | **4.0 日** |
+| **合計** | | **5.0 日** | **4.5 日** |
 
-**総工数**: 約 8.5 人日（開発 4.5 日 + テスト 4.0 日）
+**総工数**: 約 9.5 人日（開発 5.0 日 + テスト 4.5 日）
 
 ---
 
@@ -634,11 +823,21 @@
 - 既にプラン作成中の場合は新規起動をスキップ
 - プラン作成状態を適切に管理
 
+### リスク 6: approve検出の移行による既存機能への影響
+**問題**: `pr_review_comment`から`issue_comment`への移行により、既存のapprove検出が動作しなくなる可能性
+
+**対策**:
+- Phase 0で移行を完了し、既存機能が正常に動作することを確認
+- `issue_comment`でPRに関連するIssueかどうかを正確に判定
+- 統合テストでapprove検出からマージまでのフローを検証
+
 ---
 
 ## 検証項目
 
 ### 機能テスト
+- [ ] `issue_comment`でCodex approveが正しく検出されること
+- [ ] `pr_review_comment`でapprove検出が行われないこと
 - [ ] レビューフィードバック受信時にプラン作成Podが起動されること
 - [ ] プラン作成Podでwrite権限が剥奪されること
 - [ ] プランが正しく作成されること
@@ -670,13 +869,24 @@
 - `internal/models/review_feedback.go` - ReviewFeedbackモデル
 - `internal/models/agent_run.go` - AgentRunモデル
 - `agent-runner/main.go` - agent-runnerメイン処理
-- `internal/webhooks/handlers/pr_review_comment.go` - レビューフィードバックハンドラー
+- `internal/webhooks/handlers/issue_comment.go` - Issueコメントハンドラー（approve検出）
+- `internal/webhooks/handlers/pr_review_comment.go` - レビューフィードバックハンドラー（指摘事項検出）
 - `internal/webhooks/handlers/agent_report.go` - エージェントレポートハンドラー
 - `internal/services/kubernetes_job.go` - Kubernetes Jobサービス
+- `internal/services/codex_approval.go` - Codex approve検出サービス
 
 ---
 
 ## 実装チェックリスト
+
+### Phase 0: Codex approve検出機能の移行
+- [ ] `CodexApprovalDetector.IsCodexBot()`メソッドを追加
+- [ ] `pr_review_comment`ハンドラーからapprove検出処理を削除
+- [ ] `issue_comment`ハンドラーにapprove検出処理を追加
+- [ ] PRに関連するIssueコメントの判定ロジックを実装
+- [ ] ヘルパー関数（ciStatusProviderAdapter等）を移植
+- [ ] ユニットテストを実装
+- [ ] 統合テストを実装
 
 ### Phase 1: データモデル拡張
 - [ ] ReviewFeedbackモデルにプラン関連フィールドを追加
