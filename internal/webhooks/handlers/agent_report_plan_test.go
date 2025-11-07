@@ -42,6 +42,10 @@ func (f *fakePlanJobService) CreateJobForAgentRunWithFeedback(ctx context.Contex
 	return nil, nil
 }
 
+func (f *fakePlanJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
+	return &batchv1.Job{}, nil
+}
+
 func (f *fakePlanJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
 	f.planCallCount++
 	f.capturedPlan = planContent

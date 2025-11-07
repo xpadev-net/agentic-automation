@@ -10,11 +10,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -58,6 +61,7 @@ type PullRequestReviewCommentDeps struct {
 	CodexReviewService       CodexReviewService
 	PullRequestRepository    *repositories.PullRequestRepository
 	ReviewFeedbackRepository *repositories.ReviewFeedbackRepository
+	KubernetesJobService     services.KubernetesJobService
 	// Optional DI for US4 merge re-evaluation
 	MergeConditionChecker services.MergeConditionChecker
 	AutoMergeService      services.AutoMergeService
@@ -157,6 +161,8 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		return
 	}
 
+	commentBody := strings.TrimSpace(payload.Comment.Body)
+
 	// Step 5: トリガー検出
 	logger.Info("Checking for trigger in comment",
 		zap.String("delivery_id", deliveryID),
@@ -165,14 +171,13 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		zap.String("comment_user", payload.Comment.User.Login),
 	)
 
+	commentBodyPreview := payload.Comment.Body
+	if len(commentBodyPreview) > 100 {
+		commentBodyPreview = commentBodyPreview[:100]
+	}
+
 	triggerDetected := utils.ContainsCodexReviewTrigger(payload.Comment.Body)
 	if !triggerDetected {
-		// Create comment body preview (first 100 characters for security)
-		commentBodyPreview := payload.Comment.Body
-		if len(commentBodyPreview) > 100 {
-			commentBodyPreview = commentBodyPreview[:100]
-		}
-
 		logger.Info("No trigger detected in comment",
 			zap.String("delivery_id", deliveryID),
 			zap.Int("pr_number", payload.PullRequest.Number),
@@ -184,19 +189,14 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			zap.String("trigger_string", utils.CodexReviewTrigger),
 			zap.String("detection_reason", "trigger string '@codex review' not found in comment body"),
 		)
-		c.JSON(http.StatusOK, gin.H{
-			"status":      "no_trigger",
-			"delivery_id": deliveryID,
-		})
-		return
+	} else {
+		logger.Info("Trigger detected in comment",
+			zap.Bool("trigger_detected", true),
+			zap.String("delivery_id", deliveryID),
+			zap.Int("pr_number", payload.PullRequest.Number),
+			zap.String("repo", payload.Repository.FullName),
+		)
 	}
-
-	logger.Info("Trigger detected in comment",
-		zap.Bool("trigger_detected", true),
-		zap.String("delivery_id", deliveryID),
-		zap.Int("pr_number", payload.PullRequest.Number),
-		zap.String("repo", payload.Repository.FullName),
-	)
 
 	// Step 6: リポジトリ情報抽出
 	repoParts := strings.Split(payload.Repository.FullName, "/")
@@ -210,6 +210,74 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	}
 	owner := repoParts[0]
 	repo := repoParts[1]
+
+	// Step 7: PullRequest 取得（プラン作成判定に利用）
+	prRepo := deps.PullRequestRepository
+	if prRepo == nil {
+		prRepo = repositories.NewPullRequestRepository(config.GetDB())
+	}
+
+	pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.PullRequest.Number)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.Error("PullRequest not found",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+				zap.String("repo", payload.Repository.FullName),
+			)
+			c.Error(errors.New("pull request not found"))
+			return
+		}
+		logger.Error("Failed to get PullRequest",
+			zap.Error(err),
+			zap.String("delivery_id", deliveryID),
+			zap.Int("pr_number", payload.PullRequest.Number),
+			zap.String("repo", payload.Repository.FullName),
+		)
+		c.Error(err)
+		return
+	}
+
+	logger.Info("PullRequest retrieved",
+		zap.Int("pr_id", pr.ID),
+		zap.Int("pr_number", pr.Number),
+		zap.String("repo", pr.Repo),
+		zap.String("delivery_id", deliveryID),
+	)
+
+	planResult, planErr := startPlanCreationIfNeeded(ctx, deps, logger, pr, commentBody, int64(payload.Comment.ID), deliveryID)
+	if planErr != nil {
+		c.Error(planErr)
+		return
+	}
+
+	if !triggerDetected {
+		status := "no_trigger"
+		if planResult != nil && planResult.hasStarted() {
+			status = "plan_creation_started"
+		}
+
+		response := gin.H{
+			"status":      status,
+			"delivery_id": deliveryID,
+		}
+		if planResult != nil {
+			response["plan_creation_status"] = planResult.Status
+			if planResult.ReviewFeedbackID != 0 {
+				response["review_feedback_id"] = planResult.ReviewFeedbackID
+			}
+			if planResult.PlanAgentRunID != 0 {
+				response["plan_agent_run_id"] = planResult.PlanAgentRunID
+			}
+			if planResult.PlanCreationState != "" {
+				response["plan_creation_state"] = planResult.PlanCreationState
+			}
+		}
+
+		c.JSON(http.StatusOK, response)
+		return
+	}
 
 	// Step 7: 権限チェック（サービス初期化含む）
 	// GitHub クライアント初期化（deps が nil の場合）
@@ -319,41 +387,6 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Step 8: PullRequest 取得
-	prRepo := deps.PullRequestRepository
-	if prRepo == nil {
-		prRepo = repositories.NewPullRequestRepository(config.GetDB())
-	}
-
-	pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.PullRequest.Number)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			logger.Error("PullRequest not found",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_number", payload.PullRequest.Number),
-				zap.String("repo", payload.Repository.FullName),
-			)
-			c.Error(errors.New("pull request not found"))
-			return
-		}
-		logger.Error("Failed to get PullRequest",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
-		)
-		c.Error(err)
-		return
-	}
-
-	logger.Info("PullRequest retrieved",
-		zap.Int("pr_id", pr.ID),
-		zap.Int("pr_number", pr.Number),
-		zap.String("repo", pr.Repo),
-		zap.String("delivery_id", deliveryID),
-	)
-
 	// Step 9: CodexReviewService 呼び出し
 	// codexReviewService は Step 7 で初期化済み（実装が存在する場合）
 	if codexReviewService == nil {
@@ -427,11 +460,25 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	)
 
 	// Step 11: 成功レスポンス返却
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"status":      "processed",
 		"delivery_id": deliveryID,
 		"pr_number":   payload.PullRequest.Number,
-	})
+	}
+	if planResult != nil {
+		response["plan_creation_status"] = planResult.Status
+		if planResult.ReviewFeedbackID != 0 {
+			response["review_feedback_id"] = planResult.ReviewFeedbackID
+		}
+		if planResult.PlanAgentRunID != 0 {
+			response["plan_agent_run_id"] = planResult.PlanAgentRunID
+		}
+		if planResult.PlanCreationState != "" {
+			response["plan_creation_state"] = planResult.PlanCreationState
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
 
 	// TODO (T096/T098): Add retry progress notification when review feedback triggers retry
 	// When implementing retry orchestrator for review feedback (T096/T098), add NotifyRetryProgress call here:
@@ -450,4 +497,254 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	//    - idempotencyKey: agentRun.IdempotencyKey
 	//
 	// See internal/webhooks/handlers/agent_report.go for reference implementation.
+}
+
+type planCreationResult struct {
+	Status            string
+	ReviewFeedbackID  int
+	PlanAgentRunID    int
+	PlanCreationState string
+}
+
+func (r *planCreationResult) hasStarted() bool {
+	return r != nil && r.Status == "started"
+}
+
+func startPlanCreationIfNeeded(
+	ctx context.Context,
+	deps PullRequestReviewCommentDeps,
+	logger *zap.Logger,
+	pr *models.PullRequest,
+	commentBody string,
+	commentID int64,
+	deliveryID string,
+) (*planCreationResult, error) {
+	commentBody = strings.TrimSpace(commentBody)
+	if commentBody == "" {
+		logger.Info("Skipping plan creation: empty review comment",
+			zap.Int("pr_id", pr.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return &planCreationResult{Status: "skipped_empty_comment"}, nil
+	}
+
+	minCommentLength := config.GetEnvInt("PLAN_CREATION_MIN_COMMENT_LENGTH", 20)
+	if minCommentLength < 0 {
+		minCommentLength = 0
+	}
+	if utf8.RuneCountInString(commentBody) < minCommentLength {
+		logger.Info("Skipping plan creation: comment shorter than minimum threshold",
+			zap.Int("pr_id", pr.ID),
+			zap.Int("comment_length", utf8.RuneCountInString(commentBody)),
+			zap.Int("min_length", minCommentLength),
+			zap.String("delivery_id", deliveryID),
+		)
+		return &planCreationResult{Status: "skipped_short_comment"}, nil
+	}
+
+	reviewFeedbackRepo := deps.ReviewFeedbackRepository
+	if reviewFeedbackRepo == nil {
+		reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
+	}
+
+	var reviewFeedback *models.ReviewFeedback
+	commentIDPtr := &commentID
+	requestedList, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested")
+	if err != nil {
+		logger.Error("Failed to load requested review feedback records",
+			zap.Error(err),
+			zap.Int("pr_id", pr.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return nil, err
+	}
+
+	if len(requestedList) > 0 {
+		latest := requestedList[0]
+		if updateErr := reviewFeedbackRepo.UpdateToReceived(latest.ID, commentBody, false, commentIDPtr); updateErr != nil {
+			logger.Error("Failed to update review feedback to received",
+				zap.Error(updateErr),
+				zap.Int("review_feedback_id", latest.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, updateErr
+		}
+		reviewFeedback, err = reviewFeedbackRepo.FindByID(latest.ID)
+		if err != nil {
+			logger.Error("Failed to reload review feedback after update",
+				zap.Error(err),
+				zap.Int("review_feedback_id", latest.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, err
+		}
+	} else {
+		reviewFeedback, err = reviewFeedbackRepo.CreateReceivedReview(pr.ID, commentBody, false, commentIDPtr)
+		if err != nil {
+			logger.Error("Failed to create received review feedback",
+				zap.Error(err),
+				zap.Int("pr_id", pr.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, err
+		}
+	}
+
+	if reviewFeedback == nil {
+		logger.Warn("Review feedback record unavailable after processing",
+			zap.Int("pr_id", pr.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return &planCreationResult{Status: "skipped_feedback_missing"}, nil
+	}
+
+	planState := strings.TrimSpace(reviewFeedback.PlanCreationStatus)
+	if planState == "creating" || planState == "created" || planState == "executed" {
+		logger.Info("Plan creation already in progress or completed",
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("plan_creation_status", planState),
+			zap.String("delivery_id", deliveryID),
+		)
+		result := &planCreationResult{
+			Status:            "skipped_plan_already_started",
+			ReviewFeedbackID:  reviewFeedback.ID,
+			PlanCreationState: planState,
+		}
+		if reviewFeedback.PlanAgentRunID != nil {
+			result.PlanAgentRunID = *reviewFeedback.PlanAgentRunID
+		}
+		return result, nil
+	}
+
+	if pr.IssueID == nil {
+		logger.Warn("Skipping plan creation: PR not linked to issue",
+			zap.Int("pr_id", pr.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return &planCreationResult{
+			Status:           "skipped_missing_issue",
+			ReviewFeedbackID: reviewFeedback.ID,
+		}, nil
+	}
+
+	issueRepo := repositories.NewIssueRepository()
+	issue, err := issueRepo.FindByID(*pr.IssueID)
+	if err != nil {
+		logger.Error("Failed to load issue for plan creation",
+			zap.Error(err),
+			zap.Int("issue_id", *pr.IssueID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return nil, err
+	}
+	if issue == nil {
+		logger.Warn("Skipping plan creation: linked issue not found",
+			zap.Int("issue_id", *pr.IssueID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return &planCreationResult{
+			Status:           "skipped_issue_not_found",
+			ReviewFeedbackID: reviewFeedback.ID,
+		}, nil
+	}
+
+	agentTypeDetector := services.NewAgentTypeDetectorService(logger)
+	agentType := agentTypeDetector.DetectAgentType(issue)
+
+	agentRunRepo := repositories.NewAgentRunRepository(config.GetDB())
+	planRun := &models.AgentRun{
+		IssueID:          issue.ID,
+		PRID:             &pr.ID,
+		State:            "queued",
+		AgentType:        agentType,
+		ExecutionMode:    "plan_creation",
+		ReviewFeedbackID: &reviewFeedback.ID,
+		Input:            datatypes.JSON([]byte("{}")),
+		Output:           datatypes.JSON([]byte("{}")),
+	}
+
+	idempotencyKey := fmt.Sprintf("plan_creation:review_feedback:%d", reviewFeedback.ID)
+	createdRun, isNew, err := agentRunRepo.CreateOrGet(idempotencyKey, planRun)
+	if err != nil {
+		logger.Error("Failed to create or get plan creation agent run",
+			zap.Error(err),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return nil, err
+	}
+
+	planAgentRun := createdRun
+	if !isNew {
+		logger.Info("Reusing existing plan creation agent run",
+			zap.Int("agent_run_id", createdRun.ID),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		planAgentRun.AgentType = agentType
+		planAgentRun.ExecutionMode = "plan_creation"
+		planAgentRun.ReviewFeedbackID = &reviewFeedback.ID
+		if err := agentRunRepo.Update(planAgentRun); err != nil {
+			logger.Warn("Failed to update existing plan creation agent run",
+				zap.Error(err),
+				zap.Int("agent_run_id", planAgentRun.ID),
+			)
+		}
+	}
+
+	jobService := deps.KubernetesJobService
+	if jobService == nil {
+		kubernetesClient, clientErr := clients.NewKubernetesClient(logger)
+		if clientErr != nil {
+			logger.Error("Failed to initialize Kubernetes client for plan creation",
+				zap.Error(clientErr),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, clientErr
+		}
+		jobService = services.NewKubernetesJobService(kubernetesClient, logger)
+	}
+
+	branchName := strings.TrimSpace(pr.Branch)
+	if branchName == "" {
+		branchName = fmt.Sprintf("feature/issue-%d", issue.Number)
+	}
+
+	job, jobErr := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, reviewFeedback, branchName)
+	if jobErr != nil {
+		logger.Error("Failed to create plan creation job",
+			zap.Error(jobErr),
+			zap.Int("agent_run_id", planAgentRun.ID),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return nil, jobErr
+	}
+
+	logger.Info("Plan creation job started",
+		zap.Int("agent_run_id", planAgentRun.ID),
+		zap.Int("review_feedback_id", reviewFeedback.ID),
+		zap.String("delivery_id", deliveryID),
+		zap.String("branch_name", branchName),
+		zap.Bool("job_created", job != nil),
+	)
+
+	reviewFeedback.PlanCreationStatus = "creating"
+	reviewFeedback.PlanAgentRunID = &planAgentRun.ID
+	if updateErr := reviewFeedbackRepo.Update(reviewFeedback); updateErr != nil {
+		logger.Error("Failed to update review feedback plan creation status",
+			zap.Error(updateErr),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return nil, updateErr
+	}
+
+	result := &planCreationResult{
+		Status:            "started",
+		ReviewFeedbackID:  reviewFeedback.ID,
+		PlanAgentRunID:    planAgentRun.ID,
+		PlanCreationState: "creating",
+	}
+	return result, nil
 }

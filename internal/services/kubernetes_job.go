@@ -40,6 +40,8 @@ type KubernetesJobService interface {
 	//   - *batchv1.Job: Created Kubernetes Job, or nil on error
 	//   - error: Error if Job creation fails
 	CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback, branchName string) (*batchv1.Job, error)
+	// CreateJobForPlanCreation creates a Kubernetes Job for generating a remediation plan from review feedback
+	CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error)
 	// CreateJobForPlanExecution creates a Kubernetes Job for executing a previously generated plan
 	CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error)
 }
@@ -400,6 +402,106 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		zap.String("job_uid", string(job.UID)),
 		zap.String("namespace", job.Namespace),
 		zap.Bool("has_feedback", hasFeedback),
+		zap.String("service", "kubernetes_job"),
+	)
+
+	return job, nil
+}
+
+// CreateJobForPlanCreation creates a Kubernetes Job that generates a plan from review feedback content.
+func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
+	if agentRun == nil {
+		s.logger.Error("agentRun must not be nil for plan creation",
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("agentRun must not be nil")
+	}
+
+	if issue == nil {
+		s.logger.Error("issue must not be nil for plan creation",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("issue must not be nil")
+	}
+
+	if reviewFeedback == nil {
+		s.logger.Error("reviewFeedback must not be nil for plan creation",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("review feedback must not be nil")
+	}
+
+	reviewContent := ""
+	if reviewFeedback.Content != nil {
+		reviewContent = strings.TrimSpace(*reviewFeedback.Content)
+	}
+	if reviewContent == "" {
+		s.logger.Error("review feedback content must not be empty for plan creation",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("review feedback content must not be empty")
+	}
+
+	agentRunnerImage, err := getRequiredEnv("AGENT_RUNNER_IMAGE", s.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	timeoutMinutes := getOptionalEnvInt("AGENT_RUNNER_TIMEOUT_MINUTES", 60, s.logger)
+
+	s.logger.Info("Building JobConfig for plan creation",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("issue_id", issue.Number),
+		zap.String("repo", issue.Repo),
+		zap.String("agent_type", agentRun.AgentType),
+		zap.Int("retry_count", agentRun.RetryCount),
+		zap.Int("timeout_minutes", timeoutMinutes),
+		zap.Int("review_feedback_id", reviewFeedback.ID),
+		zap.Int("review_content_length", len(reviewContent)),
+		zap.String("service", "kubernetes_job"),
+	)
+
+	jobConfig := &clients.JobConfig{
+		AgentRunID:            agentRun.ID,
+		RetryCount:            agentRun.RetryCount,
+		IssueID:               issue.Number,
+		Repo:                  issue.Repo,
+		Prompt:                fmt.Sprintf("Plan creation for issue #%d", issue.Number),
+		PreviousAttempts:      "",
+		CILogs:                "",
+		AgentType:             agentRun.AgentType,
+		AgentRunnerImage:      agentRunnerImage,
+		TimeoutMinutes:        timeoutMinutes,
+		BranchName:            branchName,
+		ExecutionMode:         "plan_creation",
+		ReviewFeedbackContent: reviewContent,
+		CursorAllowWrite:      false,
+	}
+
+	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+
+	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
+	if err != nil {
+		s.logger.Error("Failed to create plan creation job",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("job_name", jobName),
+			zap.Error(err),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to create plan creation kubernetes job: %w", err)
+	}
+
+	s.logger.Info("Plan creation job created successfully",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("review_feedback_id", reviewFeedback.ID),
+		zap.String("job_name", jobName),
+		zap.String("job_uid", string(job.UID)),
+		zap.String("namespace", job.Namespace),
 		zap.String("service", "kubernetes_job"),
 	)
 
