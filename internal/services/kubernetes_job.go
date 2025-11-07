@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"agentic-automation/internal/clients"
 	appconfig "agentic-automation/internal/config"
@@ -39,6 +40,8 @@ type KubernetesJobService interface {
 	//   - *batchv1.Job: Created Kubernetes Job, or nil on error
 	//   - error: Error if Job creation fails
 	CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback, branchName string) (*batchv1.Job, error)
+	// CreateJobForPlanExecution creates a Kubernetes Job for executing a previously generated plan
+	CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error)
 }
 
 // kubernetesJobService implements KubernetesJobService interface
@@ -121,6 +124,19 @@ func getOptionalEnvInt(key string, defaultValue int, logger *zap.Logger) int {
 		return defaultValue
 	}
 	return value
+}
+
+func resolveExecutionMode(agentRun *models.AgentRun) string {
+	if agentRun == nil {
+		return "normal"
+	}
+
+	mode := strings.TrimSpace(agentRun.ExecutionMode)
+	if mode == "" {
+		return "normal"
+	}
+
+	return mode
 }
 
 // extractPreviousAttemptsJSON extracts previous attempts JSON from AgentRun Input field
@@ -221,6 +237,8 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 	)
 
 	// Build JobConfig
+	executionMode := resolveExecutionMode(agentRun)
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
@@ -233,6 +251,8 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		AgentRunnerImage: agentRunnerImage,
 		TimeoutMinutes:   timeoutMinutes,
 		BranchName:       branchName,
+		ExecutionMode:    executionMode,
+		CursorAllowWrite: true,
 	}
 
 	// Generate job name
@@ -340,6 +360,8 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 	)
 
 	// Build JobConfig
+	executionMode := resolveExecutionMode(agentRun)
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
@@ -352,6 +374,8 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		AgentRunnerImage: agentRunnerImage,
 		TimeoutMinutes:   timeoutMinutes,
 		BranchName:       branchName,
+		ExecutionMode:    executionMode,
+		CursorAllowWrite: true,
 	}
 
 	// Generate job name
@@ -376,6 +400,93 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		zap.String("job_uid", string(job.UID)),
 		zap.String("namespace", job.Namespace),
 		zap.Bool("has_feedback", hasFeedback),
+		zap.String("service", "kubernetes_job"),
+	)
+
+	return job, nil
+}
+
+// CreateJobForPlanExecution creates a Kubernetes Job for executing a previously generated plan.
+func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
+	if agentRun == nil {
+		s.logger.Error("agentRun must not be nil for plan execution",
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("agentRun must not be nil")
+	}
+
+	if issue == nil {
+		s.logger.Error("issue must not be nil for plan execution",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("issue must not be nil")
+	}
+
+	planContent = strings.TrimSpace(planContent)
+	if planContent == "" {
+		s.logger.Error("planContent must not be empty for plan execution",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("planContent must not be empty")
+	}
+
+	agentRunnerImage, err := getRequiredEnv("AGENT_RUNNER_IMAGE", s.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	timeoutMinutes := getOptionalEnvInt("AGENT_RUNNER_TIMEOUT_MINUTES", 60, s.logger)
+
+	s.logger.Info("Building JobConfig for plan execution",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.Int("issue_id", issue.Number),
+		zap.String("repo", issue.Repo),
+		zap.String("agent_type", agentRun.AgentType),
+		zap.Int("retry_count", agentRun.RetryCount),
+		zap.Int("timeout_minutes", timeoutMinutes),
+		zap.Int("plan_content_length", len(planContent)),
+		zap.String("service", "kubernetes_job"),
+	)
+
+	jobConfig := &clients.JobConfig{
+		AgentRunID:       agentRun.ID,
+		RetryCount:       agentRun.RetryCount,
+		IssueID:          issue.Number,
+		Repo:             issue.Repo,
+		Prompt:           fmt.Sprintf("Plan execution for issue #%d", issue.Number),
+		PreviousAttempts: extractPreviousAttemptsJSON(agentRun, s.logger),
+		CILogs:           "",
+		AgentType:        agentRun.AgentType,
+		AgentRunnerImage: agentRunnerImage,
+		TimeoutMinutes:   timeoutMinutes,
+		BranchName:       branchName,
+		ExecutionMode:    "plan_execution",
+		PlanContent:      planContent,
+		CursorAllowWrite: true,
+	}
+
+	// Generate job name
+	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+
+	// Create Kubernetes Job
+	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
+	if err != nil {
+		s.logger.Error("Failed to create plan execution job",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("job_name", jobName),
+			zap.Error(err),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to create plan execution kubernetes job: %w", err)
+	}
+
+	s.logger.Info("Plan execution job created successfully",
+		zap.Int("agent_run_id", agentRun.ID),
+		zap.String("job_name", jobName),
+		zap.String("job_uid", string(job.UID)),
+		zap.String("namespace", job.Namespace),
 		zap.String("service", "kubernetes_job"),
 	)
 

@@ -64,11 +64,12 @@ func (s *StubGitHubNotification) NotifyDependencyViolation(ctx context.Context, 
 
 // CreatedJobInfo represents information about a Job created by StubKubernetesJobService
 type CreatedJobInfo struct {
-	AgentRunID int
-	RetryCount int
-	Prompt     string
-	Feedback   *services.AggregatedFeedback
-	JobName    string
+	AgentRunID  int
+	RetryCount  int
+	Prompt      string
+	Feedback    *services.AggregatedFeedback
+	JobName     string
+	PlanContent string
 }
 
 // StubKubernetesJobService implements services.KubernetesJobService interface for testing
@@ -123,11 +124,47 @@ func (s *StubKubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.
 	jobName := fmt.Sprintf("agent-runner-%d", agentRun.ID)
 
 	info := CreatedJobInfo{
-		AgentRunID: agentRun.ID,
-		RetryCount: agentRun.RetryCount,
-		Prompt:     prompt,
-		Feedback:   feedback,
-		JobName:    jobName,
+		AgentRunID:  agentRun.ID,
+		RetryCount:  agentRun.RetryCount,
+		Prompt:      prompt,
+		Feedback:    feedback,
+		JobName:     jobName,
+		PlanContent: "",
+	}
+	s.CreatedJobs = append(s.CreatedJobs, info)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: "default",
+			Labels: map[string]string{
+				"app":          "agent-runner",
+				"agent-run-id": strconv.Itoa(agentRun.ID),
+				"issue-id":     strconv.Itoa(issue.Number),
+			},
+		},
+	}
+
+	return job, nil
+}
+
+// CreateJobForPlanExecution creates a Kubernetes Job for executing a plan.
+func (s *StubKubernetesJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
+	s.CreateJobCalled = true
+
+	if s.Error != nil {
+		return nil, s.Error
+	}
+
+	jobName := fmt.Sprintf("agent-runner-%d", agentRun.ID)
+
+	info := CreatedJobInfo{
+		AgentRunID:  agentRun.ID,
+		RetryCount:  agentRun.RetryCount,
+		Prompt:      fmt.Sprintf("Plan execution for issue #%d", issue.Number),
+		Feedback:    nil,
+		JobName:     jobName,
+		PlanContent: planContent,
 	}
 	s.CreatedJobs = append(s.CreatedJobs, info)
 
