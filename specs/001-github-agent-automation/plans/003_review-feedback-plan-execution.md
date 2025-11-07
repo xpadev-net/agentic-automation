@@ -2,9 +2,14 @@
 
 ## 概要
 
-レビューフィードバックで`approval_detected=false`の場合、以下の2段階の処理を実装します：
+**すべてのレビューコメント**（Codex bot・ユーザー問わず）に対して、以下の2段階の処理を実装します：
 1. **プラン作成Pod**: 指摘事項を検討し、プランを作成または却下
 2. **プラン実行Pod**: プランが作成された場合、そのプランを実行
+
+**注意**:
+- Codex botの**approve検出**は`issue_comment`イベントで処理（Phase 0で移行）
+- `pr_review_comment`イベントでは**レビュー指摘のみ**を処理し、approve検出は行わない
+- レビュー指摘はCodex/ユーザーを区別せず一律でプラン作成フローに進む
 
 ## 背景
 
@@ -190,10 +195,10 @@
        Source string `gorm:"type:enum('Codex','Review');default:'Codex'"` // 'Review'を追加
 
        // プラン作成・実行関連フィールド
-       // 状態遷移: pending → created → executed
-       //                   ↘ rejected
-       // 注意: 実行中の状態はAgentRunのExecutionModeで管理するため、ここでは省略
-       PlanCreationStatus string    `gorm:"type:enum('pending','created','rejected','executed');default:'pending'"`
+       // 状態遷移: pending → creating → created → executed
+       //                              ↘ rejected
+       // creating: プラン作成Pod起動済み（多重起動防止用）
+       PlanCreationStatus string    `gorm:"type:enum('pending','creating','created','rejected','executed');default:'pending'"`
        PlanContent        *string   `gorm:"type:text"` // プラン内容
        PlanAgentRunID     *int      `gorm:"column:plan_agent_run_id;index"` // プラン作成用AgentRun ID
        ExecutionAgentRunID *int     `gorm:"column:execution_agent_run_id;index"` // プラン実行用AgentRun ID
@@ -202,7 +207,9 @@
 
    **状態遷移図**:
    ```
-   pending (初期状態)
+   pending (初期状態: レビューフィードバック受信直後)
+      ↓
+      creating (プラン作成Pod起動済み: 多重起動防止)
       ↓
       ├─→ created (プラン作成成功) → executed (プラン実行完了)
       │                                   ↑
@@ -232,9 +239,10 @@
        MODIFY COLUMN source ENUM('Codex','Review') DEFAULT 'Codex';
 
    -- プラン作成・実行関連フィールドを追加
-   -- 状態: pending → created → executed (または rejected)
+   -- 状態: pending → creating → created → executed (または rejected)
+   -- creating: プラン作成Pod起動済み（多重起動防止用）
    ALTER TABLE review_feedback
-       ADD COLUMN plan_creation_status ENUM('pending','created','rejected','executed') DEFAULT 'pending',
+       ADD COLUMN plan_creation_status ENUM('pending','creating','created','rejected','executed') DEFAULT 'pending',
        ADD COLUMN plan_content TEXT,
        ADD COLUMN plan_agent_run_id INT,
        ADD COLUMN execution_agent_run_id INT,
@@ -288,23 +296,39 @@
 2. **プラン作成モードの処理**
    ```go
    // agent-runner/main.go
-   func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode string) error {
+   // Run関数のシグネチャを拡張してレビュー内容を受け取る
+   func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode, reviewFeedbackContent string) error {
        // ... 既存の処理 ...
+
+       var fullPrompt string
 
        // プラン作成モードの場合
        if executionMode == "plan_creation" {
            // write権限を剥奪（CURSOR_ALLOW_WRITE=false）
            envCfg.CursorAllowWrite = false
 
+           // レビューフィードバック内容からプラン作成用プロンプトを構築
+           reviewContent := reviewFeedbackContent
+           if reviewContent == "" {
+               reviewContent = os.Getenv("REVIEW_FEEDBACK_CONTENT")
+           }
+           if reviewContent == "" {
+               return fmt.Errorf("REVIEW_FEEDBACK_CONTENT is required for plan_creation mode")
+           }
+           fullPrompt = context.BuildPlanCreationPrompt(reviewContent)
+
            // エージェント実行
            agentOutput, err := executor.Execute(envCfg.WorkDir, fullPrompt)
+           if err != nil {
+               return fmt.Errorf("agent execution failed: %w", err)
+           }
 
            // ファイル変更チェックをスキップ
            // コミット/PR作成をスキップ
 
            // プラン作成結果を報告
            // プランが作成されたか、却下されたかを判定
-           planContent, rejected, rejectionReason := parsePlanResult(agentOutput)
+           planContent, rejected, rejectionReason := parser.ParsePlanResult(agentOutput)
            if rejected {
                return reporterClient.ReportPlanRejection(rejectionReason, agentOutput)
            }
@@ -319,11 +343,14 @@
                return fmt.Errorf("PLAN_CONTENT environment variable is required for plan_execution mode")
            }
            // プラン内容をプロンプトに含める
-           fullPrompt = buildPlanExecutionPrompt(prompt, planContent)
+           fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent)
            // 通常の実行フローを続行
+       } else {
+           // 通常モード: 既存のプロンプト構築ロジック
+           fullPrompt = prompt // または既存のプロンプト構築
        }
 
-       // ... 既存の処理 ...
+       // ... 既存の処理（通常モード/プラン実行モード共通） ...
    }
    ```
 
@@ -757,8 +784,8 @@
                return
            }
            
-           // ReviewFeedbackを更新
-           reviewFeedback.PlanCreationStatus = "pending"
+           // ReviewFeedbackを更新（多重起動防止のためcreatingに遷移）
+           reviewFeedback.PlanCreationStatus = "creating"
            reviewFeedback.PlanAgentRunID = &agentRun.ID
            reviewFeedbackRepo.Update(reviewFeedback)
            
@@ -780,24 +807,33 @@
        reviewFeedback *models.ReviewFeedback,
        branchName string,
    ) (*batchv1.Job, error) {
-       // プラン作成用プロンプトを構築
-       prompt := context.BuildPlanCreationPrompt(*reviewFeedback.Content)
-       
-       // JobConfigを構築
-       jobConfig := &clients.JobConfig{
-           AgentRunID:       agentRun.ID,
-           RetryCount:       0,
-           IssueID:          issue.Number,
-           Repo:             issue.Repo,
-           Prompt:           prompt,
-           AgentType:        agentRun.AgentType,
-           AgentRunnerImage: agentRunnerImage,
-           TimeoutMinutes:   timeoutMinutes,
-           BranchName:       branchName,
-           ExecutionMode:    "plan_creation", // 新規追加
-           CursorAllowWrite: false,           // write権限を剥奪
+       // レビュー内容を取得
+       reviewContent := ""
+       if reviewFeedback.Content != nil {
+           reviewContent = *reviewFeedback.Content
        }
-       
+       if reviewContent == "" {
+           return nil, fmt.Errorf("review feedback content is empty")
+       }
+
+       // JobConfigを構築
+       // 注意: promptはagent-runner側でBuildPlanCreationPrompt()を呼ぶため、
+       // ここでは簡易的な説明のみを渡す
+       jobConfig := &clients.JobConfig{
+           AgentRunID:            agentRun.ID,
+           RetryCount:            0,
+           IssueID:               issue.Number,
+           Repo:                  issue.Repo,
+           Prompt:                fmt.Sprintf("Plan creation for issue #%d", issue.Number),
+           AgentType:             agentRun.AgentType,
+           AgentRunnerImage:      agentRunnerImage,
+           TimeoutMinutes:        timeoutMinutes,
+           BranchName:            branchName,
+           ExecutionMode:         "plan_creation",     // 新規追加
+           ReviewFeedbackContent: reviewContent,       // 新規追加: レビュー内容
+           CursorAllowWrite:      false,               // write権限を剥奪
+       }
+
        // Kubernetes Jobを作成
        jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
        return s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
@@ -809,9 +845,213 @@
    // internal/clients/kubernetes.go
    type JobConfig struct {
        // ... 既存フィールド ...
-       ExecutionMode    string // 新規追加: "normal", "plan_creation", "plan_execution"
-       PlanContent      string // 新規追加: プラン実行モード時に使用
-       CursorAllowWrite bool   // 新規追加: cursor-agentのwrite権限制御
+       ExecutionMode          string // 新規追加: "normal", "plan_creation", "plan_execution"
+       PlanContent            string // 新規追加: プラン実行モード時に使用
+       ReviewFeedbackContent  string // 新規追加: プラン作成モード時に使用
+       CursorAllowWrite       bool   // 新規追加: cursor-agentのwrite権限制御
+   }
+   ```
+
+4. **CreateJob()メソッドでの環境変数/args設定**
+   ```go
+   // internal/clients/kubernetes.go
+   func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config *JobConfig) (*batchv1.Job, error) {
+       // ... 既存の処理 ...
+
+       // 環境変数の構築
+       env := []corev1.EnvVar{
+           {Name: "AGENT_RUN_ID", Value: strconv.Itoa(config.AgentRunID)},
+           {Name: "OPERATOR_API_URL", Value: c.operatorAPIURL},
+           {Name: "OPERATOR_API_TOKEN", Value: c.operatorAPIToken},
+           {Name: "ANTHROPIC_API_KEY", Value: c.anthropicAPIKey},
+           {Name: "CURSOR_API_KEY", Value: c.cursorAPIKey},
+           // ... 既存の環境変数 ...
+       }
+
+       // 実行モード別の環境変数追加
+       if config.ExecutionMode == "plan_creation" {
+           // プラン作成モード: レビュー内容を渡す
+           if config.ReviewFeedbackContent != "" {
+               // サイズチェック
+               const maxEnvSize = 900 * 1024 // 900KB
+               if len(config.ReviewFeedbackContent) > maxEnvSize {
+                   // ConfigMapを使用
+                   configMapName, err := c.createConfigMapForReviewContent(ctx, jobName, config.ReviewFeedbackContent)
+                   if err != nil {
+                       return nil, fmt.Errorf("failed to create ConfigMap: %w", err)
+                   }
+                   // ConfigMapをボリュームマウント
+                   // (後述のvolumes/volumeMountsセクション参照)
+                   env = append(env, corev1.EnvVar{
+                       Name:  "REVIEW_FEEDBACK_CONTENT_FILE",
+                       Value: "/config/review_feedback_content.txt",
+                   })
+               } else {
+                   // 直接環境変数として渡す
+                   env = append(env, corev1.EnvVar{
+                       Name:  "REVIEW_FEEDBACK_CONTENT",
+                       Value: config.ReviewFeedbackContent,
+                   })
+               }
+           }
+           if config.CursorAllowWrite {
+               env = append(env, corev1.EnvVar{Name: "CURSOR_ALLOW_WRITE", Value: "true"})
+           } else {
+               env = append(env, corev1.EnvVar{Name: "CURSOR_ALLOW_WRITE", Value: "false"})
+           }
+       }
+
+       if config.ExecutionMode == "plan_execution" {
+           // プラン実行モード: プラン内容を渡す
+           if config.PlanContent != "" {
+               const maxEnvSize = 900 * 1024 // 900KB
+               if len(config.PlanContent) > maxEnvSize {
+                   // ConfigMapを使用
+                   configMapName, err := c.createConfigMapForPlanContent(ctx, jobName, config.PlanContent)
+                   if err != nil {
+                       return nil, fmt.Errorf("failed to create ConfigMap: %w", err)
+                   }
+                   env = append(env, corev1.EnvVar{
+                       Name:  "PLAN_CONTENT_FILE",
+                       Value: "/config/plan_content.txt",
+                   })
+               } else {
+                   env = append(env, corev1.EnvVar{
+                       Name:  "PLAN_CONTENT",
+                       Value: config.PlanContent,
+                   })
+               }
+           }
+       }
+
+       // コマンドライン引数の構築
+       args := []string{
+           "--agent-run-id", strconv.Itoa(config.AgentRunID),
+           "--issue-id", strconv.Itoa(config.IssueID),
+           "--repo", config.Repo,
+           "--prompt", config.Prompt,
+           "--agent-type", config.AgentType,
+           "--execution-mode", config.ExecutionMode, // ← 新規追加
+       }
+
+       if config.PreviousAttempts != "" {
+           args = append(args, "--previous-attempts", config.PreviousAttempts)
+       }
+       if config.CILogs != "" {
+           args = append(args, "--ci-logs", config.CILogs)
+       }
+
+       // Job仕様の構築
+       job := &batchv1.Job{
+           // ... 既存の仕様 ...
+           Spec: batchv1.JobSpec{
+               Template: corev1.PodTemplateSpec{
+                   Spec: corev1.PodSpec{
+                       Containers: []corev1.Container{
+                           {
+                               Name:  "agent-runner",
+                               Image: config.AgentRunnerImage,
+                               Args:  args,
+                               Env:   env,
+                               // ... その他の設定 ...
+                           },
+                       },
+                       // ... RestartPolicy等 ...
+                   },
+               },
+           },
+       }
+
+       return c.clientset.BatchV1().Jobs(c.namespace).Create(ctx, job, metav1.CreateOptions{})
+   }
+   ```
+
+5. **ConfigMap作成ヘルパーメソッド**
+   ```go
+   // internal/clients/kubernetes.go
+   func (c *KubernetesClient) createConfigMapForReviewContent(ctx context.Context, jobName, content string) (string, error) {
+       configMapName := fmt.Sprintf("%s-review-content", jobName)
+       configMap := &corev1.ConfigMap{
+           ObjectMeta: metav1.ObjectMeta{
+               Name:      configMapName,
+               Namespace: c.namespace,
+           },
+           Data: map[string]string{
+               "review_feedback_content.txt": content,
+           },
+       }
+       _, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Create(ctx, configMap, metav1.CreateOptions{})
+       if err != nil {
+           return "", err
+       }
+       return configMapName, nil
+   }
+
+   func (c *KubernetesClient) createConfigMapForPlanContent(ctx context.Context, jobName, content string) (string, error) {
+       configMapName := fmt.Sprintf("%s-plan-content", jobName)
+       configMap := &corev1.ConfigMap{
+           ObjectMeta: metav1.ObjectMeta{
+               Name:      configMapName,
+               Namespace: c.namespace,
+           },
+           Data: map[string]string{
+               "plan_content.txt": content,
+           },
+       }
+       _, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Create(ctx, configMap, metav1.CreateOptions{})
+       if err != nil {
+           return "", err
+       }
+       return configMapName, nil
+   }
+   ```
+
+6. **agent-runnerでのファイル読み込み対応**
+   ```go
+   // agent-runner/main.go
+   func Run(...) error {
+       // ... 既存の処理 ...
+
+       if executionMode == "plan_creation" {
+           // 環境変数またはファイルからレビュー内容を取得
+           reviewContent := os.Getenv("REVIEW_FEEDBACK_CONTENT")
+           if reviewContent == "" {
+               // ファイルパスが指定されている場合
+               filePath := os.Getenv("REVIEW_FEEDBACK_CONTENT_FILE")
+               if filePath != "" {
+                   content, err := os.ReadFile(filePath)
+                   if err != nil {
+                       return fmt.Errorf("failed to read review content file: %w", err)
+                   }
+                   reviewContent = string(content)
+               }
+           }
+           if reviewContent == "" {
+               return fmt.Errorf("REVIEW_FEEDBACK_CONTENT is required")
+           }
+           fullPrompt = context.BuildPlanCreationPrompt(reviewContent)
+       }
+
+       if executionMode == "plan_execution" {
+           // 環境変数またはファイルからプラン内容を取得
+           planContent := os.Getenv("PLAN_CONTENT")
+           if planContent == "" {
+               filePath := os.Getenv("PLAN_CONTENT_FILE")
+               if filePath != "" {
+                   content, err := os.ReadFile(filePath)
+                   if err != nil {
+                       return fmt.Errorf("failed to read plan content file: %w", err)
+                   }
+                   planContent = string(content)
+               }
+           }
+           if planContent == "" {
+               return fmt.Errorf("PLAN_CONTENT is required")
+           }
+           fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent)
+       }
+
+       // ... 既存の処理 ...
    }
    ```
 
