@@ -556,21 +556,24 @@ func setupRouterForUS4(
 	autoMergeService services.AutoMergeService,
 	mergeChecker services.MergeConditionChecker,
 	githubClient *clients.Client,
-) *gin.Engine {
+) (*gin.Engine, *clients.GitHubClient) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(middleware.ErrorHandler())
 
-	// Status webhook handler
-	if autoMergeService == nil {
-		autoMergeService = &verifyingAutoMergeService{}
+	issueAutoMergeService := autoMergeService
+	statusAutoMergeService := autoMergeService
+	if statusAutoMergeService == nil {
+		statusAutoMergeService = &verifyingAutoMergeService{}
 	}
+
+	// Status webhook handler
 	stDeps := handlers.StatusDeps{
 		Logger:           logger,
 		PullRequestRepo:  prRepo,
 		CIStatusRepo:     ciRepo,
 		MergeChecker:     mergeChecker,
-		AutoMergeService: autoMergeService,
+		AutoMergeService: statusAutoMergeService,
 	}
 	r.POST("/webhooks/status",
 		middleware.VerifyWebhookSignature(),
@@ -613,7 +616,7 @@ func setupRouterForUS4(
 					PullRequestRepository:    prRepo,
 					ReviewFeedbackRepository: rfRepo,
 					MergeConditionChecker:    mergeChecker,
-					AutoMergeService:         autoMergeService,
+					AutoMergeService:         issueAutoMergeService,
 				}
 				handlers.HandlePullRequestReviewCommentWithDeps(c, prrcDeps)
 			case "issue_comment":
@@ -632,7 +635,7 @@ func setupRouterForUS4(
 					AgentTypeDetectorService:  services.NewAgentTypeDetectorService(logger),
 					StateMachine:              services.NewAgentRunStateMachine(repositories.NewAgentRunRepository(config.GetDB()), logger),
 					GitHubNotificationService: &tu.StubGitHubNotification{},
-					AutoMergeService:          autoMergeService, // Inject mock AutoMergeService for testing
+					AutoMergeService:          issueAutoMergeService, // Inject mock AutoMergeService for testing
 				}
 				handlers.HandleIssueCommentWithDeps(c, icDeps)
 			default:
@@ -641,7 +644,7 @@ func setupRouterForUS4(
 		},
 	)
 
-	return r
+	return r, appGitHubClient
 }
 
 // Test_ApproveAndCISuccess_TriggersAutoMerge tests the auto-merge flow when
@@ -713,7 +716,10 @@ func Test_ApproveAndCISuccess_TriggersAutoMerge(t *testing.T) {
 	autoMergeService := &verifyingAutoMergeService{}
 
 	// Setup router
-	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker, githubClient)
+	router, appClient := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker, githubClient)
+	t.Cleanup(func() {
+		handlers.SetAppGitHubClient(appClient)
+	})
 
 	// Send check_suite webhook (for CI aggregation)
 	checkSuiteDeliveryID := "delivery-check-suite-1"
@@ -840,7 +846,10 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	autoMergeService := &verifyingAutoMergeService{}
 
 	// Setup router
-	router := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker, githubClient)
+	router, appClient := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, autoMergeService, mergeChecker, githubClient)
+	t.Cleanup(func() {
+		handlers.SetAppGitHubClient(appClient)
+	})
 
 	// Send issue_comment webhook with Codex approval comment
 	// Note: PRs are issues in GitHub, so issue number should be the same as PR number
@@ -857,4 +866,84 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	owner := "test-org"
 	repoName := "test-repo"
 	assertAutoMergeCalled(t, autoMergeService, owner, repoName, pr.Number)
+}
+
+// Test_CodexApprovalComment_SkipsAutoMergeWithoutAppClient ensures that when the GitHub App client
+// is unavailable (and no AutoMergeService is injected), the handler skips auto-merge gracefully.
+func Test_CodexApprovalComment_SkipsAutoMergeWithoutAppClient(t *testing.T) {
+	// Setup environment
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
+	defer os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+
+	logger := zaptest.NewLogger(t)
+	config.SetLoggerForTesting(logger)
+
+	db := setupDBForUS4(t)
+	defer func() {
+		sqlDB, _ := db.DB()
+		if sqlDB != nil {
+			_ = sqlDB.Close()
+		}
+		config.ResetDBForTesting()
+	}()
+	config.SetDBForTesting(db)
+
+	// Create test data
+	repo := "test-org/test-repo"
+	branch := "feature/issue-123"
+	headSHA := "abc123def"
+	_, pr := createPRWithIssue(t, db, repo, branch, true, 123)
+
+	// Create CI success status
+	checkSuiteID := int64(1001)
+	createCISuccess(t, db, pr.ID, checkSuiteID, headSHA)
+
+	// Setup repositories
+	prRepo := repositories.NewPullRequestRepository(db)
+	ciRepo := repositories.NewCIStatusRepositoryWithDB(db)
+	rfRepo := repositories.NewReviewFeedbackRepositoryWithDB(db)
+
+	// Setup mock GitHub client for MergeConflictDetector
+	mergeableTrue := true
+	cleanState := "clean"
+	mockGH := &mockGitHubClient{
+		headSHA:        headSHA,
+		mergeable:      &mergeableTrue,
+		mergeableState: &cleanState,
+	}
+
+	// Create a mock *github.Client wrapped in clients.Client
+	mockTransport := &mockPRTransport{
+		headSHA:        headSHA,
+		mergeable:      true,
+		mergeableState: "clean",
+	}
+	mockHTTPClient := &http.Client{Transport: mockTransport}
+	mockGitHubRawClient := github.NewClient(mockHTTPClient)
+	githubClient := clients.NewFromGitHub(mockGitHubRawClient, logger)
+
+	// Setup services
+	ciProvider := &dbCIProviderForTest{prRepo: prRepo, ciRepo: ciRepo, logger: logger}
+	codexChecker := &dbCodexCheckerForTest{prRepo: prRepo, rfRepo: rfRepo, logger: logger}
+	conflictDetector := services.NewMergeConflictDetector(githubClient, logger)
+	mergeChecker := services.NewMergeConditionChecker(ciProvider, codexChecker, conflictDetector, logger)
+
+	// Setup router without injecting an AutoMergeService and force appGitHubClient to nil
+	router, appClient := setupRouterForUS4(logger, prRepo, ciRepo, rfRepo, mockGH, nil, mergeChecker, githubClient)
+	defer handlers.SetAppGitHubClient(appClient)
+	handlers.SetAppGitHubClient(nil)
+
+	// Send issue_comment webhook with Codex approval comment
+	commentDeliveryID := "delivery-issue-comment-no-app"
+	commentBody := "Codex Review: Didn't find any major issues."
+	commentUser := "chatgpt-codex-connector[bot]"
+	commentID := 1001
+	commentUserID := int64(199175422)
+	w := sendIssueCommentWebhook(t, router, "test-secret", commentDeliveryID, "created", commentBody, commentUser, commentID, pr.Number, repo, commentUserID, "open")
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "mergeable_auto_merge_skipped", resp["status"])
+	assert.Equal(t, "app_github_client_unavailable", resp["reason"])
 }

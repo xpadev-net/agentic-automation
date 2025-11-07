@@ -474,16 +474,24 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				var am services.AutoMergeService
 				if deps.AutoMergeService != nil {
 					am = deps.AutoMergeService
-				} else {
-					if appGitHubClient == nil {
-						logger.Error("appGitHubClient is nil and AutoMergeService not injected",
-							zap.String("delivery_id", deliveryID),
-						)
-						c.Error(errors.New("appGitHubClient is nil and AutoMergeService not injected"))
-						return
-					}
+				} else if appGitHubClient != nil {
 					am = services.NewAutoMergeService(appGitHubClient, logger)
 				}
+
+				if am == nil {
+					logger.Info("auto-merge skipped (GitHub App client unavailable)",
+						zap.String("delivery_id", deliveryID),
+						zap.Int("pr_number", pr.Number),
+						zap.String("repo", payload.Repository.FullName),
+					)
+					c.JSON(http.StatusOK, gin.H{
+						"status":      "mergeable_auto_merge_skipped",
+						"delivery_id": deliveryID,
+						"reason":      "app_github_client_unavailable",
+					})
+					return
+				}
+
 				mergeRes, mergeErr := am.AttemptAutoMerge(ctx, owner, repo, pr.Number)
 				if mergeErr != nil {
 					// 予期しないエラー（通常はAutoMergeResultで返却される）
