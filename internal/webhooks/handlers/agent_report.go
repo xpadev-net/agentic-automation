@@ -512,6 +512,51 @@ func HandleAgentReport(c *gin.Context) {
 	}
 
 	// ------------------------------------------------------------------
+	// Plan execution completion: Update ReviewFeedback status (Phase 5)
+	// Update ReviewFeedback.PlanCreationStatus when plan execution completes
+	// ------------------------------------------------------------------
+	if agentRun.ExecutionMode == "plan_execution" {
+		if agentRun.ReviewFeedbackID != nil {
+			reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
+			reviewFeedback, err := reviewFeedbackRepo.FindByID(*agentRun.ReviewFeedbackID)
+			if err != nil {
+				logger.Warn("Failed to load ReviewFeedback for plan execution completion",
+					zap.Error(err),
+					zap.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
+					zap.Int("agent_run_id", agentRunID),
+				)
+			} else if reviewFeedback != nil {
+				previousStatus := reviewFeedback.PlanCreationStatus
+				if req.Status == "succeeded" {
+					reviewFeedback.PlanCreationStatus = "executed"
+					logger.Info("Plan execution completed successfully",
+						zap.Int("review_feedback_id", reviewFeedback.ID),
+						zap.Int("agent_run_id", agentRunID),
+						zap.String("previous_status", previousStatus),
+					)
+				} else if req.Status == "failed" {
+					reviewFeedback.PlanCreationStatus = "created"
+					logger.Warn("Plan execution failed, reverting to 'created' state for retry",
+						zap.Int("review_feedback_id", reviewFeedback.ID),
+						zap.Int("agent_run_id", agentRunID),
+						zap.String("previous_status", previousStatus),
+						zap.String("error_message", finalErrorMessage),
+					)
+				}
+
+				if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+					logger.Warn("Failed to update ReviewFeedback after plan execution",
+						zap.Error(err),
+						zap.Int("review_feedback_id", reviewFeedback.ID),
+						zap.Int("agent_run_id", agentRunID),
+						zap.String("status", req.Status),
+					)
+				}
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// Retry progress notification (US3 T102)
 	// Post retry progress comment on failure when retry_count < 50
 	// ------------------------------------------------------------------
