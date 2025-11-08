@@ -171,6 +171,18 @@ func (r *ReviewFeedbackRepository) UpdateStatus(id int, status string) error {
 	return r.db.Model(&models.ReviewFeedback{}).Where("id = ?", id).Update("status", status).Error
 }
 
+// UpdatePlanCreationStatus updates only the plan_creation_status field of a review feedback record
+func (r *ReviewFeedbackRepository) UpdatePlanCreationStatus(id int, planCreationStatus string) error {
+	if id <= 0 {
+		return errors.New("id must be greater than 0")
+	}
+	if planCreationStatus == "" {
+		return errors.New("planCreationStatus cannot be empty")
+	}
+
+	return r.db.Model(&models.ReviewFeedback{}).Where("id = ?", id).Update("plan_creation_status", planCreationStatus).Error
+}
+
 // CreateRequestedReview creates a new ReviewFeedback record for a review request.
 // This is used when a review is requested (e.g., PR created or @codex review comment detected).
 //
@@ -295,4 +307,74 @@ func (r *ReviewFeedbackRepository) UpdateToReceived(id int, content string, appr
 	}
 
 	return r.db.Save(existing).Error
+}
+
+// TryStartPlanCreation atomically updates PlanCreationStatus from 'pending' to 'creating'.
+// This prevents concurrent plan creation attempts for the same ReviewFeedback.
+//
+// Usage:
+//   - startPlanCreationIfNeeded: Use to atomically claim plan creation for a ReviewFeedback
+//
+// Parameters:
+//   - reviewFeedbackID: ReviewFeedback ID (must be > 0)
+//   - planAgentRunID: AgentRun ID for the plan creation (must be > 0)
+//
+// Returns:
+//   - bool: true if the update succeeded (status was 'pending' and is now 'creating'), false if it was already 'creating' or in another state
+//   - error: Error if the database operation fails
+func (r *ReviewFeedbackRepository) TryStartPlanCreation(reviewFeedbackID int, planAgentRunID int) (bool, error) {
+	if reviewFeedbackID <= 0 {
+		return false, errors.New("reviewFeedbackID must be greater than 0")
+	}
+	if planAgentRunID <= 0 {
+		return false, errors.New("planAgentRunID must be greater than 0")
+	}
+
+	// Atomically update PlanCreationStatus from 'pending' to 'creating'
+	// This uses optimistic locking - only one concurrent request will succeed
+	result := r.db.Model(&models.ReviewFeedback{}).
+		Where("id = ? AND plan_creation_status = ?", reviewFeedbackID, "pending").
+		Updates(map[string]interface{}{
+			"plan_creation_status": "creating",
+			"plan_agent_run_id":    planAgentRunID,
+		})
+
+	if result.Error != nil {
+		return false, result.Error
+	}
+
+	// If rows affected is 1, the update succeeded (status was 'pending')
+	// If rows affected is 0, the status was already 'creating' or in another state
+	return result.RowsAffected == 1, nil
+}
+
+// FindNewerReviewsByPRID finds review feedbacks for a PR that have a GitHubCommentID
+// greater than the specified afterCommentID.
+//
+// Usage:
+//   - handlePlanCreated: Check for new reviews after plan creation completes
+//
+// Parameters:
+//   - prID: PullRequest ID (must be > 0)
+//   - afterCommentID: GitHub comment ID to compare against (must be > 0)
+//
+// Returns:
+//   - []*models.ReviewFeedback: List of newer review feedbacks, ordered by created_at DESC
+//   - error: Error if query fails
+func (r *ReviewFeedbackRepository) FindNewerReviewsByPRID(prID int, afterCommentID int64) ([]*models.ReviewFeedback, error) {
+	if prID <= 0 {
+		return nil, errors.New("prID must be greater than 0")
+	}
+	if afterCommentID <= 0 {
+		return nil, errors.New("afterCommentID must be greater than 0")
+	}
+
+	var feedbacks []*models.ReviewFeedback
+	err := r.db.Where("pr_id = ? AND github_comment_id > ? AND github_comment_id IS NOT NULL", prID, afterCommentID).
+		Order("created_at DESC").
+		Find(&feedbacks).Error
+	if err != nil {
+		return nil, err
+	}
+	return feedbacks, nil
 }

@@ -796,6 +796,58 @@ func startPlanCreationIfNeeded(
 		}
 	}
 
+	// Atomically update PlanCreationStatus from 'pending' to 'creating'
+	// This prevents concurrent plan creation attempts
+	started, err := reviewFeedbackRepo.TryStartPlanCreation(reviewFeedback.ID, planAgentRun.ID)
+	if err != nil {
+		logger.Error("Failed to atomically start plan creation",
+			zap.Error(err),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.Int("agent_run_id", planAgentRun.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return nil, err
+	}
+
+	if !started {
+		// Another process already started plan creation
+		// Reload the review feedback to get the current state
+		updatedFeedback, err := reviewFeedbackRepo.FindByID(reviewFeedback.ID)
+		if err != nil {
+			logger.Error("Failed to reload review feedback after concurrent update",
+				zap.Error(err),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, err
+		}
+		if updatedFeedback == nil {
+			logger.Warn("Review feedback not found after concurrent update",
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return &planCreationResult{
+				Status:           "skipped_feedback_missing",
+				ReviewFeedbackID: reviewFeedback.ID,
+			}, nil
+		}
+
+		logger.Info("Plan creation already started by another process",
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("plan_creation_status", updatedFeedback.PlanCreationStatus),
+			zap.String("delivery_id", deliveryID),
+		)
+		result := &planCreationResult{
+			Status:            "skipped_plan_already_started",
+			ReviewFeedbackID:  updatedFeedback.ID,
+			PlanCreationState: updatedFeedback.PlanCreationStatus,
+		}
+		if updatedFeedback.PlanAgentRunID != nil {
+			result.PlanAgentRunID = *updatedFeedback.PlanAgentRunID
+		}
+		return result, nil
+	}
+
 	jobService := deps.KubernetesJobService
 	if jobService == nil {
 		kubernetesClient, clientErr := clients.NewKubernetesClient(logger)
@@ -804,6 +856,13 @@ func startPlanCreationIfNeeded(
 				zap.Error(clientErr),
 				zap.String("delivery_id", deliveryID),
 			)
+			// Rollback: reset PlanCreationStatus to 'pending'
+			if rollbackErr := reviewFeedbackRepo.UpdatePlanCreationStatus(reviewFeedback.ID, "pending"); rollbackErr != nil {
+				logger.Error("Failed to rollback plan creation status after Kubernetes client error",
+					zap.Error(rollbackErr),
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+				)
+			}
 			return nil, clientErr
 		}
 		jobService = services.NewKubernetesJobService(kubernetesClient, logger)
@@ -822,6 +881,13 @@ func startPlanCreationIfNeeded(
 			zap.Int("review_feedback_id", reviewFeedback.ID),
 			zap.String("delivery_id", deliveryID),
 		)
+		// Rollback: reset PlanCreationStatus to 'pending'
+		if rollbackErr := reviewFeedbackRepo.UpdatePlanCreationStatus(reviewFeedback.ID, "pending"); rollbackErr != nil {
+			logger.Error("Failed to rollback plan creation status after job creation failure",
+				zap.Error(rollbackErr),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+			)
+		}
 		return nil, jobErr
 	}
 
@@ -832,17 +898,6 @@ func startPlanCreationIfNeeded(
 		zap.String("branch_name", branchName),
 		zap.Bool("job_created", job != nil),
 	)
-
-	reviewFeedback.PlanCreationStatus = "creating"
-	reviewFeedback.PlanAgentRunID = &planAgentRun.ID
-	if updateErr := reviewFeedbackRepo.Update(reviewFeedback); updateErr != nil {
-		logger.Error("Failed to update review feedback plan creation status",
-			zap.Error(updateErr),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("delivery_id", deliveryID),
-		)
-		return nil, updateErr
-	}
 
 	result := &planCreationResult{
 		Status:            "started",
