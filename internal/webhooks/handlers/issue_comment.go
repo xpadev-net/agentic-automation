@@ -952,76 +952,32 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Step 12: Create plan creation AgentRun for /run-agent trigger
+	// Step 12: Reuse middleware-created AgentRun for plan creation
 	// For /run-agent from issue, we first create a plan, then execute it
-	planCreationIdempotencyKey := fmt.Sprintf("plan_creation:issue:%d:%s", issue.ID, deliveryID)
+	// Reuse the agentRun created by idempotency middleware to avoid leaving orphaned queued records
+	planAgentRun := agentRun
 
-	// Check if plan creation AgentRun already exists
-	planAgentRun, err := agentRunRepo.GetByIDempotencyKey(planCreationIdempotencyKey)
-	if err != nil && !stderrors.Is(err, gorm.ErrRecordNotFound) {
-		logger.Error("Failed to check for existing plan creation AgentRun",
+	// Configure agentRun for plan creation mode
+	planAgentRun.ExecutionMode = "plan_creation"
+	planAgentRun.AgentType = agentType
+	planAgentRun.ReviewFeedbackID = nil // No review feedback for issue-triggered plan creation
+
+	// Update agentRun with plan creation configuration
+	if err := agentRunRepo.Update(planAgentRun); err != nil {
+		logger.Error("Failed to update AgentRun for plan creation",
 			zap.Error(err),
-			zap.String("idempotency_key", planCreationIdempotencyKey),
+			zap.Int("agent_run_id", planAgentRun.ID),
 			zap.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
 	}
 
-	if planAgentRun != nil && planAgentRun.State != "queued" {
-		logger.Info("Plan creation AgentRun already processed",
-			zap.Int("plan_agent_run_id", planAgentRun.ID),
-			zap.String("state", planAgentRun.State),
-			zap.String("delivery_id", deliveryID),
-		)
-		c.JSON(http.StatusOK, gin.H{
-			"status":            "already_processed",
-			"plan_agent_run_id": planAgentRun.ID,
-			"state":             planAgentRun.State,
-			"delivery_id":       deliveryID,
-		})
-		return
-	}
-
-	// Create new plan creation AgentRun if it doesn't exist
-	if planAgentRun == nil {
-		planAgentRun = &models.AgentRun{
-			IdempotencyKey:   planCreationIdempotencyKey,
-			IssueID:          issue.ID,
-			PRID:             nil, // No PR for issue-triggered plan creation
-			State:            "queued",
-			AgentType:        agentType,
-			ExecutionMode:    "plan_creation",
-			ReviewFeedbackID: nil, // No review feedback for issue-triggered plan creation
-			RetryCount:       0,
-		}
-
-		createdRun, isNew, err := agentRunRepo.CreateOrGet(planCreationIdempotencyKey, planAgentRun)
-		if err != nil {
-			logger.Error("Failed to create plan creation AgentRun",
-				zap.Error(err),
-				zap.String("idempotency_key", planCreationIdempotencyKey),
-				zap.String("delivery_id", deliveryID),
-			)
-			c.Error(err)
-			return
-		}
-		planAgentRun = createdRun
-
-		if isNew {
-			logger.Info("Plan creation AgentRun created",
-				zap.Int("plan_agent_run_id", planAgentRun.ID),
-				zap.String("idempotency_key", planCreationIdempotencyKey),
-				zap.String("delivery_id", deliveryID),
-			)
-		} else {
-			logger.Info("Plan creation AgentRun already exists (idempotency)",
-				zap.Int("plan_agent_run_id", planAgentRun.ID),
-				zap.String("idempotency_key", planCreationIdempotencyKey),
-				zap.String("delivery_id", deliveryID),
-			)
-		}
-	}
+	logger.Info("Reusing middleware-created AgentRun for plan creation",
+		zap.Int("plan_agent_run_id", planAgentRun.ID),
+		zap.String("idempotency_key", planAgentRun.IdempotencyKey),
+		zap.String("delivery_id", deliveryID),
+	)
 
 	// Build structured input JSON for plan creation (schema v1)
 	inputPayload := map[string]any{
