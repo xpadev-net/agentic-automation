@@ -200,6 +200,7 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 					if isProcessingPiece {
 						// processing 系は改行しない（同一行で進捗を更新）
 						fmt.Fprintf(os.Stderr, "%s", formatted)
+						os.Stderr.Sync()
 						inProgress = true
 					} else {
 						if inProgress {
