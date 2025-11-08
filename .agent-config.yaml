@@ -9,7 +9,7 @@ hooks:
       timeout: "3m"
       required: true
     - name: "fmt"
-      command: "test -z $(gofmt -l .)"
+      command: "test -z \"$(gofmt -l .)\""
       description: "Check Go code formatting"
       timeout: "1m"
       required: true
