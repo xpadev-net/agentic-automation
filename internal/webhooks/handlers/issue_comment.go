@@ -955,7 +955,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Step 12: Create plan creation AgentRun for /run-agent trigger
 	// For /run-agent from issue, we first create a plan, then execute it
 	planCreationIdempotencyKey := fmt.Sprintf("plan_creation:issue:%d:%s", issue.ID, deliveryID)
-	
+
 	// Check if plan creation AgentRun already exists
 	planAgentRun, err := agentRunRepo.GetByIDempotencyKey(planCreationIdempotencyKey)
 	if err != nil && !stderrors.Is(err, gorm.ErrRecordNotFound) {
@@ -996,7 +996,8 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			RetryCount:       0,
 		}
 
-		if err := agentRunRepo.Create(planAgentRun); err != nil {
+		createdRun, isNew, err := agentRunRepo.CreateOrGet(planCreationIdempotencyKey, planAgentRun)
+		if err != nil {
 			logger.Error("Failed to create plan creation AgentRun",
 				zap.Error(err),
 				zap.String("idempotency_key", planCreationIdempotencyKey),
@@ -1005,12 +1006,21 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			c.Error(err)
 			return
 		}
+		planAgentRun = createdRun
 
-		logger.Info("Plan creation AgentRun created",
-			zap.Int("plan_agent_run_id", planAgentRun.ID),
-			zap.String("idempotency_key", planCreationIdempotencyKey),
-			zap.String("delivery_id", deliveryID),
-		)
+		if isNew {
+			logger.Info("Plan creation AgentRun created",
+				zap.Int("plan_agent_run_id", planAgentRun.ID),
+				zap.String("idempotency_key", planCreationIdempotencyKey),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else {
+			logger.Info("Plan creation AgentRun already exists (idempotency)",
+				zap.Int("plan_agent_run_id", planAgentRun.ID),
+				zap.String("idempotency_key", planCreationIdempotencyKey),
+				zap.String("delivery_id", deliveryID),
+			)
+		}
 	}
 
 	// Build structured input JSON for plan creation (schema v1)
