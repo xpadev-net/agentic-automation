@@ -796,12 +796,13 @@ func startPlanCreationIfNeeded(
 		}
 	}
 
-	// Atomically update PlanCreationStatus from 'pending' to 'creating'
-	// This prevents concurrent plan creation attempts
-	started, err := reviewFeedbackRepo.TryStartPlanCreation(reviewFeedback.ID, planAgentRun.ID)
+	// Atomically update PlanCreationStatus from 'pending' to 'creating' for this PR
+	// This prevents concurrent plan creation attempts for the same PR across multiple ReviewFeedback records
+	started, err := reviewFeedbackRepo.TryStartPlanCreationForPR(pr.ID, reviewFeedback.ID, planAgentRun.ID)
 	if err != nil {
-		logger.Error("Failed to atomically start plan creation",
+		logger.Error("Failed to atomically start plan creation for PR",
 			zap.Error(err),
+			zap.Int("pr_id", pr.ID),
 			zap.Int("review_feedback_id", reviewFeedback.ID),
 			zap.Int("agent_run_id", planAgentRun.ID),
 			zap.String("delivery_id", deliveryID),
@@ -810,8 +811,46 @@ func startPlanCreationIfNeeded(
 	}
 
 	if !started {
-		// Another process already started plan creation
-		// Reload the review feedback to get the current state
+		// Another process already started plan creation for this PR, or this ReviewFeedback is not in 'pending' state
+		// Check if there's an existing plan creation in progress for this PR
+		allFeedbacks, err := reviewFeedbackRepo.FindByPRID(pr.ID)
+		if err != nil {
+			logger.Error("Failed to load review feedbacks for PR after concurrent update",
+				zap.Error(err),
+				zap.Int("pr_id", pr.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, err
+		}
+
+		// Find the ReviewFeedback that is currently in 'creating' state
+		var creatingFeedback *models.ReviewFeedback
+		for _, fb := range allFeedbacks {
+			if fb.PlanCreationStatus == "creating" {
+				creatingFeedback = fb
+				break
+			}
+		}
+
+		if creatingFeedback != nil {
+			logger.Info("Plan creation already started for this PR by another ReviewFeedback",
+				zap.Int("pr_id", pr.ID),
+				zap.Int("current_review_feedback_id", reviewFeedback.ID),
+				zap.Int("creating_review_feedback_id", creatingFeedback.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			result := &planCreationResult{
+				Status:            "skipped_plan_already_started",
+				ReviewFeedbackID:  reviewFeedback.ID,
+				PlanCreationState: "creating",
+			}
+			if creatingFeedback.PlanAgentRunID != nil {
+				result.PlanAgentRunID = *creatingFeedback.PlanAgentRunID
+			}
+			return result, nil
+		}
+
+		// Reload the current review feedback to get the current state
 		updatedFeedback, err := reviewFeedbackRepo.FindByID(reviewFeedback.ID)
 		if err != nil {
 			logger.Error("Failed to reload review feedback after concurrent update",
