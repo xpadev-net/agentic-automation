@@ -375,51 +375,33 @@ func (r *ReviewFeedbackRepository) TryStartPlanCreationForPR(prID int, reviewFee
 		return false, errors.New("planAgentRunID must be greater than 0")
 	}
 
-	// Use a transaction to atomically check and update
-	var success bool
-	err := r.db.Transaction(func(tx *gorm.DB) error {
-		// First, check if any other ReviewFeedback for this PR is already in 'creating' status
-		var count int64
-		err := tx.Model(&models.ReviewFeedback{}).
-			Where("pr_id = ? AND plan_creation_status = ? AND id != ?", prID, "creating", reviewFeedbackID).
-			Count(&count).Error
-		if err != nil {
-			return err
-		}
+	// Use a single atomic UPDATE statement with NOT EXISTS subquery to prevent race conditions.
+	// This ensures that only one transaction can succeed when multiple try to update concurrently.
+	// The UPDATE is atomic at the database level - if two transactions execute simultaneously,
+	// only one will succeed because the NOT EXISTS check is evaluated atomically with the update.
+	query := `UPDATE review_feedback 
+SET plan_creation_status = 'creating', plan_agent_run_id = ?
+WHERE id = ? 
+  AND pr_id = ?
+  AND plan_creation_status = 'pending'
+  AND NOT EXISTS (
+    SELECT 1 FROM review_feedback rf2 
+    WHERE rf2.pr_id = ? 
+      AND rf2.plan_creation_status = 'creating' 
+      AND rf2.id != ?
+  )`
 
-		if count > 0 {
-			// Another ReviewFeedback for this PR is already in 'creating' status
-			success = false
-			return nil
-		}
-
-		// Atomically update PlanCreationStatus from 'pending' to 'creating'
-		// Only update if:
-		// 1. The ReviewFeedback belongs to the specified PR
-		// 2. The ReviewFeedback's status is 'pending'
-		// 3. No other ReviewFeedback for the same PR is in 'creating' status (checked above)
-		result := tx.Model(&models.ReviewFeedback{}).
-			Where("id = ? AND pr_id = ? AND plan_creation_status = ?", reviewFeedbackID, prID, "pending").
-			Updates(map[string]interface{}{
-				"plan_creation_status": "creating",
-				"plan_agent_run_id":    planAgentRunID,
-			})
-
-		if result.Error != nil {
-			return result.Error
-		}
-
-		// If rows affected is 1, the update succeeded
-		// If rows affected is 0, either the status was not 'pending' or another process already started plan creation
-		success = result.RowsAffected == 1
-		return nil
-	})
-
-	if err != nil {
-		return false, err
+	result := r.db.Exec(query, planAgentRunID, reviewFeedbackID, prID, prID, reviewFeedbackID)
+	if result.Error != nil {
+		return false, result.Error
 	}
 
-	return success, nil
+	// If rows affected is 1, the update succeeded (no other ReviewFeedback for the PR is 'creating' and this one was 'pending')
+	// If rows affected is 0, either:
+	// - The status was not 'pending'
+	// - Another ReviewFeedback for the same PR is already in 'creating' status
+	// - Another process already started plan creation
+	return result.RowsAffected == 1, nil
 }
 
 // FindNewerReviewsByPRID finds review feedbacks for a PR that have a GitHubCommentID
