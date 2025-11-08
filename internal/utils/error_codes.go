@@ -249,12 +249,21 @@ func GetUserMessage(err error, lang string) string {
 		return ""
 	}
 
-	code := GetErrorCode(err)
-	if code == "" {
-		// For non-coded errors, return the error message itself
+	// Check if it's a coded error (CodedError, GitHubError, or CircularDependencyError)
+	var codedErr *CodedError
+	var githubErr *clients.GitHubError
+	var circularErr *services.CircularDependencyError
+
+	isCodedError := errors.As(err, &codedErr) ||
+		errors.As(err, &githubErr) ||
+		errors.As(err, &circularErr)
+
+	// For non-coded errors, return the error message itself
+	if !isCodedError {
 		return err.Error()
 	}
 
+	code := GetErrorCode(err)
 	msg, ok := errorMessages[code]
 	if !ok {
 		return err.Error()
