@@ -847,11 +847,14 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 		)
 	}
 
-	// Check for duplicate plan report only if ReviewFeedback exists
+	// Check for duplicate plan report
+	// For review-triggered: check ReviewFeedback.PlanCreationStatus
+	// For issue-triggered: check AgentRun.State
 	if reviewFeedback != nil {
+		// Review-triggered plan creation: check ReviewFeedback status
 		currentStatus := strings.TrimSpace(reviewFeedback.PlanCreationStatus)
 		if currentStatus == "created" || currentStatus == "rejected" || currentStatus == "executed" {
-			logger.Info("Duplicate plan report ignored",
+			logger.Info("Duplicate plan report ignored (review-triggered)",
 				zap.Int("agent_run_id", agentRunID),
 				zap.Int("review_feedback_id", reviewFeedback.ID),
 				zap.String("plan_creation_status", currentStatus),
@@ -862,6 +865,33 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 				"plan_agent_run_id":      reviewFeedback.PlanAgentRunID,
 				"execution_agent_run_id": reviewFeedback.ExecutionAgentRunID,
 			})
+			return
+		}
+	} else {
+		// Issue-triggered plan creation: check AgentRun state
+		if agentRun.State == "succeeded" || agentRun.State == "failed" {
+			logger.Info("Duplicate plan report ignored (issue-triggered)",
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("state", agentRun.State),
+			)
+
+			// Find existing execution AgentRun if exists
+			var executionAgentRunID *int
+			var executionRuns []*models.AgentRun
+			if err := db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
+				agentRun.IssueID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+				executionAgentRunID = &executionRuns[0].ID
+			}
+
+			response := gin.H{
+				"message":         "Plan report already processed",
+				"plan_agent_run_id": agentRunID,
+				"state":           agentRun.State,
+			}
+			if executionAgentRunID != nil {
+				response["execution_agent_run_id"] = *executionAgentRunID
+			}
+			c.JSON(http.StatusOK, response)
 			return
 		}
 	}
