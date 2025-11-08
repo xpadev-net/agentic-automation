@@ -258,9 +258,12 @@ func HandleAgentReport(c *gin.Context) {
 				zap.Int("agent_run_id", agentRunID),
 				zap.String("path", c.Request.URL.Path),
 			)
+			code := utils.ERR_AGENT_RUN_NOT_FOUND
+			userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
 			c.JSON(http.StatusNotFound, gin.H{
-				"error":   "AGENT_RUN_NOT_FOUND",
-				"message": "AgentRun with ID " + idStr + " not found",
+				"error":      string(code),
+				"message":    userMsg,
+				"error_code": string(code),
 			})
 			return
 		}
@@ -270,9 +273,12 @@ func HandleAgentReport(c *gin.Context) {
 			zap.Int("agent_run_id", agentRunID),
 			zap.String("path", c.Request.URL.Path),
 		)
+		code := utils.ERR_INTERNAL_SERVER_ERROR
+		userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to retrieve agent run",
+			"error":      string(code),
+			"message":    userMsg,
+			"error_code": string(code),
 		})
 		return
 	}
@@ -1144,9 +1150,12 @@ func handlePlanRejected(
 	logger := config.GetLogger()
 	reason := strings.TrimSpace(req.RejectionReason)
 	if reason == "" {
+		code := utils.ERR_VALIDATION_MISSING_REQUIRED
+		userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "INVALID_REJECTION_REASON",
-			"message": "rejection_reason is required when status is plan_rejected",
+			"error":      string(code),
+			"message":    userMsg,
+			"error_code": string(code),
 		})
 		return
 	}

@@ -257,7 +257,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		logger.Warn("Missing X-GitHub-Delivery header",
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("missing X-GitHub-Delivery header"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_MISSING_DELIVERY, "missing X-GitHub-Delivery header", nil))
 		return
 	}
 
@@ -271,7 +271,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("webhook payload not found in context"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_PAYLOAD_NOT_FOUND, "webhook payload not found in context", nil))
 		return
 	}
 
@@ -281,7 +281,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("invalid webhook payload type"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid webhook payload type", nil))
 		return
 	}
 
@@ -392,7 +392,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					zap.String("full_name", payload.Repository.FullName),
 					zap.String("delivery_id", deliveryID),
 				)
-				c.Error(errors.New("invalid repository full name format"))
+				c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 				return
 			}
 			owner := repoParts[0]
@@ -405,7 +405,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					logger.Error("GitHub App client not available",
 						zap.String("delivery_id", deliveryID),
 					)
-					c.Error(errors.New("github client not provided"))
+					c.Error(utils.NewCodedError(utils.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 					return
 				}
 				rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
@@ -656,7 +656,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			zap.String("full_name", payload.Repository.FullName),
 			zap.String("delivery_id", deliveryID),
 		)
-		c.Error(errors.New("invalid repository full name format"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 		return
 	}
 	owner := repoParts[0]
@@ -666,7 +666,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	if authorizationService == nil || issueContextService == nil || githubNotificationService == nil {
 		if deps.GitHubClient == nil {
 			if appGitHubClient == nil {
-				c.Error(errors.New("github client not provided"))
+				c.Error(utils.NewCodedError(utils.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 				return
 			}
 			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
@@ -768,7 +768,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				zap.Int("issue_number", payload.Issue.Number),
 				zap.String("repo", payload.Repository.FullName),
 			)
-			c.Error(errors.New("agent run not found for delivery ID"))
+			c.Error(utils.NewCodedError(utils.ERR_AGENT_RUN_NOT_FOUND, "agent run not found for delivery ID", nil))
 			return
 		}
 		logger.Error("Failed to get AgentRun by idempotency key",
@@ -811,7 +811,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				zap.Int("issue_number", payload.Issue.Number),
 				zap.String("repo", payload.Repository.FullName),
 			)
-			c.Error(errors.New("issue not found"))
+			c.Error(utils.NewCodedError(utils.ERR_DB_RECORD_NOT_FOUND, "issue not found", nil))
 			return
 		}
 		logger.Error("Failed to get Issue",

@@ -2,16 +2,19 @@ package services
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
+	"agentic-automation/internal/utils"
 	"go.uber.org/zap"
 )
 
 // ErrBlockedDependencies は、未クローズの依存Issueが存在する場合に返される業務エラー。
-var ErrBlockedDependencies = errors.New("blocked dependencies found")
+var ErrBlockedDependencies = &utils.CodedError{
+	Code:    utils.ERR_DEPENDENCY_BLOCKED,
+	Message: "blocked dependencies found",
+}
 
 // ValidationResult は、依存関係バリデーションの結果。
 type ValidationResult struct {

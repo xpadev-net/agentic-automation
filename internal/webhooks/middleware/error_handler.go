@@ -3,6 +3,7 @@ package middleware
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/utils"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -48,14 +49,21 @@ func handlePanic(c *gin.Context, logger *zap.Logger) {
 		// Determine if this is a webhook request
 		isWebhook := isWebhookRequest(c)
 
+		code := utils.ERR_INTERNAL_SERVER_ERROR
+		userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
+
 		// For webhook requests, always return 200 OK to prevent GitHub retries
 		if isWebhook {
 			c.JSON(http.StatusOK, gin.H{
-				"error": "internal server error",
+				"error":      string(code),
+				"message":    userMsg,
+				"error_code": string(code),
 			})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "internal server error",
+				"error":      string(code),
+				"message":    userMsg,
+				"error_code": string(code),
 			})
 		}
 
@@ -72,9 +80,14 @@ func handleError(c *gin.Context, logger *zap.Logger) {
 		return
 	}
 
+	code := utils.GetErrorCode(err.Err)
+	userMsg := utils.GetUserMessage(err.Err, "ja")
+	statusCode := utils.GetHTTPStatusCode(code)
+
 	// Log error details
 	logger.Error("Request error",
 		zap.Error(err.Err),
+		zap.String("error_code", string(code)),
 		zap.String("path", c.Request.URL.Path),
 		zap.String("method", c.Request.Method),
 		zap.String("type", fmt.Sprintf("%v", err.Type)),
@@ -83,18 +96,17 @@ func handleError(c *gin.Context, logger *zap.Logger) {
 	// Determine if this is a webhook request
 	isWebhook := isWebhookRequest(c)
 
-	// Get HTTP status code based on error type
-	statusCode := getHTTPStatusCode(err.Err)
+	response := gin.H{
+		"error":      string(code),
+		"message":    userMsg,
+		"error_code": string(code),
+	}
 
 	// For webhook requests, always return 200 OK to prevent GitHub retries
 	if isWebhook {
-		c.JSON(http.StatusOK, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusOK, response)
 	} else {
-		c.JSON(statusCode, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(statusCode, response)
 	}
 
 	c.Abort()
@@ -106,27 +118,9 @@ func isWebhookRequest(c *gin.Context) bool {
 }
 
 // getHTTPStatusCode returns the appropriate HTTP status code for an error
+// This function is kept for backward compatibility but is now deprecated.
+// Use utils.GetHTTPStatusCode(utils.GetErrorCode(err)) instead.
 func getHTTPStatusCode(err error) int {
-	// Check if it's a GitHubError
-	if ghErr, ok := err.(*clients.GitHubError); ok {
-		if ghErr.ErrorResponse != nil && ghErr.ErrorResponse.Response != nil {
-			statusCode := ghErr.ErrorResponse.Response.StatusCode
-			// For GitHub API errors, use the status code if it's a server error (5xx)
-			// Otherwise use 502 Bad Gateway or 503 Service Unavailable
-			if statusCode >= 500 {
-				return statusCode
-			}
-			// For rate limits and other client errors, return 502 Bad Gateway
-			if statusCode == http.StatusTooManyRequests || statusCode == http.StatusForbidden {
-				return http.StatusBadGateway
-			}
-			// For other 4xx errors from GitHub API, return 502 Bad Gateway
-			return http.StatusBadGateway
-		}
-		// GitHubError without ErrorResponse (e.g., rate limit message only)
-		return http.StatusServiceUnavailable
-	}
-
-	// Default to 500 Internal Server Error for unknown errors
-	return http.StatusInternalServerError
+	code := utils.GetErrorCode(err)
+	return utils.GetHTTPStatusCode(code)
 }

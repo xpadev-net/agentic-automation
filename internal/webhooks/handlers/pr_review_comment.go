@@ -109,7 +109,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		logger.Warn("Missing X-GitHub-Delivery header",
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("missing X-GitHub-Delivery header"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_MISSING_DELIVERY, "missing X-GitHub-Delivery header", nil))
 		return
 	}
 
@@ -120,7 +120,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("webhook payload not found in context"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_PAYLOAD_NOT_FOUND, "webhook payload not found in context", nil))
 		return
 	}
 
@@ -130,7 +130,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("invalid webhook payload type"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid webhook payload type", nil))
 		return
 	}
 
@@ -205,7 +205,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			zap.String("full_name", payload.Repository.FullName),
 			zap.String("delivery_id", deliveryID),
 		)
-		c.Error(errors.New("invalid repository full name format"))
+		c.Error(utils.NewCodedError(utils.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 		return
 	}
 	owner := repoParts[0]
@@ -293,7 +293,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			logger.Error("GitHub App client not available",
 				zap.String("delivery_id", deliveryID),
 			)
-			c.Error(errors.New("github client not provided"))
+			c.Error(utils.NewCodedError(utils.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 			return
 		}
 		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
