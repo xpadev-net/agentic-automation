@@ -25,16 +25,16 @@ type AgentRun struct {
 	// PlanAgentRunID links execution runs to their plan creation run (for issue-triggered plans).
 	PlanAgentRunID *int           `gorm:"column:plan_agent_run_id;index"`
 	Input          datatypes.JSON `gorm:"type:json"`
-	Output           datatypes.JSON `gorm:"type:json"`
-	RetryCount       int            `gorm:"column:retry_count;default:0"`
-	ErrorMessage     *string        `gorm:"column:error_message;type:text"`
-	CommitSHA        *string        `gorm:"column:commit_sha;size:191"`
-	S3SessionKey     *string        `gorm:"column:s3_session_key;size:512"`
-	SessionSavedAt   *time.Time     `gorm:"column:session_saved_at"`
-	StartedAt        *time.Time     `gorm:"column:started_at"`
-	CompletedAt      *time.Time     `gorm:"column:completed_at"`
-	CreatedAt        time.Time      `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt        time.Time      `gorm:"column:updated_at;autoUpdateTime"`
+	Output         datatypes.JSON `gorm:"type:json"`
+	RetryCount     int            `gorm:"column:retry_count;default:0"`
+	ErrorMessage   *string        `gorm:"column:error_message;type:text"`
+	CommitSHA      *string        `gorm:"column:commit_sha;size:191"`
+	S3SessionKey   *string        `gorm:"column:s3_session_key;size:512"`
+	SessionSavedAt *time.Time     `gorm:"column:session_saved_at"`
+	StartedAt      *time.Time     `gorm:"column:started_at"`
+	CompletedAt    *time.Time     `gorm:"column:completed_at"`
+	CreatedAt      time.Time      `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt      time.Time      `gorm:"column:updated_at;autoUpdateTime"`
 
 	// Relationships
 	Issue         Issue          `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
