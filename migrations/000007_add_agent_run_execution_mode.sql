@@ -4,9 +4,16 @@
 
 -- +goose Up
 
+-- Add execution_mode column after agent_type
 ALTER TABLE agent_runs
-    ADD COLUMN execution_mode ENUM('normal','plan_creation','plan_execution') NOT NULL DEFAULT 'normal' AFTER agent_type,
-    ADD COLUMN plan_content TEXT NULL AFTER execution_mode,
+    ADD COLUMN execution_mode ENUM('normal','plan_creation','plan_execution') NOT NULL DEFAULT 'normal' AFTER agent_type;
+
+-- Add plan_content column after execution_mode
+ALTER TABLE agent_runs
+    ADD COLUMN plan_content TEXT NULL AFTER execution_mode;
+
+-- Add review_feedback_id column after plan_content
+ALTER TABLE agent_runs
     ADD COLUMN review_feedback_id INT NULL AFTER plan_content;
 
 CREATE INDEX idx_agent_runs_review_feedback_id ON agent_runs(review_feedback_id);

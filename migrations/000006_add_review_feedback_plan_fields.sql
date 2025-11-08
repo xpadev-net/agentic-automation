@@ -4,10 +4,20 @@
 
 -- +goose Up
 
+-- Add plan_creation_status column after github_comment_id
 ALTER TABLE review_feedback
-    ADD COLUMN plan_creation_status ENUM('pending','creating','created','rejected','executed') NOT NULL DEFAULT 'pending' AFTER github_comment_id,
-    ADD COLUMN plan_content TEXT NULL AFTER plan_creation_status,
-    ADD COLUMN plan_agent_run_id INT NULL AFTER plan_content,
+    ADD COLUMN plan_creation_status ENUM('pending','creating','created','rejected','executed') NOT NULL DEFAULT 'pending' AFTER github_comment_id;
+
+-- Add plan_content column after plan_creation_status
+ALTER TABLE review_feedback
+    ADD COLUMN plan_content TEXT NULL AFTER plan_creation_status;
+
+-- Add plan_agent_run_id column after plan_content
+ALTER TABLE review_feedback
+    ADD COLUMN plan_agent_run_id INT NULL AFTER plan_content;
+
+-- Add execution_agent_run_id column after plan_agent_run_id
+ALTER TABLE review_feedback
     ADD COLUMN execution_agent_run_id INT NULL AFTER plan_agent_run_id;
 
 CREATE INDEX idx_review_feedback_plan_agent_run_id ON review_feedback(plan_agent_run_id);
