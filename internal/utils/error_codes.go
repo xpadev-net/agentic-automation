@@ -4,9 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-
-	"agentic-automation/internal/clients"
-	"agentic-automation/internal/services"
 )
 
 // ErrorCode represents a standardized error code for the system
@@ -249,14 +246,24 @@ func GetUserMessage(err error, lang string) string {
 		return ""
 	}
 
-	// Check if it's a coded error (CodedError, GitHubError, or CircularDependencyError)
-	var codedErr *CodedError
-	var githubErr *clients.GitHubError
-	var circularErr *services.CircularDependencyError
-
-	isCodedError := errors.As(err, &codedErr) ||
-		errors.As(err, &githubErr) ||
-		errors.As(err, &circularErr)
+	// Check if it's a coded error by checking the error chain
+	isCodedError := false
+	currentErr := err
+	for currentErr != nil {
+		if _, ok := currentErr.(*CodedError); ok {
+			isCodedError = true
+			break
+		}
+		if _, ok := currentErr.(GitHubErrorCodeExtractor); ok {
+			isCodedError = true
+			break
+		}
+		if _, ok := currentErr.(CircularDependencyErrorCodeExtractor); ok {
+			isCodedError = true
+			break
+		}
+		currentErr = errors.Unwrap(currentErr)
+	}
 
 	// For non-coded errors, return the error message itself
 	if !isCodedError {
@@ -291,22 +298,25 @@ func GetErrorCode(err error) ErrorCode {
 		return ""
 	}
 
-	// Check if it's a CodedError
-	var codedErr *CodedError
-	if errors.As(err, &codedErr) {
-		return codedErr.Code
-	}
+	// Check error chain recursively
+	for err != nil {
+		// Check if it's a CodedError
+		if codedErr, ok := err.(*CodedError); ok {
+			return codedErr.Code
+		}
 
-	// Check if it's a GitHubError
-	var githubErr *clients.GitHubError
-	if errors.As(err, &githubErr) {
-		return githubErr.GetErrorCode()
-	}
+		// Check if it implements GitHubErrorCodeExtractor
+		if extractor, ok := err.(GitHubErrorCodeExtractor); ok {
+			return extractor.GetErrorCode()
+		}
 
-	// Check if it's a CircularDependencyError
-	var circularErr *services.CircularDependencyError
-	if errors.As(err, &circularErr) {
-		return circularErr.GetErrorCode()
+		// Check if it implements CircularDependencyErrorCodeExtractor
+		if extractor, ok := err.(CircularDependencyErrorCodeExtractor); ok {
+			return extractor.GetErrorCode()
+		}
+
+		// Unwrap and continue
+		err = errors.Unwrap(err)
 	}
 
 	// Default to unexpected error

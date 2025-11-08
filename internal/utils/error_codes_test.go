@@ -261,9 +261,10 @@ func TestGetErrorCode(t *testing.T) {
 	}
 }
 
-// TestGetErrorCode_GitHubError tests that GetErrorCode works with GitHubError
-// This test requires importing the clients package, which would cause a circular dependency
-// So we test the interface implementation separately
+// TestGetErrorCode_WithExtractors tests that GetErrorCode works with error code extractors
+// This test uses mock implementations to verify the interface-based approach
+// Note: Test files (_test.go) are treated as separate packages, so importing clients/services
+// here does not cause circular dependency issues in the main package
 func TestGetErrorCode_WithExtractors(t *testing.T) {
 	// Test with a mock GitHubErrorCodeExtractor
 	mockGitHubErr := &mockGitHubError{code: ERR_GITHUB_NOT_FOUND}
@@ -280,6 +281,11 @@ func TestGetErrorCode_WithExtractors(t *testing.T) {
 	}
 }
 
+// TestGetErrorCode_WithWrappedErrors tests that GetErrorCode works with wrapped errors
+// This test uses actual types from clients and services packages to verify
+// that the interface-based approach works correctly with real implementations.
+// Note: Test files (_test.go) are treated as separate packages, so importing clients/services
+// here does not cause circular dependency issues in the main package.
 func TestGetErrorCode_WithWrappedErrors(t *testing.T) {
 	// Test with wrapped GitHubError
 	githubErr := &clients.GitHubError{Code: ERR_GITHUB_NOT_FOUND}
