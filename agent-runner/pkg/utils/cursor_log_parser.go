@@ -332,6 +332,7 @@ func ParseAndFormatOutput(output string) {
 			if isProcessingPiece {
 				// processing 系は改行しない（同一行で進捗を更新）
 				fmt.Fprintf(os.Stderr, "%s", formatted)
+				os.Stderr.Sync()
 				inProgress = true
 			} else {
 				// 非 processing が来たら、直前が進捗連結中なら行を確定

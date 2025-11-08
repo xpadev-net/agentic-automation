@@ -67,6 +67,7 @@ func setupDB(t *testing.T) *gorm.DB {
             execution_mode TEXT DEFAULT 'normal',
             plan_content TEXT,
             review_feedback_id INTEGER,
+			plan_agent_run_id INTEGER,
             input TEXT,
             output TEXT,
             retry_count INTEGER DEFAULT 0,
@@ -191,16 +192,19 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	var resp map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Equal(t, "processed", resp["status"])
+	// For issue-triggered plan creation, status is "plan_creation_started"
+	assert.Equal(t, "plan_creation_started", resp["status"])
 
-	// Verify AgentRun state and fetch ID for labels
+	// Verify plan creation AgentRun state
 	arRepo := repositories.NewAgentRunRepository(db)
-	run, err := arRepo.GetByIDempotencyKey(deliveryID)
+	planAgentRunID := int(resp["plan_agent_run_id"].(float64))
+	run, err := arRepo.GetByID(planAgentRunID)
 	require.NoError(t, err)
 	assert.Equal(t, "started", run.State)
 
 	// Verify K8s Job created with expected name
-	expectedJobName := fmt.Sprintf("agent-runner-%d", run.ID)
+	// For plan creation, job name includes reviewFeedbackID (0 for issue-triggered)
+	expectedJobName := fmt.Sprintf("agent-runner-%d-plan-0", run.ID)
 	job, err := k8s.GetJob(req.Context(), expectedJobName)
 	require.NoError(t, err)
 	assert.Equal(t, expectedJobName, job.Name)

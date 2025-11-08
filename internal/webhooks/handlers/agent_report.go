@@ -71,6 +71,15 @@ func (e *planRejectionHTTPError) Error() string {
 	return e.message
 }
 
+// executionRunAlreadyExistsError indicates that an execution run already exists for a plan
+type executionRunAlreadyExistsError struct {
+	executionRunID int
+}
+
+func (e *executionRunAlreadyExistsError) Error() string {
+	return fmt.Sprintf("execution run already exists: %d", e.executionRunID)
+}
+
 var (
 	kubernetesClientFactory     = clients.NewKubernetesClient
 	kubernetesJobServiceFactory = services.NewKubernetesJobService
@@ -856,55 +865,148 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 		return
 	}
 
-	if agentRun.ReviewFeedbackID == nil {
-		logger.Error("Plan report received without associated review feedback",
+	// ReviewFeedbackID can be nil for issue-triggered plan creation (e.g., /run-agent from issue)
+	var reviewFeedback *models.ReviewFeedback
+	if agentRun.ReviewFeedbackID != nil {
+		reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
+		var err error
+		reviewFeedback, err = reviewFeedbackRepo.FindByID(*agentRun.ReviewFeedbackID)
+		if err != nil {
+			logger.Error("Failed to load ReviewFeedback for plan report",
+				zap.Error(err),
+				zap.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to load review feedback",
+			})
+			return
+		}
+		if reviewFeedback == nil {
+			logger.Warn("ReviewFeedback not found for plan report",
+				zap.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
+			)
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":   "REVIEW_FEEDBACK_NOT_FOUND",
+				"message": "ReviewFeedback not found",
+			})
+			return
+		}
+	} else {
+		logger.Info("Plan report received without ReviewFeedbackID (issue-triggered plan creation)",
 			zap.Int("agent_run_id", agentRunID),
 		)
-		c.JSON(http.StatusConflict, gin.H{
-			"error":   "REVIEW_FEEDBACK_NOT_LINKED",
-			"message": "Plan report missing associated review feedback",
-		})
-		return
 	}
 
-	reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
-	reviewFeedback, err := reviewFeedbackRepo.FindByID(*agentRun.ReviewFeedbackID)
-	if err != nil {
-		logger.Error("Failed to load ReviewFeedback for plan report",
-			zap.Error(err),
-			zap.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to load review feedback",
-		})
-		return
-	}
-	if reviewFeedback == nil {
-		logger.Warn("ReviewFeedback not found for plan report",
-			zap.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
-		)
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "REVIEW_FEEDBACK_NOT_FOUND",
-			"message": "ReviewFeedback not found",
-		})
-		return
-	}
+	// Check for duplicate plan report
+	// For review-triggered: check ReviewFeedback.PlanCreationStatus
+	// For issue-triggered: check AgentRun.State
+	// Store original state for rollback purposes (for issue-triggered plan creation)
+	var originalStateForRollback string
+	if reviewFeedback != nil {
+		// Review-triggered plan creation: check ReviewFeedback status
+		currentStatus := strings.TrimSpace(reviewFeedback.PlanCreationStatus)
+		if currentStatus == "created" || currentStatus == "rejected" || currentStatus == "executed" {
+			logger.Info("Duplicate plan report ignored (review-triggered)",
+				zap.Int("agent_run_id", agentRunID),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.String("plan_creation_status", currentStatus),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"message":                "Plan report already processed",
+				"plan_creation_status":   currentStatus,
+				"plan_agent_run_id":      reviewFeedback.PlanAgentRunID,
+				"execution_agent_run_id": reviewFeedback.ExecutionAgentRunID,
+			})
+			return
+		}
+		// For review-triggered, use current state for rollback
+		originalStateForRollback = agentRun.State
+	} else {
+		// Issue-triggered plan creation: check for duplicate reports by checking existing execution runs
+		// State transition will happen inside handlePlanCreated after execution run is created
+		if req.Status == "plan_created" {
+			// Save original state for rollback purposes
+			originalStateForRollback = agentRun.State
 
-	currentStatus := strings.TrimSpace(reviewFeedback.PlanCreationStatus)
-	if currentStatus == "created" || currentStatus == "rejected" || currentStatus == "executed" {
-		logger.Info("Duplicate plan report ignored",
-			zap.Int("agent_run_id", agentRunID),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("plan_creation_status", currentStatus),
-		)
-		c.JSON(http.StatusOK, gin.H{
-			"message":                "Plan report already processed",
-			"plan_creation_status":   currentStatus,
-			"plan_agent_run_id":      reviewFeedback.PlanAgentRunID,
-			"execution_agent_run_id": reviewFeedback.ExecutionAgentRunID,
-		})
-		return
+			// Check if plan creation run is already succeeded or failed (duplicate report)
+			if agentRun.State == "succeeded" || agentRun.State == "failed" {
+				// Find existing execution AgentRun if exists (linked to current plan creation run)
+				var executionRuns []*models.AgentRun
+				if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+					executionRun := executionRuns[0]
+					// Check execution run state: if queued or failed, allow retry of execution setup
+					if executionRun.State == "queued" || executionRun.State == "failed" {
+						logger.Info("Plan run succeeded but execution run is queued/failed, retrying execution setup",
+							zap.Int("agent_run_id", agentRunID),
+							zap.Int("execution_agent_run_id", executionRun.ID),
+							zap.String("execution_state", executionRun.State),
+						)
+						// Continue processing to retry execution setup (don't treat as duplicate)
+						// The execution run will be reused and execution setup will be retried
+					} else {
+						// Execution run is started or succeeded, treat as successfully processed
+						logger.Info("Duplicate plan report ignored (issue-triggered, execution already in progress)",
+							zap.Int("agent_run_id", agentRunID),
+							zap.String("state", agentRun.State),
+							zap.Int("execution_agent_run_id", executionRun.ID),
+							zap.String("execution_state", executionRun.State),
+						)
+						response := gin.H{
+							"message":                "Plan report already processed",
+							"plan_agent_run_id":      agentRunID,
+							"state":                  agentRun.State,
+							"execution_agent_run_id": executionRun.ID,
+						}
+						c.JSON(http.StatusOK, response)
+						return
+					}
+				} else {
+					// No execution run found, treat as duplicate
+					logger.Info("Duplicate plan report ignored (issue-triggered, state check, no execution run)",
+						zap.Int("agent_run_id", agentRunID),
+						zap.String("state", agentRun.State),
+					)
+					response := gin.H{
+						"message":           "Plan report already processed",
+						"plan_agent_run_id": agentRunID,
+						"state":             agentRun.State,
+					}
+					c.JSON(http.StatusOK, response)
+					return
+				}
+			}
+		} else {
+			// For plan_rejected, check state normally (no atomic transition needed)
+			if agentRun.State == "succeeded" || agentRun.State == "failed" {
+				logger.Info("Duplicate plan report ignored (issue-triggered)",
+					zap.Int("agent_run_id", agentRunID),
+					zap.String("state", agentRun.State),
+				)
+
+				// Find existing execution AgentRun if exists (linked to current plan creation run)
+				var executionAgentRunID *int
+				var executionRuns []*models.AgentRun
+				if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+					executionAgentRunID = &executionRuns[0].ID
+				}
+
+				response := gin.H{
+					"message":           "Plan report already processed",
+					"plan_agent_run_id": agentRunID,
+					"state":             agentRun.State,
+				}
+				if executionAgentRunID != nil {
+					response["execution_agent_run_id"] = *executionAgentRunID
+				}
+				c.JSON(http.StatusOK, response)
+				return
+			}
+			// For plan_rejected, use current state for rollback
+			originalStateForRollback = agentRun.State
+		}
 	}
 
 	sanitizedLogs := sanitizePlanLogs(req.Logs)
@@ -912,9 +1014,15 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 	agentRun.AgentType = req.AgentType
 	agentRun.CompletedAt = &now
 
+	// Get ReviewFeedbackRepository only if needed
+	var reviewFeedbackRepo *repositories.ReviewFeedbackRepository
+	if reviewFeedback != nil {
+		reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
+	}
+
 	switch req.Status {
 	case "plan_created":
-		handlePlanCreated(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db)
+		handlePlanCreated(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db, originalStateForRollback)
 	case "plan_rejected":
 		handlePlanRejected(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db)
 	default:
@@ -939,6 +1047,7 @@ func handlePlanCreated(
 	agentRunRepo repositories.AgentRunRepository,
 	reviewFeedbackRepo *repositories.ReviewFeedbackRepository,
 	db *gorm.DB,
+	originalState string,
 ) {
 	logger := config.GetLogger()
 	planContent := strings.TrimSpace(req.PlanContent)
@@ -953,21 +1062,97 @@ func handlePlanCreated(
 	sanitizedFullPlan := utils.SanitizeUTF8(planContent)
 	planContentForStorage := utils.TruncateWithSuffix(sanitizedFullPlan, utils.GetDBOutputLimitBytes(), "… [truncated]")
 
-	previousStatus := reviewFeedback.PlanCreationStatus
-	previousPlanContent := reviewFeedback.PlanContent
-	previousPlanAgentRunID := reviewFeedback.PlanAgentRunID
-	previousExecutionID := reviewFeedback.ExecutionAgentRunID
+	// Check if state is already "succeeded" (atomic transition already completed)
+	// In this case, only update plan content and skip execution AgentRun creation
+	if agentRun.State == "succeeded" {
+		logger.Info("Plan creation AgentRun already succeeded, updating plan content only",
+			zap.Int("agent_run_id", agentRunID),
+		)
+
+		// Update plan content and output only
+		agentRun.PlanContent = &planContentForStorage
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+		if err := agentRunRepo.Update(agentRun); err != nil {
+			logger.Error("Failed to update plan content for already-succeeded AgentRun",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to update plan content",
+			})
+			return
+		}
+
+		// For issue-triggered plan creation, check if execution AgentRun already exists (linked to current plan creation run)
+		if reviewFeedback == nil {
+			var executionRuns []*models.AgentRun
+			if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+				agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+				logger.Info("Execution AgentRun already exists, skipping creation",
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.Int("execution_agent_run_id", executionRuns[0].ID),
+				)
+				c.JSON(http.StatusOK, gin.H{
+					"message":                "Plan content updated, execution already in progress",
+					"plan_agent_run_id":      agentRunID,
+					"execution_agent_run_id": executionRuns[0].ID,
+				})
+				return
+			}
+		}
+
+		// For review-triggered plan creation, execution AgentRun should already exist
+		if reviewFeedback != nil && reviewFeedback.ExecutionAgentRunID != nil {
+			logger.Info("Execution AgentRun already exists for review-triggered plan",
+				zap.Int("plan_agent_run_id", agentRunID),
+				zap.Int("execution_agent_run_id", *reviewFeedback.ExecutionAgentRunID),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"message":                "Plan content updated, execution already in progress",
+				"plan_agent_run_id":      agentRunID,
+				"execution_agent_run_id": *reviewFeedback.ExecutionAgentRunID,
+			})
+			return
+		}
+
+		// If we reach here, state is succeeded but no execution AgentRun exists
+		// This should not happen in normal flow, but we'll continue with execution creation
+		logger.Warn("Plan creation AgentRun is succeeded but no execution AgentRun found, proceeding with creation",
+			zap.Int("agent_run_id", agentRunID),
+		)
+	}
+
+	// Prepare rollback functions (only for reviewFeedback if it exists)
+	var previousStatus string
+	var previousPlanContent *string
+	var previousPlanAgentRunID *int
+	var previousExecutionID *int
+	if reviewFeedback != nil {
+		previousStatus = reviewFeedback.PlanCreationStatus
+		previousPlanContent = reviewFeedback.PlanContent
+		previousPlanAgentRunID = reviewFeedback.PlanAgentRunID
+		previousExecutionID = reviewFeedback.ExecutionAgentRunID
+	}
+
 	previousAgentRunPlan := agentRun.PlanContent
-	previousAgentRunState := agentRun.State
+	// Use originalState parameter for rollback (captured before atomic state transition)
+	// If originalState is empty, fall back to current state (should not happen in normal flow)
+	previousAgentRunState := originalState
+	if previousAgentRunState == "" {
+		previousAgentRunState = agentRun.State
+	}
 	previousAgentRunError := agentRun.ErrorMessage
 	previousAgentRunOutput := agentRun.Output
 	previousAgentRunCompletedAt := agentRun.CompletedAt
 
 	restoreReviewAndAgent := func() {
-		reviewFeedback.PlanCreationStatus = previousStatus
-		reviewFeedback.PlanContent = previousPlanContent
-		reviewFeedback.PlanAgentRunID = previousPlanAgentRunID
-		reviewFeedback.ExecutionAgentRunID = previousExecutionID
+		if reviewFeedback != nil {
+			reviewFeedback.PlanCreationStatus = previousStatus
+			reviewFeedback.PlanContent = previousPlanContent
+			reviewFeedback.PlanAgentRunID = previousPlanAgentRunID
+			reviewFeedback.ExecutionAgentRunID = previousExecutionID
+		}
 
 		agentRun.PlanContent = previousAgentRunPlan
 		agentRun.State = previousAgentRunState
@@ -987,7 +1172,7 @@ func handlePlanCreated(
 				)
 			}
 		}
-		if reviewFeedbackUpdated {
+		if reviewFeedbackUpdated && reviewFeedback != nil && reviewFeedbackRepo != nil {
 			if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
 				logger.Warn("Failed to rollback ReviewFeedback plan state",
 					zap.Error(err),
@@ -997,44 +1182,61 @@ func handlePlanCreated(
 		}
 	}
 
+	// Update plan creation AgentRun
 	planRunID := agentRunID
-	reviewFeedback.PlanContent = &planContentForStorage
-	reviewFeedback.PlanCreationStatus = "creating"
-	reviewFeedback.PlanAgentRunID = &planRunID
-
 	agentRun.PlanContent = &planContentForStorage
-	agentRun.State = "succeeded"
-	agentRun.ErrorMessage = nil
-	agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+	// For issue-triggered plan creation, state transition will happen in transaction after execution run is created
+	// For review-triggered plan creation, set state to "succeeded" here
+	if reviewFeedback == nil {
+		// Issue-triggered: state will be updated in transaction
+		// Only update plan content and output for now
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+		// Don't update state yet - will be done in transaction
+	} else {
+		// Review-triggered: update state here
+		if agentRun.State != "succeeded" {
+			agentRun.State = "succeeded"
+		}
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
 
-	if err := agentRunRepo.Update(agentRun); err != nil {
-		logger.Error("Failed to update plan creation AgentRun",
-			zap.Error(err),
-			zap.Int("agent_run_id", agentRunID),
-		)
-		restoreReviewAndAgent()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to update plan agent run",
-		})
-		return
+		if err := agentRunRepo.Update(agentRun); err != nil {
+			logger.Error("Failed to update plan creation AgentRun",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+			)
+			restoreReviewAndAgent()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to update plan agent run",
+			})
+			return
+		}
+		agentRunUpdated = true
 	}
-	agentRunUpdated = true
 
-	if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-		logger.Error("Failed to update ReviewFeedback with plan content",
-			zap.Error(err),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-		)
-		restoreReviewAndAgent()
-		persistRollback()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to update review feedback",
-		})
-		return
+	// Update ReviewFeedback only if it exists (for review-triggered plan creation)
+	if reviewFeedback != nil && reviewFeedbackRepo != nil {
+		reviewFeedback.PlanContent = &planContentForStorage
+		reviewFeedback.PlanCreationStatus = "creating"
+		reviewFeedback.PlanAgentRunID = &planRunID
+
+		if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+			logger.Error("Failed to update ReviewFeedback with plan content",
+				zap.Error(err),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+			)
+			restoreReviewAndAgent()
+			persistRollback()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to update review feedback",
+			})
+			return
+		}
+		reviewFeedbackUpdated = true
 	}
-	reviewFeedbackUpdated = true
 
 	// Initialize Kubernetes client early for job cleanup (Issue #222)
 	// This ensures cleanup happens even if early return occurs due to new reviews
@@ -1087,166 +1289,183 @@ func handlePlanCreated(
 		return
 	}
 
-	prRepo := repositories.NewPullRequestRepository(db)
-	pr, err := prRepo.FindByID(reviewFeedback.PRID)
-	if err != nil {
-		logger.Error("Failed to load PullRequest for plan execution",
-			zap.Error(err),
-			zap.Int("pr_id", reviewFeedback.PRID),
-		)
-		restoreReviewAndAgent()
-		persistRollback()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to load pull request",
-		})
-		return
-	}
-
-	// Check for new reviews BEFORE creating execution job
-	// If new reviews exist, invalidate the current plan and recreate it with updated context
-	// This prevents executing a stale plan that has been invalidated by new review input
-	if reviewFeedback.GitHubCommentID != nil && *reviewFeedback.GitHubCommentID > 0 {
-		newerReviews, err := reviewFeedbackRepo.FindNewerReviewsByPRID(reviewFeedback.PRID, *reviewFeedback.GitHubCommentID)
+	// Handle review-triggered plan creation (with ReviewFeedback)
+	if reviewFeedback != nil && reviewFeedbackRepo != nil {
+		prRepo := repositories.NewPullRequestRepository(db)
+		pr, err := prRepo.FindByID(reviewFeedback.PRID)
 		if err != nil {
-			logger.Warn("Failed to check for newer reviews before execution job creation",
+			logger.Error("Failed to load PullRequest for plan execution",
 				zap.Error(err),
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.Int64("github_comment_id", *reviewFeedback.GitHubCommentID),
+				zap.Int("pr_id", reviewFeedback.PRID),
 			)
-			// Continue with execution job creation even if check fails
-		} else if len(newerReviews) > 0 {
-			logger.Info("New reviews found before execution job creation, recreating plan with updated context",
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.Int("newer_reviews_count", len(newerReviews)),
-				zap.Int64("original_comment_id", *reviewFeedback.GitHubCommentID),
-			)
-
-			// Aggregate new review contents
-			var aggregatedContent strings.Builder
-			if reviewFeedback.Content != nil && *reviewFeedback.Content != "" {
-				aggregatedContent.WriteString(*reviewFeedback.Content)
-			}
-			for _, newReview := range newerReviews {
-				if newReview.Content != nil && *newReview.Content != "" {
-					if aggregatedContent.Len() > 0 {
-						aggregatedContent.WriteString("\n\n--- Additional Review ---\n\n")
-					}
-					aggregatedContent.WriteString(*newReview.Content)
-				}
-			}
-
-			// Update reviewFeedback with aggregated content and reset plan status
-			aggregatedContentStr := aggregatedContent.String()
-			reviewFeedback.Content = &aggregatedContentStr
-			reviewFeedback.PlanCreationStatus = "pending"
-			reviewFeedback.PlanContent = nil
-			reviewFeedback.PlanAgentRunID = nil
-			reviewFeedback.ExecutionAgentRunID = nil
-
-			// Update to the latest GitHubCommentID
-			latestReview := newerReviews[0] // Already ordered by created_at DESC
-			if latestReview.GitHubCommentID != nil {
-				reviewFeedback.GitHubCommentID = latestReview.GitHubCommentID
-			}
-
-			if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-				logger.Error("Failed to update review feedback for plan recreation",
-					zap.Error(err),
-					zap.Int("review_feedback_id", reviewFeedback.ID),
-				)
-				// Continue with normal response even if update fails
-			} else {
-				// Trigger plan recreation by calling startPlanCreationIfNeeded
-				// Create minimal deps structure for this
-				planDeps := PullRequestReviewCommentDeps{
-					Logger:                   logger,
-					ReviewFeedbackRepository: reviewFeedbackRepo,
-				}
-
-				// Use the aggregated content as the comment body
-				commentBody := aggregatedContentStr
-				if commentBody == "" {
-					commentBody = "Review feedback"
-				}
-
-				// Use the latest comment ID or a placeholder
-				commentID := int64(0)
-				if latestReview.GitHubCommentID != nil {
-					commentID = *latestReview.GitHubCommentID
-				}
-
-				// Trigger plan recreation (async - don't wait for result)
-				go func() {
-					// Create a new context for the background goroutine
-					bgCtx := context.Background()
-					_, planErr := startPlanCreationIfNeeded(
-						bgCtx,
-						planDeps,
-						logger,
-						pr,
-						commentBody,
-						commentID,
-						"", // commentUserLogin - not critical for recreation
-						0,  // commentUserID - not critical for recreation
-						fmt.Sprintf("plan-recreation-%d", reviewFeedback.ID),
-					)
-					if planErr != nil {
-						logger.Error("Failed to recreate plan with new reviews",
-							zap.Error(planErr),
-							zap.Int("review_feedback_id", reviewFeedback.ID),
-						)
-					} else {
-						logger.Info("Plan recreation triggered successfully",
-							zap.Int("review_feedback_id", reviewFeedback.ID),
-						)
-					}
-				}()
-			}
-
-			// Early return: skip execution job creation since plan is being recreated
-			c.JSON(http.StatusOK, gin.H{
-				"message":      "Plan invalidated by new reviews, recreating plan",
-				"agent_run_id": agentRunID,
+			restoreReviewAndAgent()
+			persistRollback()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to load pull request",
 			})
 			return
 		}
-	}
 
-	executionPRID := reviewFeedback.PRID
-	executionRun := &models.AgentRun{
-		IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", reviewFeedback.ID, agentRunID, time.Now().UnixNano()),
-		IssueID:          agentRun.IssueID,
-		PRID:             &executionPRID,
-		State:            "queued",
-		AgentType:        req.AgentType,
-		ExecutionMode:    "plan_execution",
-		PlanContent:      &planContentForStorage,
-		ReviewFeedbackID: &reviewFeedback.ID,
-	}
+		// Check for new reviews BEFORE creating execution job
+		// If new reviews exist, invalidate the current plan and recreate it with updated context
+		// This prevents executing a stale plan that has been invalidated by new review input
+		if reviewFeedback.GitHubCommentID != nil && *reviewFeedback.GitHubCommentID > 0 {
+			newerReviews, err := reviewFeedbackRepo.FindNewerReviewsByPRID(reviewFeedback.PRID, *reviewFeedback.GitHubCommentID)
+			if err != nil {
+				logger.Warn("Failed to check for newer reviews before execution job creation",
+					zap.Error(err),
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+					zap.Int64("github_comment_id", *reviewFeedback.GitHubCommentID),
+				)
+				// Continue with execution job creation even if check fails
+			} else if len(newerReviews) > 0 {
+				logger.Info("New reviews found before execution job creation, recreating plan with updated context",
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+					zap.Int("newer_reviews_count", len(newerReviews)),
+					zap.Int64("original_comment_id", *reviewFeedback.GitHubCommentID),
+				)
 
-	if err := db.Create(executionRun).Error; err != nil {
-		logger.Error("Failed to create execution AgentRun",
-			zap.Error(err),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-		)
-		restoreReviewAndAgent()
-		persistRollback()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to create execution agent run",
-		})
-		return
-	}
+				// Aggregate new review contents
+				var aggregatedContent strings.Builder
+				if reviewFeedback.Content != nil && *reviewFeedback.Content != "" {
+					aggregatedContent.WriteString(*reviewFeedback.Content)
+				}
+				for _, newReview := range newerReviews {
+					if newReview.Content != nil && *newReview.Content != "" {
+						if aggregatedContent.Len() > 0 {
+							aggregatedContent.WriteString("\n\n--- Additional Review ---\n\n")
+						}
+						aggregatedContent.WriteString(*newReview.Content)
+					}
+				}
 
-	branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
-	if trimmed := strings.TrimSpace(pr.Branch); trimmed != "" {
-		branchName = trimmed
-	}
+				// Update reviewFeedback with aggregated content and reset plan status
+				aggregatedContentStr := aggregatedContent.String()
+				reviewFeedback.Content = &aggregatedContentStr
+				reviewFeedback.PlanCreationStatus = "pending"
+				reviewFeedback.PlanContent = nil
+				reviewFeedback.PlanAgentRunID = nil
+				reviewFeedback.ExecutionAgentRunID = nil
 
-	// Reuse existing Kubernetes client if available, otherwise initialize new one for plan execution
-	if kubernetesClient == nil {
-		kubernetesClient, err = kubernetesClientFactory(logger)
+				// Update to the latest GitHubCommentID
+				latestReview := newerReviews[0] // Already ordered by created_at DESC
+				if latestReview.GitHubCommentID != nil {
+					reviewFeedback.GitHubCommentID = latestReview.GitHubCommentID
+				}
+
+				if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+					logger.Error("Failed to update review feedback for plan recreation",
+						zap.Error(err),
+						zap.Int("review_feedback_id", reviewFeedback.ID),
+					)
+					// Continue with normal response even if update fails
+				} else {
+					// Trigger plan recreation by calling startPlanCreationIfNeeded
+					// Create minimal deps structure for this
+					planDeps := PullRequestReviewCommentDeps{
+						Logger:                   logger,
+						ReviewFeedbackRepository: reviewFeedbackRepo,
+					}
+
+					// Use the aggregated content as the comment body
+					commentBody := aggregatedContentStr
+					if commentBody == "" {
+						commentBody = "Review feedback"
+					}
+
+					// Use the latest comment ID or a placeholder
+					commentID := int64(0)
+					if latestReview.GitHubCommentID != nil {
+						commentID = *latestReview.GitHubCommentID
+					}
+
+					// Trigger plan recreation (async - don't wait for result)
+					go func() {
+						// Create a new context for the background goroutine
+						bgCtx := context.Background()
+						_, planErr := startPlanCreationIfNeeded(
+							bgCtx,
+							planDeps,
+							logger,
+							pr,
+							commentBody,
+							commentID,
+							"", // commentUserLogin - not critical for recreation
+							0,  // commentUserID - not critical for recreation
+							fmt.Sprintf("plan-recreation-%d", reviewFeedback.ID),
+						)
+						if planErr != nil {
+							logger.Error("Failed to recreate plan with new reviews",
+								zap.Error(planErr),
+								zap.Int("review_feedback_id", reviewFeedback.ID),
+							)
+						} else {
+							logger.Info("Plan recreation triggered successfully",
+								zap.Int("review_feedback_id", reviewFeedback.ID),
+							)
+						}
+					}()
+				}
+
+				// Early return: skip execution job creation since plan is being recreated
+				c.JSON(http.StatusOK, gin.H{
+					"message":      "Plan invalidated by new reviews, recreating plan",
+					"agent_run_id": agentRunID,
+				})
+				return
+			}
+		}
+
+		// Defensive check: verify no existing execution AgentRun exists for this review feedback
+		// This provides an additional safety layer beyond the atomic state transition
+		if reviewFeedback.ExecutionAgentRunID != nil {
+			logger.Info("Execution AgentRun already exists for review-triggered plan, skipping creation",
+				zap.Int("plan_agent_run_id", agentRunID),
+				zap.Int("execution_agent_run_id", *reviewFeedback.ExecutionAgentRunID),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"message":                "Plan created, execution already in progress",
+				"plan_agent_run_id":      agentRunID,
+				"execution_agent_run_id": *reviewFeedback.ExecutionAgentRunID,
+			})
+			return
+		}
+
+		// Create plan execution AgentRun for review-triggered plan creation
+		executionPRID := reviewFeedback.PRID
+		executionRun := &models.AgentRun{
+			IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", reviewFeedback.ID, agentRunID, time.Now().UnixNano()),
+			IssueID:          agentRun.IssueID,
+			PRID:             &executionPRID,
+			State:            "queued",
+			AgentType:        req.AgentType,
+			ExecutionMode:    "plan_execution",
+			PlanContent:      &planContentForStorage,
+			ReviewFeedbackID: &reviewFeedback.ID,
+		}
+
+		if err := db.Create(executionRun).Error; err != nil {
+			logger.Error("Failed to create execution AgentRun",
+				zap.Error(err),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+			)
+			restoreReviewAndAgent()
+			persistRollback()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to create execution agent run",
+			})
+			return
+		}
+
+		branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
+		if trimmed := strings.TrimSpace(pr.Branch); trimmed != "" {
+			branchName = trimmed
+		}
+
+		kubernetesClient, err := kubernetesClientFactory(logger)
 		if err != nil {
 			logger.Error("Failed to initialize Kubernetes client for plan execution",
 				zap.Error(err),
@@ -1265,6 +1484,506 @@ func handlePlanCreated(
 			})
 			return
 		}
+
+		jobService := kubernetesJobServiceFactory(kubernetesClient, logger)
+		job, err := jobService.CreateJobForPlanExecution(ctx, executionRun, issue, sanitizedFullPlan, branchName)
+		if err != nil {
+			logger.Error("Failed to create plan execution job",
+				zap.Error(err),
+				zap.Int("execution_agent_run_id", executionRun.ID),
+			)
+			failureReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(err.Error()), utils.GetDBOutputLimitBytes(), "… [truncated]")
+			executionRun.State = "failed"
+			executionRun.ErrorMessage = &failureReason
+			if updateErr := agentRunRepo.Update(executionRun); updateErr != nil {
+				logger.Warn("Failed to record execution AgentRun failure state",
+					zap.Error(updateErr),
+					zap.Int("execution_agent_run_id", executionRun.ID),
+				)
+			}
+
+			restoreReviewAndAgent()
+			persistRollback()
+			if deleteErr := db.Delete(executionRun).Error; deleteErr != nil {
+				logger.Warn("Failed to delete execution AgentRun after job creation failure",
+					zap.Error(deleteErr),
+					zap.Int("execution_agent_run_id", executionRun.ID),
+				)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "PLAN_EXECUTION_JOB_CREATION_FAILED",
+				"message": "Failed to create plan execution job",
+			})
+			return
+		}
+
+		reviewFeedback.PlanCreationStatus = "created"
+		reviewFeedback.ExecutionAgentRunID = &executionRun.ID
+		if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+			logger.Error("Failed to link execution AgentRun to ReviewFeedback",
+				zap.Error(err),
+				zap.Int("execution_agent_run_id", executionRun.ID),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to update review feedback",
+			})
+			return
+		}
+
+		logger.Info("Plan created and execution job started",
+			zap.Int("plan_agent_run_id", agentRunID),
+			zap.Int("execution_agent_run_id", executionRun.ID),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
+		)
+
+		c.JSON(http.StatusOK, gin.H{
+			"message":      "Plan created and execution job started",
+			"agent_run_id": executionRun.ID,
+			"job_name":     job.Name,
+		})
+		return
+	}
+
+	// Handle issue-triggered plan creation (without ReviewFeedback)
+	// Create plan execution AgentRun for issue-triggered plan creation
+	// Extract branch name from plan creation AgentRun's Input
+	var branchName string
+	if len(agentRun.Input) > 0 {
+		var inputMap map[string]interface{}
+		if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
+			if bn, ok := inputMap["branch_name"].(string); ok && strings.TrimSpace(bn) != "" {
+				branchName = strings.TrimSpace(bn)
+				logger.Info("Extracted branch name from plan creation AgentRun Input",
+					zap.String("branch_name", branchName),
+					zap.Int("plan_agent_run_id", agentRunID),
+				)
+			}
+		} else {
+			logger.Warn("Failed to unmarshal plan creation AgentRun Input for branch name extraction",
+				zap.Error(err),
+				zap.Int("plan_agent_run_id", agentRunID),
+			)
+		}
+	}
+
+	// Fallback: resolve from existing PRs if not found in Input
+	if branchName == "" {
+		pullRequestRepo := repositories.NewPullRequestRepository(db)
+		// Prefer PR associated with this agent run if available
+		if agentRun.PRID != nil {
+			pr, prErr := pullRequestRepo.FindByID(*agentRun.PRID)
+			if prErr == nil && pr != nil && pr.Status == "open" {
+				branchName = pr.Branch
+				logger.Info("Found branch name from PR associated with agent run",
+					zap.String("branch_name", branchName),
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.Int("pr_id", *agentRun.PRID),
+					zap.Int("pr_number", pr.Number),
+				)
+			}
+		}
+
+		// Fallback: scan all PRs for the issue if no branch found from agent run's PR
+		if branchName == "" {
+			prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
+			if prErr == nil && len(prs) > 0 {
+				// Use the first open PR if multiple exist
+				for _, pr := range prs {
+					if pr.Status == "open" {
+						branchName = pr.Branch
+						logger.Info("Found branch name from existing PR for issue",
+							zap.String("branch_name", branchName),
+							zap.Int("plan_agent_run_id", agentRunID),
+							zap.Int("issue_id", issue.ID),
+							zap.Int("pr_number", pr.Number),
+						)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Last resort: use default format
+	if branchName == "" {
+		branchName = fmt.Sprintf("feature/issue-%d", issue.Number)
+		logger.Info("Using default branch name format",
+			zap.String("branch_name", branchName),
+			zap.Int("plan_agent_run_id", agentRunID),
+			zap.Int("issue_number", issue.Number),
+		)
+	}
+
+	// Defensive check: verify no existing execution AgentRun exists (linked to current plan creation run)
+	// This provides an additional safety layer beyond the atomic state transition
+	// However, if execution run exists but is queued/failed, we should retry execution setup
+	var existingExecutionRun *models.AgentRun
+	var existingExecutionRuns []*models.AgentRun
+	if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+		agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err == nil && len(existingExecutionRuns) > 0 {
+		existingExecutionRun = existingExecutionRuns[0]
+		// If execution run is started or succeeded, treat as already in progress
+		if existingExecutionRun.State == "started" || existingExecutionRun.State == "succeeded" {
+			logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
+				zap.Int("plan_agent_run_id", agentRunID),
+				zap.Int("execution_agent_run_id", existingExecutionRun.ID),
+				zap.String("execution_state", existingExecutionRun.State),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"message":                "Plan created, execution already in progress",
+				"plan_agent_run_id":      agentRunID,
+				"execution_agent_run_id": existingExecutionRun.ID,
+			})
+			return
+		}
+		// If execution run is queued or failed, we'll reuse it and retry execution setup
+		logger.Info("Execution AgentRun exists but is queued/failed, will retry execution setup",
+			zap.Int("plan_agent_run_id", agentRunID),
+			zap.Int("execution_agent_run_id", existingExecutionRun.ID),
+			zap.String("execution_state", existingExecutionRun.State),
+		)
+		// Continue processing to retry execution setup with existing execution run
+		// Skip transaction and go directly to execution start retry
+	}
+
+	// Get completion timestamp for transactional update
+	// Use agentRun.CompletedAt if already set, otherwise use current time
+	now := time.Now()
+	if agentRun.CompletedAt != nil {
+		now = *agentRun.CompletedAt
+	}
+
+	// If existing execution run is queued/failed, skip transaction and retry execution setup directly
+	var executionRun *models.AgentRun
+	if existingExecutionRun != nil && (existingExecutionRun.State == "queued" || existingExecutionRun.State == "failed") {
+		// Reuse existing execution run and retry execution setup
+		executionRun = existingExecutionRun
+		// Update plan content if needed
+		if executionRun.PlanContent == nil || *executionRun.PlanContent != planContentForStorage {
+			executionRun.PlanContent = &planContentForStorage
+			if err := agentRunRepo.Update(executionRun); err != nil {
+				logger.Warn("Failed to update execution run plan content during retry",
+					zap.Error(err),
+					zap.Int("execution_agent_run_id", executionRun.ID),
+				)
+			}
+		}
+		// Skip transaction and go directly to execution start retry
+		// Capture original state before modifying for optimistic locking
+		originalState := agentRun.State
+		// Mark agentRun as updated for consistency
+		agentRun.State = "succeeded"
+		agentRun.PlanContent = &planContentForStorage
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+		agentRunUpdated = true
+
+		// Persist plan creation run state to database
+		// Use optimistic locking with WHERE condition to ensure state hasn't changed
+		result := db.Model(&models.AgentRun{}).
+			Where("id = ? AND state = ?", agentRunID, originalState).
+			Updates(map[string]interface{}{
+				"state":         "succeeded",
+				"plan_content":  planContentForStorage,
+				"error_message": nil,
+				"output":        buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, ""),
+				"completed_at":  now,
+			})
+
+		if result.Error != nil {
+			logger.Error("Failed to persist plan creation run state when reusing execution run",
+				zap.Error(result.Error),
+				zap.Int("plan_agent_run_id", agentRunID),
+			)
+			restoreReviewAndAgent()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to persist plan creation run state",
+			})
+			return
+		}
+
+		// Check if update actually affected any rows
+		// If RowsAffected == 0, the state was changed by another goroutine
+		if result.RowsAffected == 0 {
+			// Reload to check current state
+			var reloadedRun models.AgentRun
+			if err := db.First(&reloadedRun, agentRunID).Error; err != nil {
+				logger.Error("Failed to reload plan creation run after state update",
+					zap.Error(err),
+					zap.Int("plan_agent_run_id", agentRunID),
+				)
+				restoreReviewAndAgent()
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "INTERNAL_ERROR",
+					"message": "Failed to verify plan creation run state",
+				})
+				return
+			}
+			// If already succeeded, that's fine (idempotent)
+			if reloadedRun.State == "succeeded" {
+				logger.Info("Plan creation run already succeeded, continuing with execution setup",
+					zap.Int("plan_agent_run_id", agentRunID),
+				)
+				// Continue processing - state is already correct
+			} else {
+				// State changed unexpectedly
+				logger.Error("Plan creation run state changed unexpectedly when reusing execution run",
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.String("expected_state", originalState),
+					zap.String("actual_state", reloadedRun.State),
+				)
+				restoreReviewAndAgent()
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "STATE_CHANGE_ERROR",
+					"message": fmt.Sprintf("Plan creation run state changed unexpectedly: expected %s, got %s", originalState, reloadedRun.State),
+				})
+				return
+			}
+		}
+	} else {
+		// Extract prompt from plan creation AgentRun.Input for plan execution
+		// Note: This prompt is stored in executionRun.Input but not used by CreateJobForPlanExecution
+		// which uses the planContent directly. Keeping for backward compatibility and reference.
+		var executionPrompt string
+		if len(agentRun.Input) > 0 {
+			var inputMap map[string]interface{}
+			if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
+				if prompt, ok := inputMap["prompt"].(string); ok && strings.TrimSpace(prompt) != "" {
+					executionPrompt = strings.TrimSpace(prompt)
+				}
+			}
+		}
+		// Fallback to issue title/body if prompt not found
+		if executionPrompt == "" {
+			executionPrompt = fmt.Sprintf("Issue #%d: %s", issue.Number, issue.Title)
+			if issue.Body != nil && strings.TrimSpace(*issue.Body) != "" {
+				executionPrompt += "\n\n" + strings.TrimSpace(*issue.Body)
+			}
+		}
+
+		// Create plan execution AgentRun (ExecutionMode: "plan_execution")
+		executionRun = &models.AgentRun{
+			IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", agentRun.IssueID, agentRunID, time.Now().UnixNano()),
+			IssueID:          agentRun.IssueID,
+			PRID:             nil, // No PR yet for issue-triggered execution
+			State:            "queued",
+			AgentType:        req.AgentType,
+			ExecutionMode:    "plan_execution",
+			PlanContent:      &planContentForStorage, // Include plan content for reference
+			ReviewFeedbackID: nil,                    // No review feedback for issue-triggered execution
+			PlanAgentRunID:   &agentRunID,            // Link to plan creation AgentRun
+			RetryCount:       0,
+		}
+
+		// Build structured input JSON for plan execution
+		inputPayload := map[string]any{
+			"schema_version": "1",
+			"prompt":         executionPrompt,
+			"agent_type":     req.AgentType,
+			"plan_content":   planContentForStorage,
+			"branch_name":    branchName,
+		}
+		inputBytes, marshalErr := json.Marshal(inputPayload)
+		if marshalErr != nil {
+			logger.Warn("Failed to marshal structured input payload for plan execution", zap.Error(marshalErr))
+			// Fallback to minimal JSON
+			inputBytes, _ = json.Marshal(map[string]any{
+				"schema_version": "1",
+				"prompt":         executionPrompt,
+				"agent_type":     req.AgentType,
+				"branch_name":    branchName,
+			})
+		}
+		executionRun.Input = datatypes.JSON(inputBytes)
+
+		// Use transaction to atomically create execution run and transition plan creation run to succeeded
+		// This ensures that if execution run creation succeeds, plan creation run state is also updated
+		// If execution run creation fails, plan creation run state remains unchanged (allowing retry)
+		err = db.Transaction(func(tx *gorm.DB) error {
+			// First, check the current state of the plan creation run within transaction
+			// Use optimistic locking to ensure state hasn't changed
+			var currentRun models.AgentRun
+			if err := tx.First(&currentRun, agentRunID).Error; err != nil {
+				return err
+			}
+
+			// If already succeeded, check for existing execution run and return error to rollback
+			if currentRun.State == "succeeded" {
+				// Check for existing execution run within transaction
+				var existingExecutionRuns []*models.AgentRun
+				if err := tx.Where("plan_agent_run_id = ? AND execution_mode = ?",
+					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err != nil {
+					return err
+				}
+				if len(existingExecutionRuns) > 0 {
+					// Return custom error to rollback transaction and signal that execution run already exists
+					return &executionRunAlreadyExistsError{executionRunID: existingExecutionRuns[0].ID}
+				}
+				// If no execution run exists but state is succeeded, this is unexpected but idempotent
+				return nil
+			}
+
+			// Verify state matches expected value before proceeding
+			if currentRun.State != agentRun.State {
+				return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, currentRun.State)
+			}
+
+			// Create execution run within transaction (only if state check passed)
+			if err := tx.Create(executionRun).Error; err != nil {
+				return err
+			}
+
+			// Transition plan creation run to "succeeded" state within transaction
+			// Use optimistic locking with WHERE condition to ensure state hasn't changed
+			result := tx.Model(&models.AgentRun{}).
+				Where("id = ? AND state = ?", agentRunID, agentRun.State).
+				Updates(map[string]interface{}{
+					"state":         "succeeded",
+					"plan_content":  planContentForStorage,
+					"error_message": nil,
+					"output":        buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, ""),
+					"completed_at":  now,
+				})
+
+			if result.Error != nil {
+				return result.Error
+			}
+
+			// Check if update actually affected any rows
+			// If RowsAffected == 0, the state was changed by another goroutine
+			if result.RowsAffected == 0 {
+				// Reload to check current state
+				var reloadedRun models.AgentRun
+				if err := tx.First(&reloadedRun, agentRunID).Error; err != nil {
+					return err
+				}
+				// If already succeeded, that's fine (idempotent) but execution run was already created
+				// This should not happen due to the check above, but handle it gracefully
+				if reloadedRun.State == "succeeded" {
+					// Delete the execution run we just created since state was already succeeded
+					if deleteErr := tx.Delete(executionRun).Error; deleteErr != nil {
+						return fmt.Errorf("failed to delete execution run after state check: %w", deleteErr)
+					}
+					// Check for existing execution run
+					var existingExecutionRuns []*models.AgentRun
+					if err := tx.Where("plan_agent_run_id = ? AND execution_mode = ?",
+						agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err != nil {
+						return err
+					}
+					if len(existingExecutionRuns) > 0 {
+						return &executionRunAlreadyExistsError{executionRunID: existingExecutionRuns[0].ID}
+					}
+					return nil
+				}
+				// Otherwise, state changed unexpectedly
+				return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, reloadedRun.State)
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			// Check if error is executionRunAlreadyExistsError (idempotent case)
+			var existsErr *executionRunAlreadyExistsError
+			if goerrors.As(err, &existsErr) {
+				logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.Int("execution_agent_run_id", existsErr.executionRunID),
+				)
+				c.JSON(http.StatusOK, gin.H{
+					"message":                "Plan created, execution already in progress",
+					"plan_agent_run_id":      agentRunID,
+					"execution_agent_run_id": existsErr.executionRunID,
+				})
+				return
+			}
+
+			logger.Error("Failed to create plan execution AgentRun or transition plan creation run state",
+				zap.Error(err),
+				zap.Int("plan_agent_run_id", agentRunID),
+			)
+			restoreReviewAndAgent()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to create plan execution agent run",
+			})
+			return
+		}
+	}
+
+	// Mark agentRun as updated for rollback purposes (if not already done in retry path)
+	if !agentRunUpdated {
+		agentRun.State = "succeeded"
+		agentRun.PlanContent = &planContentForStorage
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+		agentRunUpdated = true
+	}
+
+	// Reset failed execution run to queued state before transitioning to started
+	// TransitionToStarted only allows queued -> started transitions, so we must reset failed runs first
+	if executionRun.State == "failed" {
+		executionRun.State = "queued"
+		executionRun.StartedAt = nil
+		executionRun.CompletedAt = nil
+		executionRun.ErrorMessage = nil
+		if err := agentRunRepo.Update(executionRun); err != nil {
+			logger.Error("Failed to reset failed execution run to queued state",
+				zap.Error(err),
+				zap.Int("execution_agent_run_id", executionRun.ID),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to reset execution run state",
+			})
+			return
+		}
+		logger.Info("Reset failed execution run to queued state for retry",
+			zap.Int("execution_agent_run_id", executionRun.ID),
+		)
+	}
+
+	// Transition plan execution AgentRun to started state
+	// Note: execution run and plan creation run state transition are already committed in transaction
+	// If this fails, execution run exists and can be retried
+	stateMachine := services.NewAgentRunStateMachine(agentRunRepo, logger)
+	if err := stateMachine.TransitionToStarted(executionRun.ID); err != nil {
+		logger.Error("Failed to transition plan execution AgentRun to started state",
+			zap.Error(err),
+			zap.Int("execution_agent_run_id", executionRun.ID),
+		)
+		// Execution run already exists in database, so we can retry later
+		// Don't delete it or rollback plan creation run state
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "STATE_TRANSITION_ERROR",
+			"message": "Failed to transition execution agent run to started",
+		})
+		return
+	}
+
+	kubernetesClient, err = kubernetesClientFactory(logger)
+	if err != nil {
+		logger.Error("Failed to initialize Kubernetes client for plan execution",
+			zap.Error(err),
+		)
+		// Execution run already exists in database, so we can retry later
+		// Rollback execution run state to queued so it can be retried
+		if rollbackErr := stateMachine.TransitionToQueued(executionRun.ID); rollbackErr != nil {
+			logger.Warn("Failed to rollback execution AgentRun state",
+				zap.Error(rollbackErr),
+				zap.Int("execution_agent_run_id", executionRun.ID),
+			)
+		}
+		restoreReviewAndAgent()
+		persistRollback()
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "KUBERNETES_CLIENT_ERROR",
+			"message": "Failed to initialize Kubernetes client",
+		})
+		return
 	}
 
 	jobService := kubernetesJobServiceFactory(kubernetesClient, logger)
@@ -1274,23 +1993,33 @@ func handlePlanCreated(
 			zap.Error(err),
 			zap.Int("execution_agent_run_id", executionRun.ID),
 		)
-		failureReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(err.Error()), utils.GetDBOutputLimitBytes(), "… [truncated]")
-		executionRun.State = "failed"
-		executionRun.ErrorMessage = &failureReason
-		if updateErr := agentRunRepo.Update(executionRun); updateErr != nil {
-			logger.Warn("Failed to record execution AgentRun failure state",
-				zap.Error(updateErr),
+		// Rollback execution run state to queued so it can be retried
+		// The execution run should be in "started" state at this point
+		if rollbackErr := stateMachine.TransitionToQueued(executionRun.ID); rollbackErr != nil {
+			logger.Warn("Failed to rollback execution AgentRun state",
+				zap.Error(rollbackErr),
 				zap.Int("execution_agent_run_id", executionRun.ID),
 			)
-		}
-
-		restoreReviewAndAgent()
-		persistRollback()
-		if deleteErr := db.Delete(executionRun).Error; deleteErr != nil {
-			logger.Warn("Failed to delete execution AgentRun after job creation failure",
-				zap.Error(deleteErr),
-				zap.Int("execution_agent_run_id", executionRun.ID),
-			)
+			// If rollback fails because state is not "started", try direct reset to queued
+			// This handles edge cases where the state might have changed
+			currentRun, getErr := agentRunRepo.GetByID(executionRun.ID)
+			if getErr == nil && currentRun != nil && currentRun.State != "queued" {
+				currentRun.State = "queued"
+				currentRun.StartedAt = nil
+				currentRun.CompletedAt = nil
+				currentRun.ErrorMessage = nil
+				if directUpdateErr := agentRunRepo.Update(currentRun); directUpdateErr != nil {
+					logger.Warn("Failed to reset execution AgentRun to queued state directly",
+						zap.Error(directUpdateErr),
+						zap.Int("execution_agent_run_id", executionRun.ID),
+						zap.String("current_state", currentRun.State),
+					)
+				} else {
+					logger.Info("Reset execution AgentRun to queued state directly after TransitionToQueued failed",
+						zap.Int("execution_agent_run_id", executionRun.ID),
+					)
+				}
+			}
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "PLAN_EXECUTION_JOB_CREATION_FAILED",
@@ -1299,24 +2028,9 @@ func handlePlanCreated(
 		return
 	}
 
-	reviewFeedback.PlanCreationStatus = "created"
-	reviewFeedback.ExecutionAgentRunID = &executionRun.ID
-	if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-		logger.Error("Failed to link execution AgentRun to ReviewFeedback",
-			zap.Error(err),
-			zap.Int("execution_agent_run_id", executionRun.ID),
-		)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to update review feedback",
-		})
-		return
-	}
-
-	logger.Info("Plan created and execution job started",
+	logger.Info("Plan created and plan execution job started",
 		zap.Int("plan_agent_run_id", agentRunID),
 		zap.Int("execution_agent_run_id", executionRun.ID),
-		zap.Int("review_feedback_id", reviewFeedback.ID),
 		zap.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 	)
 
@@ -1324,11 +2038,12 @@ func handlePlanCreated(
 	// This ensures cleanup happens even if early return occurs due to new reviews
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":      "Plan created and execution job started",
+		"message":      "Plan created and plan execution job started",
 		"agent_run_id": executionRun.ID,
 		"job_name":     job.Name,
 	})
 }
+
 func handlePlanRejected(
 	c *gin.Context,
 	ctx context.Context,
@@ -1357,10 +2072,17 @@ func handlePlanRejected(
 	sanitizedReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(reason), utils.GetDBOutputLimitBytes(), "… [truncated]")
 	planRunID := agentRunID
 
-	previousStatus := reviewFeedback.PlanCreationStatus
-	previousPlanContent := reviewFeedback.PlanContent
-	previousPlanAgentRunID := reviewFeedback.PlanAgentRunID
-	previousExecutionID := reviewFeedback.ExecutionAgentRunID
+	// Prepare rollback functions (only for reviewFeedback if it exists)
+	var previousStatus string
+	var previousPlanContent *string
+	var previousPlanAgentRunID *int
+	var previousExecutionID *int
+	if reviewFeedback != nil {
+		previousStatus = reviewFeedback.PlanCreationStatus
+		previousPlanContent = reviewFeedback.PlanContent
+		previousPlanAgentRunID = reviewFeedback.PlanAgentRunID
+		previousExecutionID = reviewFeedback.ExecutionAgentRunID
+	}
 
 	previousAgentRunPlan := agentRun.PlanContent
 	previousAgentRunState := agentRun.State
@@ -1377,10 +2099,12 @@ func handlePlanRejected(
 	}
 
 	restoreReviewFeedback := func() {
-		reviewFeedback.PlanCreationStatus = previousStatus
-		reviewFeedback.PlanContent = previousPlanContent
-		reviewFeedback.PlanAgentRunID = previousPlanAgentRunID
-		reviewFeedback.ExecutionAgentRunID = previousExecutionID
+		if reviewFeedback != nil {
+			reviewFeedback.PlanCreationStatus = previousStatus
+			reviewFeedback.PlanContent = previousPlanContent
+			reviewFeedback.PlanAgentRunID = previousPlanAgentRunID
+			reviewFeedback.ExecutionAgentRunID = previousExecutionID
+		}
 	}
 
 	agentRun.PlanContent = nil
@@ -1401,51 +2125,61 @@ func handlePlanRejected(
 		return
 	}
 
-	if err := postPlanRejectionComment(ctx, logger, db, reviewFeedback, sanitizedReason); err != nil {
-		restoreAgentRun()
-		if updateErr := agentRunRepo.Update(agentRun); updateErr != nil {
-			logger.Warn("Failed to rollback plan AgentRun state after rejection error",
-				zap.Error(updateErr),
-				zap.Int("agent_run_id", agentRunID),
-			)
-		}
-		if httpErr, ok := err.(*planRejectionHTTPError); ok {
-			c.JSON(httpErr.status, gin.H{
-				"error":   httpErr.code,
-				"message": httpErr.message,
+	// Post rejection comment only if ReviewFeedback exists (for review-triggered plan creation)
+	if reviewFeedback != nil && reviewFeedbackRepo != nil {
+		if err := postPlanRejectionComment(ctx, logger, db, reviewFeedback, sanitizedReason); err != nil {
+			restoreAgentRun()
+			if updateErr := agentRunRepo.Update(agentRun); updateErr != nil {
+				logger.Warn("Failed to rollback plan AgentRun state after rejection error",
+					zap.Error(updateErr),
+					zap.Int("agent_run_id", agentRunID),
+				)
+			}
+			if httpErr, ok := err.(*planRejectionHTTPError); ok {
+				c.JSON(httpErr.status, gin.H{
+					"error":   httpErr.code,
+					"message": httpErr.message,
+				})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "GITHUB_COMMENT_ERROR",
+				"message": "Failed to post plan rejection comment",
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "GITHUB_COMMENT_ERROR",
-			"message": "Failed to post plan rejection comment",
-		})
-		return
+
+		reviewFeedback.PlanCreationStatus = "rejected"
+		reviewFeedback.PlanAgentRunID = &planRunID
+		reviewFeedback.ExecutionAgentRunID = nil
+		reviewFeedback.PlanContent = nil
+
+		if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+			logger.Error("Failed to update ReviewFeedback for plan rejection",
+				zap.Error(err),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+			)
+			restoreReviewFeedback()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to update review feedback",
+			})
+			return
+		}
 	}
 
-	reviewFeedback.PlanCreationStatus = "rejected"
-	reviewFeedback.PlanAgentRunID = &planRunID
-	reviewFeedback.ExecutionAgentRunID = nil
-	reviewFeedback.PlanContent = nil
-
-	if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-		logger.Error("Failed to update ReviewFeedback for plan rejection",
-			zap.Error(err),
+	if reviewFeedback != nil {
+		logger.Info("Plan creation rejected",
+			zap.Int("plan_agent_run_id", agentRunID),
 			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("reason_preview", previewString(sanitizedReason, planPreviewLogLimit)),
 		)
-		restoreReviewFeedback()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to update review feedback",
-		})
-		return
+	} else {
+		logger.Info("Plan creation rejected (issue-triggered)",
+			zap.Int("plan_agent_run_id", agentRunID),
+			zap.String("reason_preview", previewString(sanitizedReason, planPreviewLogLimit)),
+		)
 	}
-
-	logger.Info("Plan creation rejected",
-		zap.Int("plan_agent_run_id", agentRunID),
-		zap.Int("review_feedback_id", reviewFeedback.ID),
-		zap.String("reason_preview", previewString(sanitizedReason, planPreviewLogLimit)),
-	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Plan rejected",
