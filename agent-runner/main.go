@@ -103,6 +103,37 @@ func normalizeExecutionMode(mode string) string {
 	}
 }
 
+// buildPRBodyWithCollapsibleSections builds PR body with collapsible sections for Issue body and Plan content.
+// It adds <details> sections for Issue body and Plan content (if not empty) before the base PR body.
+func buildPRBodyWithCollapsibleSections(baseBody string, issueBody string, planContent string, issueID int) string {
+	var sections []string
+
+	// Add Issue body section if not empty
+	if strings.TrimSpace(issueBody) != "" {
+		issueSection := fmt.Sprintf("<details>\n<summary>Issue #%d</summary>\n\n%s\n\n</details>", issueID, issueBody)
+		sections = append(sections, issueSection)
+	}
+
+	// Add Plan content section if not empty
+	if strings.TrimSpace(planContent) != "" {
+		planSection := fmt.Sprintf("<details>\n<summary>プラン</summary>\n\n%s\n\n</details>", planContent)
+		sections = append(sections, planSection)
+	}
+
+	// If no sections to add, return base body as is
+	if len(sections) == 0 {
+		return baseBody
+	}
+
+	// Combine sections with base body
+	result := strings.Join(sections, "\n\n")
+	if strings.TrimSpace(baseBody) != "" {
+		result = result + "\n\n" + baseBody
+	}
+
+	return result
+}
+
 func readContentFromEnvOrFile(envKey, fileKey string) (string, error) {
 	if value := os.Getenv(envKey); strings.TrimSpace(value) != "" {
 		return value, nil
@@ -594,6 +625,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		prTitle = ""
 		prBody = ""
 	}
+
+	// Add collapsible sections for Issue body and Plan content
+	prBody = buildPRBodyWithCollapsibleSections(prBody, prompt, planContent, issueID)
 
 	// Ensure issue-closing keyword is present in PR body
 	if prBody != "" {
