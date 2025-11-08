@@ -3,14 +3,14 @@ package handlers
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
-	"agentic-automation/internal/errors"
+	errorcodes "agentic-automation/internal/errors"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"agentic-automation/internal/utils"
 	"context"
 	"encoding/json"
-	"errors"
+	goerrors "errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -254,13 +254,13 @@ func HandleAgentReport(c *gin.Context) {
 	// Get AgentRun by ID
 	agentRun, err := agentRunRepo.GetByID(agentRunID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if goerrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Warn("AgentRun not found",
 				zap.Int("agent_run_id", agentRunID),
 				zap.String("path", c.Request.URL.Path),
 			)
-			code := errors.ERR_AGENT_RUN_NOT_FOUND
-			userMsg := errors.GetUserMessage(errors.NewCodedError(code, "", nil), "ja")
+			code := errorcodes.ERR_AGENT_RUN_NOT_FOUND
+			userMsg := errorcodes.GetUserMessage(errorcodes.NewCodedError(code, "", nil), "ja")
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":      string(code),
 				"message":    userMsg,
@@ -274,8 +274,8 @@ func HandleAgentReport(c *gin.Context) {
 			zap.Int("agent_run_id", agentRunID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		code := errors.ERR_INTERNAL_SERVER_ERROR
-		userMsg := errors.GetUserMessage(errors.NewCodedError(code, "", nil), "ja")
+		code := errorcodes.ERR_INTERNAL_SERVER_ERROR
+		userMsg := errorcodes.GetUserMessage(errorcodes.NewCodedError(code, "", nil), "ja")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":      string(code),
 			"message":    userMsg,
@@ -299,7 +299,7 @@ func HandleAgentReport(c *gin.Context) {
 		issueRepo := repositories.NewIssueRepository()
 		issue, err := issueRepo.FindByID(agentRun.IssueID)
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+			if goerrors.Is(err, gorm.ErrRecordNotFound) {
 				logger.Warn("Issue not found for AgentRun",
 					zap.Int("agent_run_id", agentRunID),
 					zap.Int("issue_id", agentRun.IssueID),
@@ -781,7 +781,7 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 
 	agentRun, err := agentRunRepo.GetByID(agentRunID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if goerrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Warn("AgentRun not found for plan report",
 				zap.Int("agent_run_id", agentRunID),
 			)
@@ -1151,8 +1151,8 @@ func handlePlanRejected(
 	logger := config.GetLogger()
 	reason := strings.TrimSpace(req.RejectionReason)
 	if reason == "" {
-		code := errors.ERR_VALIDATION_MISSING_REQUIRED
-		userMsg := errors.GetUserMessage(errors.NewCodedError(code, "", nil), "ja")
+		code := errorcodes.ERR_VALIDATION_MISSING_REQUIRED
+		userMsg := errorcodes.GetUserMessage(errorcodes.NewCodedError(code, "", nil), "ja")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":      string(code),
 			"message":    userMsg,
