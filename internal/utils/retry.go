@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"agentic-automation/internal/clients"
 	"context"
 	"errors"
 	"fmt"
@@ -75,28 +74,6 @@ func IsRetryableError(err error) bool {
 	// Check for context cancellation/deadline exceeded
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false // Context cancellation should not be retried
-	}
-
-	// Check for clients.GitHubError (wrapped GitHub API errors)
-	var ghClientErr *clients.GitHubError
-	if errors.As(err, &ghClientErr) {
-		if ghClientErr.ErrorResponse != nil && ghClientErr.ErrorResponse.Response != nil {
-			statusCode := ghClientErr.ErrorResponse.Response.StatusCode
-			// Retry on rate limit (429) and server errors (5xx)
-			return statusCode == http.StatusTooManyRequests || (statusCode >= 500 && statusCode < 600)
-		}
-		// GitHubError without ErrorResponse might be a rate limit message
-		// Check if the message contains rate limit keywords
-		msg := ghClientErr.Message
-		if msg != "" {
-			// Simple check: if message contains "rate limit", it's retryable
-			// This matches the error messages generated in clients/github.go
-			if len(msg) > 10 { // Reasonable message length check
-				// In practice, GitHubError without ErrorResponse are typically rate limits
-				// We err on the side of retrying for robustness
-				return true
-			}
-		}
 	}
 
 	// Check for github.ErrorResponse (raw GitHub API errors)

@@ -1,4 +1,4 @@
-package utils
+package errors
 
 import (
 	"errors"
@@ -49,14 +49,12 @@ func TestErrorCodeConstants(t *testing.T) {
 		t.Errorf("Expected 30 error codes, got %d", len(codes))
 	}
 
-	// Verify all codes have messages
+	// Verify all codes have messages by checking GetUserMessage
 	for _, code := range codes {
-		msg, ok := errorMessages[code]
-		if !ok {
+		err := NewCodedError(code, "", nil)
+		msg := GetUserMessage(err, "ja")
+		if msg == "" || msg == string(code) {
 			t.Errorf("Error code %s does not have a message mapping", code)
-		}
-		if msg.JA == "" && msg.EN == "" {
-			t.Errorf("Error code %s has empty messages", code)
 		}
 	}
 }

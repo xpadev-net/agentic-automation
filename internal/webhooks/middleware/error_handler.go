@@ -3,7 +3,7 @@ package middleware
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
-	"agentic-automation/internal/utils"
+	"agentic-automation/internal/errors"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -49,8 +49,8 @@ func handlePanic(c *gin.Context, logger *zap.Logger) {
 		// Determine if this is a webhook request
 		isWebhook := isWebhookRequest(c)
 
-		code := utils.ERR_INTERNAL_SERVER_ERROR
-		userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
+		code := errors.ERR_INTERNAL_SERVER_ERROR
+		userMsg := errors.GetUserMessage(errors.NewCodedError(code, "", nil), "ja")
 
 		// For webhook requests, always return 200 OK to prevent GitHub retries
 		if isWebhook {
@@ -80,9 +80,9 @@ func handleError(c *gin.Context, logger *zap.Logger) {
 		return
 	}
 
-	code := utils.GetErrorCode(err.Err)
-	userMsg := utils.GetUserMessage(err.Err, "ja")
-	statusCode := utils.GetHTTPStatusCode(code)
+	code := errors.GetErrorCode(err.Err)
+	userMsg := errors.GetUserMessage(err.Err, "ja")
+	statusCode := errors.GetHTTPStatusCode(code)
 
 	// Log error details
 	logger.Error("Request error",
@@ -119,8 +119,8 @@ func isWebhookRequest(c *gin.Context) bool {
 
 // getHTTPStatusCode returns the appropriate HTTP status code for an error
 // This function is kept for backward compatibility but is now deprecated.
-// Use utils.GetHTTPStatusCode(utils.GetErrorCode(err)) instead.
+// Use errors.GetHTTPStatusCode(errors.GetErrorCode(err)) instead.
 func getHTTPStatusCode(err error) int {
-	code := utils.GetErrorCode(err)
-	return utils.GetHTTPStatusCode(code)
+	code := errors.GetErrorCode(err)
+	return errors.GetHTTPStatusCode(code)
 }

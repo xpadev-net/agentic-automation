@@ -3,6 +3,7 @@ package handlers
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/errors"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
@@ -258,8 +259,8 @@ func HandleAgentReport(c *gin.Context) {
 				zap.Int("agent_run_id", agentRunID),
 				zap.String("path", c.Request.URL.Path),
 			)
-			code := utils.ERR_AGENT_RUN_NOT_FOUND
-			userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
+			code := errors.ERR_AGENT_RUN_NOT_FOUND
+			userMsg := errors.GetUserMessage(errors.NewCodedError(code, "", nil), "ja")
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":      string(code),
 				"message":    userMsg,
@@ -273,8 +274,8 @@ func HandleAgentReport(c *gin.Context) {
 			zap.Int("agent_run_id", agentRunID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		code := utils.ERR_INTERNAL_SERVER_ERROR
-		userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
+		code := errors.ERR_INTERNAL_SERVER_ERROR
+		userMsg := errors.GetUserMessage(errors.NewCodedError(code, "", nil), "ja")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":      string(code),
 			"message":    userMsg,
@@ -1150,8 +1151,8 @@ func handlePlanRejected(
 	logger := config.GetLogger()
 	reason := strings.TrimSpace(req.RejectionReason)
 	if reason == "" {
-		code := utils.ERR_VALIDATION_MISSING_REQUIRED
-		userMsg := utils.GetUserMessage(utils.NewCodedError(code, "", nil), "ja")
+		code := errors.ERR_VALIDATION_MISSING_REQUIRED
+		userMsg := errors.GetUserMessage(errors.NewCodedError(code, "", nil), "ja")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":      string(code),
 			"message":    userMsg,

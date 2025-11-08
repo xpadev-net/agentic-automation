@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 
-	"agentic-automation/internal/utils"
+	"agentic-automation/internal/errors"
 )
 
 // RetryConfig represents retry configuration for GitHub API calls
@@ -35,7 +35,7 @@ type Client struct {
 type GitHubError struct {
 	*github.ErrorResponse
 	Message string
-	Code    utils.ErrorCode
+	Code    errors.ErrorCode
 }
 
 func (e *GitHubError) Error() string {
@@ -49,11 +49,11 @@ func (e *GitHubError) Error() string {
 }
 
 // GetErrorCode returns the error code for this error
-func (e *GitHubError) GetErrorCode() utils.ErrorCode {
+func (e *GitHubError) GetErrorCode() errors.ErrorCode {
 	if e.Code != "" {
 		return e.Code
 	}
-	return utils.ERR_INTERNAL_UNEXPECTED
+	return errors.ERR_INTERNAL_UNEXPECTED
 }
 
 // NewClient creates a new GitHub API client with OAuth2 authentication
@@ -127,7 +127,7 @@ func (c *Client) handleError(err error, resp *github.Response, method string) er
 	if resp != nil && resp.StatusCode == http.StatusForbidden {
 		if resp.Rate.Remaining == 0 {
 			return &GitHubError{
-				Code:    utils.ERR_GITHUB_RATE_LIMIT,
+				Code:    errors.ERR_GITHUB_RATE_LIMIT,
 				Message: fmt.Sprintf("GitHub API rate limit exceeded. Reset at %v", resp.Rate.Reset.Time),
 			}
 		}
@@ -135,7 +135,7 @@ func (c *Client) handleError(err error, resp *github.Response, method string) er
 
 	if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
 		return &GitHubError{
-			Code:    utils.ERR_GITHUB_RATE_LIMIT,
+			Code:    errors.ERR_GITHUB_RATE_LIMIT,
 			Message: fmt.Sprintf("GitHub API rate limit exceeded. Reset at %v", resp.Rate.Reset.Time),
 		}
 	}
@@ -155,21 +155,21 @@ func (c *Client) handleError(err error, resp *github.Response, method string) er
 		)
 
 		// Determine error code based on status code
-		var code utils.ErrorCode
+		var code errors.ErrorCode
 		switch ghErr.Response.StatusCode {
 		case http.StatusNotFound:
-			code = utils.ERR_GITHUB_NOT_FOUND
+			code = errors.ERR_GITHUB_NOT_FOUND
 		case http.StatusUnauthorized:
-			code = utils.ERR_GITHUB_UNAUTHORIZED
+			code = errors.ERR_GITHUB_UNAUTHORIZED
 		case http.StatusForbidden:
-			code = utils.ERR_GITHUB_FORBIDDEN
+			code = errors.ERR_GITHUB_FORBIDDEN
 		case http.StatusTooManyRequests:
-			code = utils.ERR_GITHUB_RATE_LIMIT
+			code = errors.ERR_GITHUB_RATE_LIMIT
 		default:
 			if ghErr.Response.StatusCode >= 500 {
-				code = utils.ERR_GITHUB_SERVER_ERROR
+				code = errors.ERR_GITHUB_SERVER_ERROR
 			} else {
-				code = utils.ERR_INTERNAL_UNEXPECTED
+				code = errors.ERR_INTERNAL_UNEXPECTED
 			}
 		}
 
