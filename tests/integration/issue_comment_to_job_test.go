@@ -203,7 +203,8 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	assert.Equal(t, "started", run.State)
 
 	// Verify K8s Job created with expected name
-	expectedJobName := fmt.Sprintf("agent-runner-%d", run.ID)
+	// For plan creation, job name includes reviewFeedbackID (0 for issue-triggered)
+	expectedJobName := fmt.Sprintf("agent-runner-%d-plan-0", run.ID)
 	job, err := k8s.GetJob(req.Context(), expectedJobName)
 	require.NoError(t, err)
 	assert.Equal(t, expectedJobName, job.Name)
