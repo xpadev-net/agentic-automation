@@ -751,6 +751,7 @@ type mockPRTransport struct {
 	headSHA        string
 	mergeable      bool
 	mergeableState string
+	checkRuns      []*github.CheckRun
 }
 
 func (m *mockPRTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -772,6 +773,32 @@ func (m *mockPRTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp := &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader(prJSON)),
+			Header:     make(http.Header),
+		}
+		resp.Header.Set("Content-Type", "application/json")
+		return resp, nil
+	}
+
+	// Check if this is a ListCheckRunsForRef request
+	if strings.Contains(req.URL.Path, "/commits/") && strings.Contains(req.URL.Path, "/check-runs") && req.Method == "GET" {
+		// Return mock check runs data
+		// Default: one success check run
+		status := "completed"
+		conclusion := "success"
+		checkRunsJSON := `{
+			"total_count": 1,
+			"check_runs": [
+				{
+					"id": 1,
+					"name": "test-check",
+					"status": "` + status + `",
+					"conclusion": "` + conclusion + `"
+				}
+			]
+		}`
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(checkRunsJSON)),
 			Header:     make(http.Header),
 		}
 		resp.Header.Set("Content-Type", "application/json")
