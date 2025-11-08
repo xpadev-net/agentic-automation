@@ -1068,7 +1068,7 @@ func handlePlanCreated(
 		if reviewFeedback == nil {
 			var executionRuns []*models.AgentRun
 			if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
-				agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+				agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
 				logger.Info("Execution AgentRun already exists, skipping creation",
 					zap.Int("plan_agent_run_id", agentRunID),
 					zap.Int("execution_agent_run_id", executionRuns[0].ID),
