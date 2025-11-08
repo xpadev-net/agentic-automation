@@ -909,7 +909,7 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 					var executionAgentRunID *int
 					var executionRuns []*models.AgentRun
 					if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
-						agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+						agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
 						executionAgentRunID = &executionRuns[0].ID
 					}
 
@@ -969,7 +969,7 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 				var executionAgentRunID *int
 				var executionRuns []*models.AgentRun
 				if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
-					agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
 					executionAgentRunID = &executionRuns[0].ID
 				}
 
