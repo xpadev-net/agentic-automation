@@ -1471,7 +1471,73 @@ func handlePlanCreated(
 
 	// Handle issue-triggered plan creation (without ReviewFeedback)
 	// Create plan execution AgentRun for issue-triggered plan creation
-	branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
+	// Extract branch name from plan creation AgentRun's Input
+	var branchName string
+	if len(agentRun.Input) > 0 {
+		var inputMap map[string]interface{}
+		if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
+			if bn, ok := inputMap["branch_name"].(string); ok && strings.TrimSpace(bn) != "" {
+				branchName = strings.TrimSpace(bn)
+				logger.Info("Extracted branch name from plan creation AgentRun Input",
+					zap.String("branch_name", branchName),
+					zap.Int("plan_agent_run_id", agentRunID),
+				)
+			}
+		} else {
+			logger.Warn("Failed to unmarshal plan creation AgentRun Input for branch name extraction",
+				zap.Error(err),
+				zap.Int("plan_agent_run_id", agentRunID),
+			)
+		}
+	}
+
+	// Fallback: resolve from existing PRs if not found in Input
+	if branchName == "" {
+		pullRequestRepo := repositories.NewPullRequestRepository(db)
+		// Prefer PR associated with this agent run if available
+		if agentRun.PRID != nil {
+			pr, prErr := pullRequestRepo.FindByID(*agentRun.PRID)
+			if prErr == nil && pr != nil && pr.Status == "open" {
+				branchName = pr.Branch
+				logger.Info("Found branch name from PR associated with agent run",
+					zap.String("branch_name", branchName),
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.Int("pr_id", *agentRun.PRID),
+					zap.Int("pr_number", pr.Number),
+				)
+			}
+		}
+
+		// Fallback: scan all PRs for the issue if no branch found from agent run's PR
+		if branchName == "" {
+			prs, prErr := pullRequestRepo.FindByIssueID(issue.ID)
+			if prErr == nil && len(prs) > 0 {
+				// Use the first open PR if multiple exist
+				for _, pr := range prs {
+					if pr.Status == "open" {
+						branchName = pr.Branch
+						logger.Info("Found branch name from existing PR for issue",
+							zap.String("branch_name", branchName),
+							zap.Int("plan_agent_run_id", agentRunID),
+							zap.Int("issue_id", issue.ID),
+							zap.Int("pr_number", pr.Number),
+						)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Last resort: use default format
+	if branchName == "" {
+		branchName = fmt.Sprintf("feature/issue-%d", issue.Number)
+		logger.Info("Using default branch name format",
+			zap.String("branch_name", branchName),
+			zap.Int("plan_agent_run_id", agentRunID),
+			zap.Int("issue_number", issue.Number),
+		)
+	}
 
 	// Defensive check: verify no existing execution AgentRun exists (linked to current plan creation run)
 	// This provides an additional safety layer beyond the atomic state transition
@@ -1641,6 +1707,7 @@ func handlePlanCreated(
 			"prompt":         executionPrompt,
 			"agent_type":     req.AgentType,
 			"plan_content":   planContentForStorage,
+			"branch_name":    branchName,
 		}
 		inputBytes, marshalErr := json.Marshal(inputPayload)
 		if marshalErr != nil {
@@ -1650,6 +1717,7 @@ func handlePlanCreated(
 				"schema_version": "1",
 				"prompt":         executionPrompt,
 				"agent_type":     req.AgentType,
+				"branch_name":    branchName,
 			})
 		}
 		executionRun.Input = datatypes.JSON(inputBytes)

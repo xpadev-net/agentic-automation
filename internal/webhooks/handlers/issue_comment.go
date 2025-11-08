@@ -979,11 +979,19 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		zap.String("delivery_id", deliveryID),
 	)
 
+	// Determine branch name to store in Input
+	// Use existingBranchName if resolved, otherwise use default format
+	branchNameForInput := existingBranchName
+	if branchNameForInput == "" {
+		branchNameForInput = fmt.Sprintf("feature/issue-%d", issue.Number)
+	}
+
 	// Build structured input JSON for plan creation (schema v1)
 	inputPayload := map[string]any{
 		"schema_version": "1",
 		"prompt":         prompt,
 		"agent_type":     agentType,
+		"branch_name":    branchNameForInput,
 		"issue": map[string]any{
 			"repo":           payload.Repository.FullName,
 			"number":         payload.Issue.Number,
@@ -995,11 +1003,12 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	inputBytes, marshalErr := json.Marshal(inputPayload)
 	if marshalErr != nil {
 		logger.Warn("Failed to marshal structured input payload", zap.Error(marshalErr))
-		// Fallback to minimal JSON with prompt only
+		// Fallback to minimal JSON with prompt and branch name
 		inputBytes, _ = json.Marshal(map[string]any{
 			"schema_version": "1",
 			"prompt":         prompt,
 			"agent_type":     agentType,
+			"branch_name":    branchNameForInput,
 		})
 	}
 
