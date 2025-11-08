@@ -67,10 +67,20 @@ func TestParsePlanResult(t *testing.T) {
 			expectPlan: "プラン内容",
 			rejected:   false,
 		},
-		"multiple tags - first valid one used": {
-			input:          "<plan_rejected>最初のタグ</plan_rejected>\n<plan_created>2番目のタグ</plan_created>",
-			rejected:       true,
-			reasonContains: "最初のタグ",
+		"multiple tags - last valid one used": {
+			input:      "<plan_rejected>最初のタグ</plan_rejected>\n<plan_created>2番目のタグ</plan_created>",
+			expectPlan: "2番目のタグ",
+			rejected:   false,
+		},
+		"multiple created tags - last one used": {
+			input:      "<plan_created>最初のプラン</plan_created>\n<plan_created>最後のプラン</plan_created>",
+			expectPlan: "最後のプラン",
+			rejected:   false,
+		},
+		"example text in prompt should be ignored": {
+			input:      "プランの形式:\n- プランを作成する場合: <plan_created>[プラン内容]</plan_created>\n\n実際のプラン:\n<plan_created>実際のプラン内容です</plan_created>",
+			expectPlan: "実際のプラン内容です",
+			rejected:   false,
 		},
 		"plan created with leading/trailing whitespace in tag": {
 			input:      "<plan_created>\n  1. Task 1\n  2. Task 2\n</plan_created>",

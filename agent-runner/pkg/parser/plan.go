@@ -15,7 +15,8 @@ var (
 // ParsePlanResult parses the agent output to extract plan content or rejection reason.
 // The output can contain XML-like tags <plan_created>...</plan_created> or <plan_rejected>...</plan_rejected>.
 // Text outside the tags is allowed and will be ignored.
-// If both tags are present, the first one found is used.
+// If multiple tags are present, the last one found (from the end of the output) is used.
+// This ensures that the actual ASSISTANT output is used instead of example text from the prompt.
 // Returns planContent, rejected flag, rejectionReason.
 func ParsePlanResult(output string) (string, bool, string) {
 	trimmed := strings.TrimSpace(output)
@@ -23,24 +24,34 @@ func ParsePlanResult(output string) (string, bool, string) {
 		return "", true, "プラン出力が空です"
 	}
 
-	// Find both tags and their positions
-	createdMatches := planCreatedPattern.FindStringSubmatchIndex(trimmed)
-	rejectedMatches := planRejectedPattern.FindStringSubmatchIndex(trimmed)
+	// Find all matches for both tags (search from the end)
+	allCreatedMatches := planCreatedPattern.FindAllStringSubmatchIndex(trimmed, -1)
+	allRejectedMatches := planRejectedPattern.FindAllStringSubmatchIndex(trimmed, -1)
 
-	// Determine which tag appears first
+	// Get the last match for each tag type (if any)
+	var lastCreatedMatch []int
+	var lastRejectedMatch []int
+	if len(allCreatedMatches) > 0 {
+		lastCreatedMatch = allCreatedMatches[len(allCreatedMatches)-1]
+	}
+	if len(allRejectedMatches) > 0 {
+		lastRejectedMatch = allRejectedMatches[len(allRejectedMatches)-1]
+	}
+
+	// Determine which tag appears last (closer to the end of the output)
 	createdPos := -1
 	rejectedPos := -1
-	if len(createdMatches) > 0 {
-		createdPos = createdMatches[0]
+	if len(lastCreatedMatch) > 0 {
+		createdPos = lastCreatedMatch[0]
 	}
-	if len(rejectedMatches) > 0 {
-		rejectedPos = rejectedMatches[0]
+	if len(lastRejectedMatch) > 0 {
+		rejectedPos = lastRejectedMatch[0]
 	}
 
-	// Use the first tag found
-	if createdPos >= 0 && (rejectedPos < 0 || createdPos < rejectedPos) {
-		// <plan_created> tag found first
-		content := strings.TrimSpace(trimmed[createdMatches[2]:createdMatches[3]])
+	// Use the tag that appears last (closer to the end)
+	if createdPos >= 0 && (rejectedPos < 0 || createdPos > rejectedPos) {
+		// <plan_created> tag found last
+		content := strings.TrimSpace(trimmed[lastCreatedMatch[2]:lastCreatedMatch[3]])
 		if content == "" {
 			return "", true, "プラン内容が空です"
 		}
@@ -48,8 +59,8 @@ func ParsePlanResult(output string) (string, bool, string) {
 	}
 
 	if rejectedPos >= 0 {
-		// <plan_rejected> tag found
-		reason := strings.TrimSpace(trimmed[rejectedMatches[2]:rejectedMatches[3]])
+		// <plan_rejected> tag found last
+		reason := strings.TrimSpace(trimmed[lastRejectedMatch[2]:lastRejectedMatch[3]])
 		if reason == "" {
 			reason = "プランが却下されました（理由不明）"
 		}
