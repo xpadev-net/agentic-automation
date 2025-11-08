@@ -71,6 +71,15 @@ func (e *planRejectionHTTPError) Error() string {
 	return e.message
 }
 
+// executionRunAlreadyExistsError indicates that an execution run already exists for a plan
+type executionRunAlreadyExistsError struct {
+	executionRunID int
+}
+
+func (e *executionRunAlreadyExistsError) Error() string {
+	return fmt.Sprintf("execution run already exists: %d", e.executionRunID)
+}
+
 var (
 	kubernetesClientFactory     = clients.NewKubernetesClient
 	kubernetesJobServiceFactory = services.NewKubernetesJobService
@@ -1516,7 +1525,35 @@ func handlePlanCreated(
 	// This ensures that if execution run creation succeeds, plan creation run state is also updated
 	// If execution run creation fails, plan creation run state remains unchanged (allowing retry)
 	err = db.Transaction(func(tx *gorm.DB) error {
-		// Create execution run within transaction
+		// First, check the current state of the plan creation run within transaction
+		// Use optimistic locking to ensure state hasn't changed
+		var currentRun models.AgentRun
+		if err := tx.First(&currentRun, agentRunID).Error; err != nil {
+			return err
+		}
+
+		// If already succeeded, check for existing execution run and return error to rollback
+		if currentRun.State == "succeeded" {
+			// Check for existing execution run within transaction
+			var existingExecutionRuns []*models.AgentRun
+			if err := tx.Where("plan_agent_run_id = ? AND execution_mode = ?",
+				agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err != nil {
+				return err
+			}
+			if len(existingExecutionRuns) > 0 {
+				// Return custom error to rollback transaction and signal that execution run already exists
+				return &executionRunAlreadyExistsError{executionRunID: existingExecutionRuns[0].ID}
+			}
+			// If no execution run exists but state is succeeded, this is unexpected but idempotent
+			return nil
+		}
+
+		// Verify state matches expected value before proceeding
+		if currentRun.State != agentRun.State {
+			return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, currentRun.State)
+		}
+
+		// Create execution run within transaction (only if state check passed)
 		if err := tx.Create(executionRun).Error; err != nil {
 			return err
 		}
@@ -1540,22 +1577,51 @@ func handlePlanCreated(
 		// If RowsAffected == 0, the state was changed by another goroutine
 		if result.RowsAffected == 0 {
 			// Reload to check current state
-			var currentRun models.AgentRun
-			if err := tx.First(&currentRun, agentRunID).Error; err != nil {
+			var reloadedRun models.AgentRun
+			if err := tx.First(&reloadedRun, agentRunID).Error; err != nil {
 				return err
 			}
-			// If already succeeded, that's fine (idempotent)
-			if currentRun.State == "succeeded" {
+			// If already succeeded, that's fine (idempotent) but execution run was already created
+			// This should not happen due to the check above, but handle it gracefully
+			if reloadedRun.State == "succeeded" {
+				// Delete the execution run we just created since state was already succeeded
+				if deleteErr := tx.Delete(executionRun).Error; deleteErr != nil {
+					return fmt.Errorf("failed to delete execution run after state check: %w", deleteErr)
+				}
+				// Check for existing execution run
+				var existingExecutionRuns []*models.AgentRun
+				if err := tx.Where("plan_agent_run_id = ? AND execution_mode = ?",
+					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err != nil {
+					return err
+				}
+				if len(existingExecutionRuns) > 0 {
+					return &executionRunAlreadyExistsError{executionRunID: existingExecutionRuns[0].ID}
+				}
 				return nil
 			}
 			// Otherwise, state changed unexpectedly
-			return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, currentRun.State)
+			return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, reloadedRun.State)
 		}
 
 		return nil
 	})
 
 	if err != nil {
+		// Check if error is executionRunAlreadyExistsError (idempotent case)
+		var existsErr *executionRunAlreadyExistsError
+		if goerrors.As(err, &existsErr) {
+			logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
+				zap.Int("plan_agent_run_id", agentRunID),
+				zap.Int("execution_agent_run_id", existsErr.executionRunID),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"message":                "Plan created, execution already in progress",
+				"plan_agent_run_id":      agentRunID,
+				"execution_agent_run_id": existsErr.executionRunID,
+			})
+			return
+		}
+
 		logger.Error("Failed to create plan execution AgentRun or transition plan creation run state",
 			zap.Error(err),
 			zap.Int("plan_agent_run_id", agentRunID),
