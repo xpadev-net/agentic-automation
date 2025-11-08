@@ -1483,14 +1483,14 @@ func handlePlanCreated(
 	}
 
 	// Handle issue-triggered plan creation (without ReviewFeedback)
-	// Create normal execution AgentRun for issue-triggered plan creation
+	// Create plan execution AgentRun for issue-triggered plan creation
 	branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
 
 	// Defensive check: verify no existing execution AgentRun exists (linked to current plan creation run)
 	// This provides an additional safety layer beyond the atomic state transition
 	var existingExecutionRuns []*models.AgentRun
 	if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
-		agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err == nil && len(existingExecutionRuns) > 0 {
+		agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err == nil && len(existingExecutionRuns) > 0 {
 		logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
 			zap.Int("plan_agent_run_id", agentRunID),
 			zap.Int("execution_agent_run_id", existingExecutionRuns[0].ID),
@@ -1503,7 +1503,9 @@ func handlePlanCreated(
 		return
 	}
 
-	// Extract prompt from plan creation AgentRun.Input for normal execution
+	// Extract prompt from plan creation AgentRun.Input for plan execution
+	// Note: This prompt is stored in executionRun.Input but not used by CreateJobForPlanExecution
+	// which uses the planContent directly. Keeping for backward compatibility and reference.
 	var executionPrompt string
 	if len(agentRun.Input) > 0 {
 		var inputMap map[string]interface{}
@@ -1521,21 +1523,21 @@ func handlePlanCreated(
 		}
 	}
 
-	// Create normal execution AgentRun (ExecutionMode: "normal")
+	// Create plan execution AgentRun (ExecutionMode: "plan_execution")
 	executionRun := &models.AgentRun{
-		IdempotencyKey:   fmt.Sprintf("normal-exec-%d-%d-%d", agentRun.IssueID, agentRunID, time.Now().UnixNano()),
+		IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", agentRun.IssueID, agentRunID, time.Now().UnixNano()),
 		IssueID:          agentRun.IssueID,
 		PRID:             nil, // No PR yet for issue-triggered execution
 		State:            "queued",
 		AgentType:        req.AgentType,
-		ExecutionMode:    "normal",
+		ExecutionMode:    "plan_execution",
 		PlanContent:      &planContentForStorage, // Include plan content for reference
 		ReviewFeedbackID: nil,                    // No review feedback for issue-triggered execution
 		PlanAgentRunID:   &agentRunID,            // Link to plan creation AgentRun
 		RetryCount:       0,
 	}
 
-	// Build structured input JSON for normal execution
+	// Build structured input JSON for plan execution
 	inputPayload := map[string]any{
 		"schema_version": "1",
 		"prompt":         executionPrompt,
@@ -1544,7 +1546,7 @@ func handlePlanCreated(
 	}
 	inputBytes, marshalErr := json.Marshal(inputPayload)
 	if marshalErr != nil {
-		logger.Warn("Failed to marshal structured input payload for normal execution", zap.Error(marshalErr))
+		logger.Warn("Failed to marshal structured input payload for plan execution", zap.Error(marshalErr))
 		// Fallback to minimal JSON
 		inputBytes, _ = json.Marshal(map[string]any{
 			"schema_version": "1",
@@ -1555,7 +1557,7 @@ func handlePlanCreated(
 	executionRun.Input = datatypes.JSON(inputBytes)
 
 	if err := db.Create(executionRun).Error; err != nil {
-		logger.Error("Failed to create normal execution AgentRun",
+		logger.Error("Failed to create plan execution AgentRun",
 			zap.Error(err),
 			zap.Int("plan_agent_run_id", agentRunID),
 		)
@@ -1563,15 +1565,15 @@ func handlePlanCreated(
 		persistRollback()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "INTERNAL_ERROR",
-			"message": "Failed to create normal execution agent run",
+			"message": "Failed to create plan execution agent run",
 		})
 		return
 	}
 
-	// Transition normal execution AgentRun to started state
+	// Transition plan execution AgentRun to started state
 	stateMachine := services.NewAgentRunStateMachine(agentRunRepo, logger)
 	if err := stateMachine.TransitionToStarted(executionRun.ID); err != nil {
-		logger.Error("Failed to transition normal execution AgentRun to started state",
+		logger.Error("Failed to transition plan execution AgentRun to started state",
 			zap.Error(err),
 			zap.Int("execution_agent_run_id", executionRun.ID),
 		)
@@ -1592,7 +1594,7 @@ func handlePlanCreated(
 
 	kubernetesClient, err := kubernetesClientFactory(logger)
 	if err != nil {
-		logger.Error("Failed to initialize Kubernetes client for normal execution",
+		logger.Error("Failed to initialize Kubernetes client for plan execution",
 			zap.Error(err),
 		)
 		restoreReviewAndAgent()
@@ -1617,9 +1619,9 @@ func handlePlanCreated(
 	}
 
 	jobService := kubernetesJobServiceFactory(kubernetesClient, logger)
-	job, err := jobService.CreateJobForAgentRun(ctx, executionRun, issue, executionPrompt, branchName)
+	job, err := jobService.CreateJobForPlanExecution(ctx, executionRun, issue, sanitizedFullPlan, branchName)
 	if err != nil {
-		logger.Error("Failed to create normal execution job",
+		logger.Error("Failed to create plan execution job",
 			zap.Error(err),
 			zap.Int("execution_agent_run_id", executionRun.ID),
 		)
@@ -1642,20 +1644,20 @@ func handlePlanCreated(
 			)
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "NORMAL_EXECUTION_JOB_CREATION_FAILED",
-			"message": "Failed to create normal execution job",
+			"error":   "PLAN_EXECUTION_JOB_CREATION_FAILED",
+			"message": "Failed to create plan execution job",
 		})
 		return
 	}
 
-	logger.Info("Plan created and normal execution job started",
+	logger.Info("Plan created and plan execution job started",
 		zap.Int("plan_agent_run_id", agentRunID),
 		zap.Int("execution_agent_run_id", executionRun.ID),
 		zap.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 	)
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":      "Plan created and normal execution job started",
+		"message":      "Plan created and plan execution job started",
 		"agent_run_id": executionRun.ID,
 		"job_name":     job.Name,
 	})

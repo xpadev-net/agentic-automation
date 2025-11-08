@@ -662,7 +662,7 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated_IssueTriggered(t *testing.T
 	// Verify execution AgentRun was created
 	var executionRuns []models.AgentRun
 	require.NoError(t, db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
-		issue.ID, "normal").Find(&executionRuns).Error)
+		issue.ID, "plan_execution").Find(&executionRuns).Error)
 	require.Len(t, executionRuns, 1)
 	originalExecutionID := executionRuns[0].ID
 	originalPlanCallCount := fakeJob.planCallCount
@@ -695,7 +695,7 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated_IssueTriggered(t *testing.T
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
 	// Accept either message as both indicate duplicate processing
 	message := resp["message"].(string)
-	require.True(t, message == "Plan report already processed" || message == "Plan content updated, execution already in progress",
+	require.True(t, message == "Plan report already processed" || message == "Plan content updated, execution already in progress" || message == "Plan created, execution already in progress",
 		"Expected duplicate processing message, got: %s", message)
 	// State field may not be present in all response types
 	if state, ok := resp["state"]; ok {
@@ -707,7 +707,7 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated_IssueTriggered(t *testing.T
 	// Verify no new execution run was created
 	var allExecutionRuns []models.AgentRun
 	require.NoError(t, db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
-		issue.ID, "normal").Find(&allExecutionRuns).Error)
+		issue.ID, "plan_execution").Find(&allExecutionRuns).Error)
 	require.Len(t, allExecutionRuns, 1)
 	require.Equal(t, originalExecutionID, allExecutionRuns[0].ID)
 
