@@ -8,12 +8,14 @@ import (
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"encoding/json"
+	stderrors "errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/go-github/v76/github"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // PullRequestReviewPayload represents the GitHub webhook payload for pull_request_review events
@@ -167,6 +169,22 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 
 	pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.PullRequest.Number)
 	if err != nil {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
+			// PRレコードが見つからない場合（無関係なリポジトリや古いPR）は、
+			// エラーを返さずにレビュー処理をスキップして成功を返す
+			// これにより、GitHubがwebhookをリトライしないようにする
+			logger.Info("PullRequest not found, ignoring review",
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+				zap.String("repo", payload.Repository.FullName),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"status":      "ignored",
+				"reason":      "pull_request_not_found",
+				"delivery_id": deliveryID,
+			})
+			return
+		}
 		logger.Error("Failed to find PullRequest record",
 			zap.Error(err),
 			zap.String("delivery_id", deliveryID),
@@ -176,20 +194,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		c.Error(err)
 		return
 	}
-
-	if pr == nil {
-		logger.Info("PullRequest record not found, ignoring review",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
-		)
-		c.JSON(http.StatusOK, gin.H{
-			"status":      "ignored",
-			"reason":      "pull_request_not_found",
-			"delivery_id": deliveryID,
-		})
-		return
-	}
+	// pr == nil チェックは削除（FindByRepoAndNumberはエラーを返すため到達しない）
 
 	// Step 7: GitHub クライアント初期化
 	githubClient := deps.GitHubClient
