@@ -1505,6 +1505,13 @@ func handlePlanCreated(
 		// Skip transaction and go directly to execution start retry
 	}
 
+	// Get completion timestamp for transactional update
+	// Use agentRun.CompletedAt if already set, otherwise use current time
+	now := time.Now()
+	if agentRun.CompletedAt != nil {
+		now = *agentRun.CompletedAt
+	}
+
 	// If existing execution run is queued/failed, skip transaction and retry execution setup directly
 	var executionRun *models.AgentRun
 	if existingExecutionRun != nil && (existingExecutionRun.State == "queued" || existingExecutionRun.State == "failed") {
@@ -1521,12 +1528,78 @@ func handlePlanCreated(
 			}
 		}
 		// Skip transaction and go directly to execution start retry
+		// Capture original state before modifying for optimistic locking
+		originalState := agentRun.State
 		// Mark agentRun as updated for consistency
 		agentRun.State = "succeeded"
 		agentRun.PlanContent = &planContentForStorage
 		agentRun.ErrorMessage = nil
 		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
 		agentRunUpdated = true
+
+		// Persist plan creation run state to database
+		// Use optimistic locking with WHERE condition to ensure state hasn't changed
+		result := db.Model(&models.AgentRun{}).
+			Where("id = ? AND state = ?", agentRunID, originalState).
+			Updates(map[string]interface{}{
+				"state":         "succeeded",
+				"plan_content":  planContentForStorage,
+				"error_message": nil,
+				"output":        buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, ""),
+				"completed_at":  now,
+			})
+
+		if result.Error != nil {
+			logger.Error("Failed to persist plan creation run state when reusing execution run",
+				zap.Error(result.Error),
+				zap.Int("plan_agent_run_id", agentRunID),
+			)
+			restoreReviewAndAgent()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to persist plan creation run state",
+			})
+			return
+		}
+
+		// Check if update actually affected any rows
+		// If RowsAffected == 0, the state was changed by another goroutine
+		if result.RowsAffected == 0 {
+			// Reload to check current state
+			var reloadedRun models.AgentRun
+			if err := db.First(&reloadedRun, agentRunID).Error; err != nil {
+				logger.Error("Failed to reload plan creation run after state update",
+					zap.Error(err),
+					zap.Int("plan_agent_run_id", agentRunID),
+				)
+				restoreReviewAndAgent()
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "INTERNAL_ERROR",
+					"message": "Failed to verify plan creation run state",
+				})
+				return
+			}
+			// If already succeeded, that's fine (idempotent)
+			if reloadedRun.State == "succeeded" {
+				logger.Info("Plan creation run already succeeded, continuing with execution setup",
+					zap.Int("plan_agent_run_id", agentRunID),
+				)
+				// Continue processing - state is already correct
+			} else {
+				// State changed unexpectedly
+				logger.Error("Plan creation run state changed unexpectedly when reusing execution run",
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.String("expected_state", originalState),
+					zap.String("actual_state", reloadedRun.State),
+				)
+				restoreReviewAndAgent()
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":   "STATE_CHANGE_ERROR",
+					"message": fmt.Sprintf("Plan creation run state changed unexpectedly: expected %s, got %s", originalState, reloadedRun.State),
+				})
+				return
+			}
+		}
 	} else {
 		// Extract prompt from plan creation AgentRun.Input for plan execution
 		// Note: This prompt is stored in executionRun.Input but not used by CreateJobForPlanExecution
@@ -1580,13 +1653,6 @@ func handlePlanCreated(
 			})
 		}
 		executionRun.Input = datatypes.JSON(inputBytes)
-
-		// Get completion timestamp for transactional update
-		// Use agentRun.CompletedAt if already set, otherwise use current time
-		now := time.Now()
-		if agentRun.CompletedAt != nil {
-			now = *agentRun.CompletedAt
-		}
 
 		// Use transaction to atomically create execution run and transition plan creation run to succeeded
 		// This ensures that if execution run creation succeeds, plan creation run state is also updated
