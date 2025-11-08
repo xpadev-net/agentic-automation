@@ -192,11 +192,13 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	var resp map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	assert.Equal(t, "processed", resp["status"])
+	// For issue-triggered plan creation, status is "plan_creation_started"
+	assert.Equal(t, "plan_creation_started", resp["status"])
 
-	// Verify AgentRun state and fetch ID for labels
+	// Verify plan creation AgentRun state
 	arRepo := repositories.NewAgentRunRepository(db)
-	run, err := arRepo.GetByIDempotencyKey(deliveryID)
+	planAgentRunID := int(resp["plan_agent_run_id"].(float64))
+	run, err := arRepo.GetByID(planAgentRunID)
 	require.NoError(t, err)
 	assert.Equal(t, "started", run.State)
 
