@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"agentic-automation/internal/clients"
+	errcodes "agentic-automation/internal/errors"
 )
 
 // RetryConfig represents configuration for retry behavior
@@ -91,10 +92,15 @@ func IsRetryableError(err error) bool {
 	// Check for clients.GitHubError (wrapped GitHub API errors)
 	var ghClientErr *clients.GitHubError
 	if errors.As(err, &ghClientErr) {
+		// If ErrorResponse exists, check status code
 		if ghClientErr.ErrorResponse != nil && ghClientErr.ErrorResponse.Response != nil {
 			statusCode := ghClientErr.ErrorResponse.Response.StatusCode
 			// Retry on rate limit (429) and server errors (5xx)
 			return statusCode == http.StatusTooManyRequests || (statusCode >= 500 && statusCode < 600)
+		}
+		// If ErrorResponse is nil, check Code field for rate limit and server errors
+		if ghClientErr.Code == errcodes.ERR_GITHUB_RATE_LIMIT || ghClientErr.Code == errcodes.ERR_GITHUB_SERVER_ERROR {
+			return true
 		}
 	}
 
