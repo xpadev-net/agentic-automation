@@ -1026,6 +1026,116 @@ func handlePlanCreated(
 		return
 	}
 
+	// Check for new reviews BEFORE creating execution job
+	// If new reviews exist, invalidate the current plan and recreate it with updated context
+	// This prevents executing a stale plan that has been invalidated by new review input
+	if reviewFeedback.GitHubCommentID != nil && *reviewFeedback.GitHubCommentID > 0 {
+		newerReviews, err := reviewFeedbackRepo.FindNewerReviewsByPRID(reviewFeedback.PRID, *reviewFeedback.GitHubCommentID)
+		if err != nil {
+			logger.Warn("Failed to check for newer reviews before execution job creation",
+				zap.Error(err),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.Int64("github_comment_id", *reviewFeedback.GitHubCommentID),
+			)
+			// Continue with execution job creation even if check fails
+		} else if len(newerReviews) > 0 {
+			logger.Info("New reviews found before execution job creation, recreating plan with updated context",
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.Int("newer_reviews_count", len(newerReviews)),
+				zap.Int64("original_comment_id", *reviewFeedback.GitHubCommentID),
+			)
+
+			// Aggregate new review contents
+			var aggregatedContent strings.Builder
+			if reviewFeedback.Content != nil && *reviewFeedback.Content != "" {
+				aggregatedContent.WriteString(*reviewFeedback.Content)
+			}
+			for _, newReview := range newerReviews {
+				if newReview.Content != nil && *newReview.Content != "" {
+					if aggregatedContent.Len() > 0 {
+						aggregatedContent.WriteString("\n\n--- Additional Review ---\n\n")
+					}
+					aggregatedContent.WriteString(*newReview.Content)
+				}
+			}
+
+			// Update reviewFeedback with aggregated content and reset plan status
+			aggregatedContentStr := aggregatedContent.String()
+			reviewFeedback.Content = &aggregatedContentStr
+			reviewFeedback.PlanCreationStatus = "pending"
+			reviewFeedback.PlanContent = nil
+			reviewFeedback.PlanAgentRunID = nil
+			reviewFeedback.ExecutionAgentRunID = nil
+
+			// Update to the latest GitHubCommentID
+			latestReview := newerReviews[0] // Already ordered by created_at DESC
+			if latestReview.GitHubCommentID != nil {
+				reviewFeedback.GitHubCommentID = latestReview.GitHubCommentID
+			}
+
+			if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+				logger.Error("Failed to update review feedback for plan recreation",
+					zap.Error(err),
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+				)
+				// Continue with normal response even if update fails
+			} else {
+				// Trigger plan recreation by calling startPlanCreationIfNeeded
+				// Create minimal deps structure for this
+				planDeps := PullRequestReviewCommentDeps{
+					Logger:                   logger,
+					ReviewFeedbackRepository: reviewFeedbackRepo,
+				}
+
+				// Use the aggregated content as the comment body
+				commentBody := aggregatedContentStr
+				if commentBody == "" {
+					commentBody = "Review feedback"
+				}
+
+				// Use the latest comment ID or a placeholder
+				commentID := int64(0)
+				if latestReview.GitHubCommentID != nil {
+					commentID = *latestReview.GitHubCommentID
+				}
+
+				// Trigger plan recreation (async - don't wait for result)
+				go func() {
+					// Create a new context for the background goroutine
+					bgCtx := context.Background()
+					_, planErr := startPlanCreationIfNeeded(
+						bgCtx,
+						planDeps,
+						logger,
+						pr,
+						commentBody,
+						commentID,
+						"", // commentUserLogin - not critical for recreation
+						0,  // commentUserID - not critical for recreation
+						fmt.Sprintf("plan-recreation-%d", reviewFeedback.ID),
+					)
+					if planErr != nil {
+						logger.Error("Failed to recreate plan with new reviews",
+							zap.Error(planErr),
+							zap.Int("review_feedback_id", reviewFeedback.ID),
+						)
+					} else {
+						logger.Info("Plan recreation triggered successfully",
+							zap.Int("review_feedback_id", reviewFeedback.ID),
+						)
+					}
+				}()
+			}
+
+			// Early return: skip execution job creation since plan is being recreated
+			c.JSON(http.StatusOK, gin.H{
+				"message":      "Plan invalidated by new reviews, recreating plan",
+				"agent_run_id": agentRunID,
+			})
+			return
+		}
+	}
+
 	executionPRID := reviewFeedback.PRID
 	executionRun := &models.AgentRun{
 		IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", reviewFeedback.ID, agentRunID, time.Now().UnixNano()),
@@ -1129,119 +1239,6 @@ func handlePlanCreated(
 		zap.Int("review_feedback_id", reviewFeedback.ID),
 		zap.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 	)
-
-	// Check for new reviews after plan creation completes
-	// If new reviews exist, invalidate the current plan and recreate it with updated context
-	if reviewFeedback.GitHubCommentID != nil && *reviewFeedback.GitHubCommentID > 0 {
-		newerReviews, err := reviewFeedbackRepo.FindNewerReviewsByPRID(reviewFeedback.PRID, *reviewFeedback.GitHubCommentID)
-		if err != nil {
-			logger.Warn("Failed to check for newer reviews after plan creation",
-				zap.Error(err),
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.Int64("github_comment_id", *reviewFeedback.GitHubCommentID),
-			)
-			// Continue with normal response even if check fails
-		} else if len(newerReviews) > 0 {
-			logger.Info("New reviews found after plan creation, recreating plan with updated context",
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.Int("newer_reviews_count", len(newerReviews)),
-				zap.Int64("original_comment_id", *reviewFeedback.GitHubCommentID),
-			)
-
-			// Aggregate new review contents
-			var aggregatedContent strings.Builder
-			if reviewFeedback.Content != nil && *reviewFeedback.Content != "" {
-				aggregatedContent.WriteString(*reviewFeedback.Content)
-			}
-			for _, newReview := range newerReviews {
-				if newReview.Content != nil && *newReview.Content != "" {
-					if aggregatedContent.Len() > 0 {
-						aggregatedContent.WriteString("\n\n--- Additional Review ---\n\n")
-					}
-					aggregatedContent.WriteString(*newReview.Content)
-				}
-			}
-
-			// Update reviewFeedback with aggregated content and reset plan status
-			aggregatedContentStr := aggregatedContent.String()
-			reviewFeedback.Content = &aggregatedContentStr
-			reviewFeedback.PlanCreationStatus = "pending"
-			reviewFeedback.PlanContent = nil
-			reviewFeedback.PlanAgentRunID = nil
-			reviewFeedback.ExecutionAgentRunID = nil
-
-			// Update to the latest GitHubCommentID
-			latestReview := newerReviews[0] // Already ordered by created_at DESC
-			if latestReview.GitHubCommentID != nil {
-				reviewFeedback.GitHubCommentID = latestReview.GitHubCommentID
-			}
-
-			if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-				logger.Error("Failed to update review feedback for plan recreation",
-					zap.Error(err),
-					zap.Int("review_feedback_id", reviewFeedback.ID),
-				)
-				// Continue with normal response even if update fails
-			} else {
-				// Trigger plan recreation by calling startPlanCreationIfNeeded
-				// We need to create a minimal deps structure for this
-				prRepo := repositories.NewPullRequestRepository(db)
-				pr, prErr := prRepo.FindByID(reviewFeedback.PRID)
-				if prErr != nil {
-					logger.Error("Failed to load PullRequest for plan recreation",
-						zap.Error(prErr),
-						zap.Int("pr_id", reviewFeedback.PRID),
-					)
-					// Continue with normal response
-				} else if pr != nil {
-					// Create minimal deps for plan creation
-					planDeps := PullRequestReviewCommentDeps{
-						Logger:                   logger,
-						ReviewFeedbackRepository: reviewFeedbackRepo,
-					}
-
-					// Use the aggregated content as the comment body
-					commentBody := aggregatedContentStr
-					if commentBody == "" {
-						commentBody = "Review feedback"
-					}
-
-					// Use the latest comment ID or a placeholder
-					commentID := int64(0)
-					if latestReview.GitHubCommentID != nil {
-						commentID = *latestReview.GitHubCommentID
-					}
-
-					// Trigger plan recreation (async - don't wait for result)
-					go func() {
-						// Create a new context for the background goroutine
-						bgCtx := context.Background()
-						_, planErr := startPlanCreationIfNeeded(
-							bgCtx,
-							planDeps,
-							logger,
-							pr,
-							commentBody,
-							commentID,
-							"", // commentUserLogin - not critical for recreation
-							0,  // commentUserID - not critical for recreation
-							fmt.Sprintf("plan-recreation-%d", reviewFeedback.ID),
-						)
-						if planErr != nil {
-							logger.Error("Failed to recreate plan with new reviews",
-								zap.Error(planErr),
-								zap.Int("review_feedback_id", reviewFeedback.ID),
-							)
-						} else {
-							logger.Info("Plan recreation triggered successfully",
-								zap.Int("review_feedback_id", reviewFeedback.ID),
-							)
-						}
-					}()
-				}
-			}
-		}
-	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":      "Plan created and execution job started",
