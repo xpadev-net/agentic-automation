@@ -195,8 +195,10 @@ func BuildPlanCreationPrompt(reviewFeedback string) string {
 3. 対応が困難または不要な場合は、却下理由を明確にしてください
 
 プランの形式:
-- プランを作成する場合: "PLAN_CREATED\n\n[プラン内容]"
-- プランを却下する場合: "PLAN_REJECTED\n\n[却下理由]"
+- プランを作成する場合: <plan_created>[プラン内容]</plan_created>
+- プランを却下する場合: <plan_rejected>[却下理由]</plan_rejected>
+
+注意: タグの外側に説明文やその他の文章が含まれていても構いません。タグ内の内容が抽出されます。
 
 注意: このモードではファイルの変更は行いません。プランの作成のみを行ってください。`, reviewFeedback)
 }

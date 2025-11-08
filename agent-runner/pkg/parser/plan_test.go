@@ -13,12 +13,12 @@ func TestParsePlanResult(t *testing.T) {
 		reasonContains string
 	}{
 		"plan created": {
-			input:      "PLAN_CREATED\n\n1. Fix bug\n2. Add test",
+			input:      "<plan_created>1. Fix bug\n2. Add test</plan_created>",
 			expectPlan: "1. Fix bug\n2. Add test",
 			rejected:   false,
 		},
 		"plan rejected": {
-			input:          "PLAN_REJECTED\n\nToo risky",
+			input:          "<plan_rejected>Too risky</plan_rejected>",
 			rejected:       true,
 			reasonContains: "Too risky",
 		},
@@ -27,20 +27,55 @@ func TestParsePlanResult(t *testing.T) {
 			rejected:       true,
 			reasonContains: "空",
 		},
-		"missing marker": {
+		"missing tag": {
 			input:          "Some random text",
 			rejected:       true,
 			reasonContains: "形式",
 		},
 		"created empty body": {
-			input:          "PLAN_CREATED\n\n",
+			input:          "<plan_created></plan_created>",
+			rejected:       true,
+			reasonContains: "空",
+		},
+		"created empty body with whitespace": {
+			input:          "<plan_created>   </plan_created>",
 			rejected:       true,
 			reasonContains: "空",
 		},
 		"rejected empty reason": {
-			input:          "PLAN_REJECTED",
+			input:          "<plan_rejected></plan_rejected>",
 			rejected:       true,
 			reasonContains: "理由",
+		},
+		"plan created with text outside": {
+			input:      "これはプランです。\n<plan_created>1. Task 1\n2. Task 2</plan_created>\n以上です。",
+			expectPlan: "1. Task 1\n2. Task 2",
+			rejected:   false,
+		},
+		"plan rejected with text outside": {
+			input:          "分析結果:\n<plan_rejected>リスクが高すぎます</plan_rejected>\n理由: 上記の通り",
+			rejected:       true,
+			reasonContains: "リスクが高すぎます",
+		},
+		"plan created with multiline content": {
+			input:      "<plan_created>ステップ1: バグを修正\nステップ2: テストを追加\nステップ3: ドキュメントを更新</plan_created>",
+			expectPlan: "ステップ1: バグを修正\nステップ2: テストを追加\nステップ3: ドキュメントを更新",
+			rejected:   false,
+		},
+		"plan created with text before and after": {
+			input:      "前置きの文章です。\n\n<plan_created>プラン内容</plan_created>\n\n後置きの文章です。",
+			expectPlan: "プラン内容",
+			rejected:   false,
+		},
+		"multiple tags - first valid one used": {
+			input:          "<plan_rejected>最初のタグ</plan_rejected>\n<plan_created>2番目のタグ</plan_created>",
+			rejected:       true,
+			reasonContains: "最初のタグ",
+		},
+		"plan created with leading/trailing whitespace in tag": {
+			input:      "<plan_created>\n  1. Task 1\n  2. Task 2\n</plan_created>",
+			expectPlan: "1. Task 1\n  2. Task 2",
+			rejected:   false,
 		},
 	}
 
