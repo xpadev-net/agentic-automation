@@ -302,6 +302,7 @@ func HandleAgentReport(c *gin.Context) {
 	var prURL string
 	var logsExcerpt string
 	var finalErrorMessage string
+	var isNewPR bool
 
 	if req.Status == "succeeded" {
 		// Load Issue for repo to build PR URL
