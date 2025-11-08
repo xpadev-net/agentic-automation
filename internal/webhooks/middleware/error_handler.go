@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/errors"
 	"fmt"
