@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -767,7 +768,21 @@ func startPlanCreationIfNeeded(
 		Output:           datatypes.JSON([]byte("{}")),
 	}
 
-	idempotencyKey := fmt.Sprintf("plan_creation:review_feedback:%d", reviewFeedback.ID)
+	// Detect plan recreation: if PlanAgentRunID is already set, this is a recreation
+	// Use a unique idempotency key with timestamp to create a new AgentRun with a new job name
+	var idempotencyKey string
+	if reviewFeedback.PlanAgentRunID != nil {
+		// Plan recreation: use unique idempotency key with timestamp
+		idempotencyKey = fmt.Sprintf("plan_creation:review_feedback:%d:recreation:%d", reviewFeedback.ID, time.Now().UnixNano())
+		logger.Info("Detected plan recreation, using unique idempotency key",
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.Int("previous_agent_run_id", *reviewFeedback.PlanAgentRunID),
+			zap.String("delivery_id", deliveryID),
+		)
+	} else {
+		// New plan creation: use standard idempotency key
+		idempotencyKey = fmt.Sprintf("plan_creation:review_feedback:%d", reviewFeedback.ID)
+	}
 	createdRun, isNew, err := agentRunRepo.CreateOrGet(idempotencyKey, planRun)
 	if err != nil {
 		logger.Error("Failed to create or get plan creation agent run",
@@ -796,6 +811,97 @@ func startPlanCreationIfNeeded(
 		}
 	}
 
+	// Atomically update PlanCreationStatus from 'pending' to 'creating' for this PR
+	// This prevents concurrent plan creation attempts for the same PR across multiple ReviewFeedback records
+	started, err := reviewFeedbackRepo.TryStartPlanCreationForPR(pr.ID, reviewFeedback.ID, planAgentRun.ID)
+	if err != nil {
+		logger.Error("Failed to atomically start plan creation for PR",
+			zap.Error(err),
+			zap.Int("pr_id", pr.ID),
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.Int("agent_run_id", planAgentRun.ID),
+			zap.String("delivery_id", deliveryID),
+		)
+		return nil, err
+	}
+
+	if !started {
+		// Another process already started plan creation for this PR, or this ReviewFeedback is not in 'pending' state
+		// Check if there's an existing plan creation in progress for this PR
+		allFeedbacks, err := reviewFeedbackRepo.FindByPRID(pr.ID)
+		if err != nil {
+			logger.Error("Failed to load review feedbacks for PR after concurrent update",
+				zap.Error(err),
+				zap.Int("pr_id", pr.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, err
+		}
+
+		// Find the ReviewFeedback that is currently in 'creating' state
+		var creatingFeedback *models.ReviewFeedback
+		for _, fb := range allFeedbacks {
+			if fb.PlanCreationStatus == "creating" {
+				creatingFeedback = fb
+				break
+			}
+		}
+
+		if creatingFeedback != nil {
+			logger.Info("Plan creation already started for this PR by another ReviewFeedback",
+				zap.Int("pr_id", pr.ID),
+				zap.Int("current_review_feedback_id", reviewFeedback.ID),
+				zap.Int("creating_review_feedback_id", creatingFeedback.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			result := &planCreationResult{
+				Status:            "skipped_plan_already_started",
+				ReviewFeedbackID:  reviewFeedback.ID,
+				PlanCreationState: "creating",
+			}
+			if creatingFeedback.PlanAgentRunID != nil {
+				result.PlanAgentRunID = *creatingFeedback.PlanAgentRunID
+			}
+			return result, nil
+		}
+
+		// Reload the current review feedback to get the current state
+		updatedFeedback, err := reviewFeedbackRepo.FindByID(reviewFeedback.ID)
+		if err != nil {
+			logger.Error("Failed to reload review feedback after concurrent update",
+				zap.Error(err),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return nil, err
+		}
+		if updatedFeedback == nil {
+			logger.Warn("Review feedback not found after concurrent update",
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.String("delivery_id", deliveryID),
+			)
+			return &planCreationResult{
+				Status:           "skipped_feedback_missing",
+				ReviewFeedbackID: reviewFeedback.ID,
+			}, nil
+		}
+
+		logger.Info("Plan creation already started by another process",
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("plan_creation_status", updatedFeedback.PlanCreationStatus),
+			zap.String("delivery_id", deliveryID),
+		)
+		result := &planCreationResult{
+			Status:            "skipped_plan_already_started",
+			ReviewFeedbackID:  updatedFeedback.ID,
+			PlanCreationState: updatedFeedback.PlanCreationStatus,
+		}
+		if updatedFeedback.PlanAgentRunID != nil {
+			result.PlanAgentRunID = *updatedFeedback.PlanAgentRunID
+		}
+		return result, nil
+	}
+
 	jobService := deps.KubernetesJobService
 	if jobService == nil {
 		kubernetesClient, clientErr := clients.NewKubernetesClient(logger)
@@ -804,6 +910,13 @@ func startPlanCreationIfNeeded(
 				zap.Error(clientErr),
 				zap.String("delivery_id", deliveryID),
 			)
+			// Rollback: reset PlanCreationStatus to 'pending'
+			if rollbackErr := reviewFeedbackRepo.UpdatePlanCreationStatus(reviewFeedback.ID, "pending"); rollbackErr != nil {
+				logger.Error("Failed to rollback plan creation status after Kubernetes client error",
+					zap.Error(rollbackErr),
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+				)
+			}
 			return nil, clientErr
 		}
 		jobService = services.NewKubernetesJobService(kubernetesClient, logger)
@@ -822,6 +935,13 @@ func startPlanCreationIfNeeded(
 			zap.Int("review_feedback_id", reviewFeedback.ID),
 			zap.String("delivery_id", deliveryID),
 		)
+		// Rollback: reset PlanCreationStatus to 'pending'
+		if rollbackErr := reviewFeedbackRepo.UpdatePlanCreationStatus(reviewFeedback.ID, "pending"); rollbackErr != nil {
+			logger.Error("Failed to rollback plan creation status after job creation failure",
+				zap.Error(rollbackErr),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+			)
+		}
 		return nil, jobErr
 	}
 
@@ -832,17 +952,6 @@ func startPlanCreationIfNeeded(
 		zap.String("branch_name", branchName),
 		zap.Bool("job_created", job != nil),
 	)
-
-	reviewFeedback.PlanCreationStatus = "creating"
-	reviewFeedback.PlanAgentRunID = &planAgentRun.ID
-	if updateErr := reviewFeedbackRepo.Update(reviewFeedback); updateErr != nil {
-		logger.Error("Failed to update review feedback plan creation status",
-			zap.Error(updateErr),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("delivery_id", deliveryID),
-		)
-		return nil, updateErr
-	}
 
 	result := &planCreationResult{
 		Status:            "started",
