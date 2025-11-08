@@ -110,7 +110,7 @@ func buildPRBodyWithCollapsibleSections(baseBody string, issueBody string, planC
 
 	// Add Issue body section if not empty
 	if strings.TrimSpace(issueBody) != "" {
-		issueSection := fmt.Sprintf("<details>\n<summary>Issue #%d</summary>\n\n%s\n\n</details>", issueID, issueBody)
+		issueSection := fmt.Sprintf("<details>\n<summary>Issue #%d</summary>\n\n```xml\n%s\n```\n\n</details>", issueID, issueBody)
 		sections = append(sections, issueSection)
 	}
 
