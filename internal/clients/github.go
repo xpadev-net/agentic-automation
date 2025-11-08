@@ -489,6 +489,39 @@ func (c *Client) ListPullRequestComments(ctx context.Context, owner, repo string
 	return allComments, nil
 }
 
+// ListPullRequestCommentsForReview retrieves all review comments for a specific pull request review
+// It filters comments by PullRequestReviewID to return only comments associated with the given review
+func (c *Client) ListPullRequestCommentsForReview(ctx context.Context, owner, repo string, prNumber int, reviewID int64) ([]*github.PullRequestComment, error) {
+	c.logger.Info("Listing GitHub pull request comments for review",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.Int("pr_number", prNumber),
+		zap.Int64("review_id", reviewID),
+	)
+
+	// Get all comments for the PR
+	allComments, err := c.ListPullRequestComments(ctx, owner, repo, prNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter comments by PullRequestReviewID
+	var reviewComments []*github.PullRequestComment
+	for _, comment := range allComments {
+		if comment.PullRequestReviewID != nil && *comment.PullRequestReviewID == reviewID {
+			reviewComments = append(reviewComments, comment)
+		}
+	}
+
+	c.logger.Info("Filtered review comments",
+		zap.Int("total_comments", len(allComments)),
+		zap.Int("review_comments", len(reviewComments)),
+		zap.Int64("review_id", reviewID),
+	)
+
+	return reviewComments, nil
+}
+
 // MergePullRequest merges a GitHub pull request
 func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, prNumber int, commitMessage string, mergeMethod string) (*github.PullRequestMergeResult, error) {
 	c.logger.Info("Merging GitHub pull request",
