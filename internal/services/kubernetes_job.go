@@ -408,7 +408,8 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 	return job, nil
 }
 
-// CreateJobForPlanCreation creates a Kubernetes Job that generates a plan from review feedback content.
+// CreateJobForPlanCreation creates a Kubernetes Job that generates a plan from review feedback content or issue content.
+// reviewFeedback can be nil for issue-triggered plan creation (e.g., /run-agent from issue).
 func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil for plan creation",
@@ -425,25 +426,55 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		return nil, fmt.Errorf("issue must not be nil")
 	}
 
-	if reviewFeedback == nil {
-		s.logger.Error("reviewFeedback must not be nil for plan creation",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("review feedback must not be nil")
+	// Extract content for plan creation
+	var planContent string
+	var contentSource string
+	var reviewFeedbackID int
+
+	if reviewFeedback != nil {
+		// Review feedback-based plan creation
+		if reviewFeedback.Content != nil {
+			planContent = strings.TrimSpace(*reviewFeedback.Content)
+		}
+		if planContent == "" {
+			s.logger.Error("review feedback content must not be empty for plan creation",
+				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("review_feedback_id", reviewFeedback.ID),
+				zap.String("service", "kubernetes_job"),
+			)
+			return nil, fmt.Errorf("review feedback content must not be empty")
+		}
+		contentSource = "review_feedback"
+		reviewFeedbackID = reviewFeedback.ID
+	} else {
+		// Issue-based plan creation (for /run-agent from issue)
+		// Extract prompt from AgentRun.Input if available
+		if len(agentRun.Input) > 0 {
+			var inputMap map[string]interface{}
+			if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
+				if prompt, ok := inputMap["prompt"].(string); ok && strings.TrimSpace(prompt) != "" {
+					planContent = strings.TrimSpace(prompt)
+				}
+			}
+		}
+		// Fallback to issue title/body if prompt not found in Input
+		if planContent == "" {
+			planContent = fmt.Sprintf("Issue #%d: %s", issue.Number, issue.Title)
+			if issue.Body != nil && strings.TrimSpace(*issue.Body) != "" {
+				planContent += "\n\n" + strings.TrimSpace(*issue.Body)
+			}
+		}
+		contentSource = "issue"
+		reviewFeedbackID = 0
 	}
 
-	reviewContent := ""
-	if reviewFeedback.Content != nil {
-		reviewContent = strings.TrimSpace(*reviewFeedback.Content)
-	}
-	if reviewContent == "" {
-		s.logger.Error("review feedback content must not be empty for plan creation",
+	if planContent == "" {
+		s.logger.Error("plan content must not be empty for plan creation",
 			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("content_source", contentSource),
 			zap.String("service", "kubernetes_job"),
 		)
-		return nil, fmt.Errorf("review feedback content must not be empty")
+		return nil, fmt.Errorf("plan content must not be empty")
 	}
 
 	agentRunnerImage, err := getRequiredEnv("AGENT_RUNNER_IMAGE", s.logger)
@@ -460,8 +491,9 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		zap.String("agent_type", agentRun.AgentType),
 		zap.Int("retry_count", agentRun.RetryCount),
 		zap.Int("timeout_minutes", timeoutMinutes),
-		zap.Int("review_feedback_id", reviewFeedback.ID),
-		zap.Int("review_content_length", len(reviewContent)),
+		zap.String("content_source", contentSource),
+		zap.Int("review_feedback_id", reviewFeedbackID),
+		zap.Int("plan_content_length", len(planContent)),
 		zap.String("service", "kubernetes_job"),
 	)
 
@@ -478,7 +510,7 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		TimeoutMinutes:        timeoutMinutes,
 		BranchName:            branchName,
 		ExecutionMode:         "plan_creation",
-		ReviewFeedbackContent: reviewContent,
+		ReviewFeedbackContent: planContent,
 		CursorAllowWrite:      false,
 	}
 
@@ -488,7 +520,8 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 	if err != nil {
 		s.logger.Error("Failed to create plan creation job",
 			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.String("content_source", contentSource),
+			zap.Int("review_feedback_id", reviewFeedbackID),
 			zap.String("job_name", jobName),
 			zap.Error(err),
 			zap.String("service", "kubernetes_job"),
@@ -498,7 +531,8 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 
 	s.logger.Info("Plan creation job created successfully",
 		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("review_feedback_id", reviewFeedback.ID),
+		zap.String("content_source", contentSource),
+		zap.Int("review_feedback_id", reviewFeedbackID),
 		zap.String("job_name", jobName),
 		zap.String("job_uid", string(job.UID)),
 		zap.String("namespace", job.Namespace),

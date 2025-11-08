@@ -952,10 +952,68 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Step 12: Update AgentRun
-	agentRun.AgentType = agentType
+	// Step 12: Create plan creation AgentRun for /run-agent trigger
+	// For /run-agent from issue, we first create a plan, then execute it
+	planCreationIdempotencyKey := fmt.Sprintf("plan_creation:issue:%d:%s", issue.ID, deliveryID)
+	
+	// Check if plan creation AgentRun already exists
+	planAgentRun, err := agentRunRepo.GetByIDempotencyKey(planCreationIdempotencyKey)
+	if err != nil && !stderrors.Is(err, gorm.ErrRecordNotFound) {
+		logger.Error("Failed to check for existing plan creation AgentRun",
+			zap.Error(err),
+			zap.String("idempotency_key", planCreationIdempotencyKey),
+			zap.String("delivery_id", deliveryID),
+		)
+		c.Error(err)
+		return
+	}
 
-	// Build structured input JSON (schema v1)
+	if planAgentRun != nil && planAgentRun.State != "queued" {
+		logger.Info("Plan creation AgentRun already processed",
+			zap.Int("plan_agent_run_id", planAgentRun.ID),
+			zap.String("state", planAgentRun.State),
+			zap.String("delivery_id", deliveryID),
+		)
+		c.JSON(http.StatusOK, gin.H{
+			"status":            "already_processed",
+			"plan_agent_run_id": planAgentRun.ID,
+			"state":             planAgentRun.State,
+			"delivery_id":       deliveryID,
+		})
+		return
+	}
+
+	// Create new plan creation AgentRun if it doesn't exist
+	if planAgentRun == nil {
+		planAgentRun = &models.AgentRun{
+			IdempotencyKey:   planCreationIdempotencyKey,
+			IssueID:          issue.ID,
+			PRID:             nil, // No PR for issue-triggered plan creation
+			State:            "queued",
+			AgentType:        agentType,
+			ExecutionMode:    "plan_creation",
+			ReviewFeedbackID: nil, // No review feedback for issue-triggered plan creation
+			RetryCount:       0,
+		}
+
+		if err := agentRunRepo.Create(planAgentRun); err != nil {
+			logger.Error("Failed to create plan creation AgentRun",
+				zap.Error(err),
+				zap.String("idempotency_key", planCreationIdempotencyKey),
+				zap.String("delivery_id", deliveryID),
+			)
+			c.Error(err)
+			return
+		}
+
+		logger.Info("Plan creation AgentRun created",
+			zap.Int("plan_agent_run_id", planAgentRun.ID),
+			zap.String("idempotency_key", planCreationIdempotencyKey),
+			zap.String("delivery_id", deliveryID),
+		)
+	}
+
+	// Build structured input JSON for plan creation (schema v1)
 	inputPayload := map[string]any{
 		"schema_version": "1",
 		"prompt":         prompt,
@@ -979,14 +1037,12 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		})
 	}
 
-	// Assign JSON to AgentRun.Input
-	// Use datatypes.JSON to match MySQL JSON column type
-	// Note: import added if not present
-	agentRun.Input = datatypes.JSON(inputBytes)
-	if err := agentRunRepo.Update(agentRun); err != nil {
-		logger.Error("Failed to update AgentRun",
+	// Assign JSON to plan creation AgentRun.Input
+	planAgentRun.Input = datatypes.JSON(inputBytes)
+	if err := agentRunRepo.Update(planAgentRun); err != nil {
+		logger.Error("Failed to update plan creation AgentRun",
 			zap.Error(err),
-			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("plan_agent_run_id", planAgentRun.ID),
 			zap.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
@@ -1089,40 +1145,41 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		)
 	}
 
-	// Step 13: State transition (queued -> started)
-	if err := stateMachine.TransitionToStarted(agentRun.ID); err != nil {
-		logger.Error("Failed to transition AgentRun to started state",
+	// Step 13: State transition for plan creation AgentRun (queued -> started)
+	if err := stateMachine.TransitionToStarted(planAgentRun.ID); err != nil {
+		logger.Error("Failed to transition plan creation AgentRun to started state",
 			zap.Error(err),
-			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("plan_agent_run_id", planAgentRun.ID),
 			zap.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
 	}
 
-	logger.Info("AgentRun state transitioned to started",
-		zap.Int("agent_run_id", agentRun.ID),
+	logger.Info("Plan creation AgentRun state transitioned to started",
+		zap.Int("plan_agent_run_id", planAgentRun.ID),
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Step 14: Create Kubernetes Job
-	job, err := jobService.CreateJobForAgentRun(ctx, agentRun, issue, prompt, existingBranchName)
+	// Step 14: Create Kubernetes Job for plan creation
+	// Note: reviewFeedback is nil for issue-triggered plan creation
+	job, err := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, nil, existingBranchName)
 	if err != nil {
-		logger.Error("Failed to create Kubernetes Job, rolling back state",
+		logger.Error("Failed to create plan creation Kubernetes Job, rolling back state",
 			zap.Error(err),
-			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("plan_agent_run_id", planAgentRun.ID),
 			zap.String("delivery_id", deliveryID),
 		)
 		// Rollback state to queued for retry
-		if rollbackErr := stateMachine.TransitionToQueued(agentRun.ID); rollbackErr != nil {
-			logger.Error("Failed to rollback AgentRun state",
+		if rollbackErr := stateMachine.TransitionToQueued(planAgentRun.ID); rollbackErr != nil {
+			logger.Error("Failed to rollback plan creation AgentRun state",
 				zap.Error(rollbackErr),
-				zap.Int("agent_run_id", agentRun.ID),
+				zap.Int("plan_agent_run_id", planAgentRun.ID),
 				zap.String("delivery_id", deliveryID),
 			)
 		} else {
-			logger.Info("AgentRun state rolled back to queued for retry",
-				zap.Int("agent_run_id", agentRun.ID),
+			logger.Info("Plan creation AgentRun state rolled back to queued for retry",
+				zap.Int("plan_agent_run_id", planAgentRun.ID),
 				zap.String("delivery_id", deliveryID),
 			)
 		}
@@ -1130,34 +1187,34 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		return
 	}
 
-	logger.Info("Kubernetes Job created successfully",
-		zap.Int("agent_run_id", agentRun.ID),
+	logger.Info("Plan creation Kubernetes Job created successfully",
+		zap.Int("plan_agent_run_id", planAgentRun.ID),
 		zap.String("job_name", job.Name),
 		zap.String("job_uid", string(job.UID)),
 		zap.String("namespace", job.Namespace),
 		zap.String("delivery_id", deliveryID),
 	)
 
-	// Post GitHub status comment
+	// Post GitHub status comment for plan creation
 	if err := githubNotificationService.PostExecutionStartComment(
 		ctx,
 		owner,
 		repo,
 		payload.Issue.Number,
-		agentRun.AgentType,
-		agentRun.ID,
+		planAgentRun.AgentType,
+		planAgentRun.ID,
 	); err != nil {
 		// Non-blocking: log error but don't fail the webhook processing
-		logger.Warn("Failed to post GitHub execution start comment",
+		logger.Warn("Failed to post GitHub plan creation start comment",
 			zap.Error(err),
-			zap.Int("agent_run_id", agentRun.ID),
+			zap.Int("plan_agent_run_id", planAgentRun.ID),
 			zap.Int("issue_number", payload.Issue.Number),
 			zap.String("repo", payload.Repository.FullName),
 			zap.String("delivery_id", deliveryID),
 		)
 	} else {
-		logger.Info("GitHub execution start comment posted successfully",
-			zap.Int("agent_run_id", agentRun.ID),
+		logger.Info("GitHub plan creation start comment posted successfully",
+			zap.Int("plan_agent_run_id", planAgentRun.ID),
 			zap.Int("issue_number", payload.Issue.Number),
 			zap.String("repo", payload.Repository.FullName),
 			zap.String("delivery_id", deliveryID),
@@ -1165,11 +1222,12 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 
 	// Step 15: Return success response
+	// Note: Normal execution AgentRun will be created after plan creation completes in agent_report.go
 	c.JSON(http.StatusOK, gin.H{
-		"status":       "processed",
-		"agent_run_id": agentRun.ID,
-		"job_name":     job.Name,
-		"delivery_id":  deliveryID,
+		"status":            "plan_creation_started",
+		"plan_agent_run_id": planAgentRun.ID,
+		"job_name":          job.Name,
+		"delivery_id":       deliveryID,
 	})
 }
 
