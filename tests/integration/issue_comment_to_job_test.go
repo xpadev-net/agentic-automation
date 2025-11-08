@@ -67,6 +67,7 @@ func setupDB(t *testing.T) *gorm.DB {
             execution_mode TEXT DEFAULT 'normal',
             plan_content TEXT,
             review_feedback_id INTEGER,
+			plan_agent_run_id INTEGER,
             input TEXT,
             output TEXT,
             retry_count INTEGER DEFAULT 0,

@@ -21,8 +21,10 @@ type AgentRun struct {
 	ExecutionMode string  `gorm:"type:enum('normal','plan_creation','plan_execution');default:'normal'"`
 	PlanContent   *string `gorm:"type:text"`
 	// ReviewFeedbackID links plan-related runs back to their originating feedback.
-	ReviewFeedbackID *int           `gorm:"column:review_feedback_id;index"`
-	Input            datatypes.JSON `gorm:"type:json"`
+	ReviewFeedbackID *int `gorm:"column:review_feedback_id;index"`
+	// PlanAgentRunID links execution runs to their plan creation run (for issue-triggered plans).
+	PlanAgentRunID *int           `gorm:"column:plan_agent_run_id;index"`
+	Input          datatypes.JSON `gorm:"type:json"`
 	Output           datatypes.JSON `gorm:"type:json"`
 	RetryCount       int            `gorm:"column:retry_count;default:0"`
 	ErrorMessage     *string        `gorm:"column:error_message;type:text"`

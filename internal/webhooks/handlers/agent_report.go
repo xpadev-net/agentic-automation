@@ -898,11 +898,11 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 						zap.String("state", updatedRun.State),
 					)
 
-					// Find existing execution AgentRun if exists
+					// Find existing execution AgentRun if exists (linked to current plan creation run)
 					var executionAgentRunID *int
 					var executionRuns []*models.AgentRun
-					if err := db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
-						agentRun.IssueID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+					if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+						agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
 						executionAgentRunID = &executionRuns[0].ID
 					}
 
@@ -956,11 +956,11 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 					zap.String("state", agentRun.State),
 				)
 
-				// Find existing execution AgentRun if exists
+				// Find existing execution AgentRun if exists (linked to current plan creation run)
 				var executionAgentRunID *int
 				var executionRuns []*models.AgentRun
-				if err := db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
-					agentRun.IssueID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+				if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+					agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
 					executionAgentRunID = &executionRuns[0].ID
 				}
 
@@ -1052,11 +1052,11 @@ func handlePlanCreated(
 			return
 		}
 
-		// For issue-triggered plan creation, check if execution AgentRun already exists
+		// For issue-triggered plan creation, check if execution AgentRun already exists (linked to current plan creation run)
 		if reviewFeedback == nil {
 			var executionRuns []*models.AgentRun
-			if err := db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
-				agentRun.IssueID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+			if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+				agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
 				logger.Info("Execution AgentRun already exists, skipping creation",
 					zap.Int("plan_agent_run_id", agentRunID),
 					zap.Int("execution_agent_run_id", executionRuns[0].ID),
@@ -1464,11 +1464,11 @@ func handlePlanCreated(
 	// Create normal execution AgentRun for issue-triggered plan creation
 	branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
 	
-	// Defensive check: verify no existing execution AgentRun exists
+	// Defensive check: verify no existing execution AgentRun exists (linked to current plan creation run)
 	// This provides an additional safety layer beyond the atomic state transition
 	var existingExecutionRuns []*models.AgentRun
-	if err := db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
-		agentRun.IssueID, "normal").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err == nil && len(existingExecutionRuns) > 0 {
+	if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+		agentRunID, "normal").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err == nil && len(existingExecutionRuns) > 0 {
 		logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
 			zap.Int("plan_agent_run_id", agentRunID),
 			zap.Int("execution_agent_run_id", existingExecutionRuns[0].ID),
@@ -1509,6 +1509,7 @@ func handlePlanCreated(
 		ExecutionMode:    "normal",
 		PlanContent:      &planContentForStorage, // Include plan content for reference
 		ReviewFeedbackID: nil,                     // No review feedback for issue-triggered execution
+		PlanAgentRunID:   &agentRunID,             // Link to plan creation AgentRun
 		RetryCount:       0,
 	}
 
