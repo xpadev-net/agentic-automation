@@ -321,6 +321,17 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Cloned repository %s to %s\n", repo, envCfg.WorkDir)
 
+	// 4.5. Get default branch (base branch) for PR generation and creation
+	fmt.Fprintf(os.Stderr, "Getting default branch for repository %s\n", repo)
+	baseBranch, err := git.GetDefaultBranch(repo)
+	if err != nil {
+		// Log warning but continue with default (master)
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to get default branch: %v (using 'master' as fallback)\n", err)
+		baseBranch = "master"
+	} else {
+		fmt.Fprintf(os.Stderr, "Default branch: %s\n", baseBranch)
+	}
+
 	// 5. Restore session from S3 (if retry_count > 0)
 	if envCfg.RetryCount > 0 {
 		fmt.Fprintf(os.Stderr, "Restoring session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
@@ -548,9 +559,50 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Saved session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 
-	// 14. Create Pull Request
+	// 14. Generate PR title and body (if cursor-agent is used)
+	var prTitle, prBody string
+	if envCfg.AgentType == "cursor-agent" {
+		fmt.Fprintf(os.Stderr, "Generating PR title and body\n")
+		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsg, envCfg.AgentType, envCfg.CursorModel, baseBranch)
+		if err != nil {
+			// Log warning but continue with default title/body
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
+			prTitle = ""
+			prBody = ""
+		} else {
+			prTitle = title
+			prBody = body
+			fmt.Fprintf(os.Stderr, "Generated PR title and body\n")
+		}
+	} else {
+		// For non-cursor-agent, use default format
+		prTitle = ""
+		prBody = ""
+	}
+
+	// Ensure issue-closing keyword is present in PR body
+	if prBody != "" {
+		closingKeyword := fmt.Sprintf("close #%d", issueID)
+		// Check if any closing keyword pattern exists (case-insensitive)
+		bodyLower := strings.ToLower(prBody)
+		hasClosingKeyword := strings.Contains(bodyLower, strings.ToLower(closingKeyword)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("closes #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("closed #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("fix #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("fixes #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("fixed #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("resolve #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("resolves #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("resolved #%d", issueID))
+		if !hasClosingKeyword {
+			prBody = prBody + "\n\n" + closingKeyword
+			fmt.Fprintf(os.Stderr, "Added issue-closing keyword to PR body\n")
+		}
+	}
+
+	// 15. Create Pull Request
 	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
-	prNumber, err := git.CreatePR("", repo, branchName, issueID)
+	prNumber, err := git.CreatePR("", repo, branchName, issueID, prTitle, prBody, baseBranch)
 	if err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("PR creation failed: %v", err),
@@ -564,7 +616,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
 
-	// 15. Run post-hooks
+	// 16. Run post-hooks
 	if manifest != nil && len(manifest.Hooks.Post) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
 		if err := hooks.RunPostHooks(manifest.Hooks.Post, envCfg.WorkDir); err != nil {
@@ -577,7 +629,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		fmt.Fprintf(os.Stderr, "No post-hooks to execute\n")
 	}
 
-	// 16. Report success to Operator API
+	// 17. Report success to Operator API
 	fmt.Fprintf(os.Stderr, "Reporting success to Operator API\n")
 	if err := reporterClient.ReportSuccess(prNumber, branchName, commitSHA, envCfg.AgentType); err != nil {
 		return fmt.Errorf("failed to report success: %w", err)
