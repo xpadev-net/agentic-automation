@@ -1286,9 +1286,23 @@ func handlePlanCreated(
 				} else {
 					// Trigger plan recreation by calling startPlanCreationIfNeeded
 					// Create minimal deps structure for this
+					// Initialize KubernetesJobService before creating planDeps
+					var jobService services.KubernetesJobService
+					kubernetesClient, clientErr := kubernetesClientFactory(logger)
+					if clientErr != nil {
+						logger.Error("Failed to initialize Kubernetes client for plan recreation",
+							zap.Error(clientErr),
+							zap.Int("review_feedback_id", reviewFeedback.ID),
+						)
+						// Continue with nil jobService - startPlanCreationIfNeeded will handle it
+					} else {
+						jobService = kubernetesJobServiceFactory(kubernetesClient, logger)
+					}
+
 					planDeps := PullRequestReviewCommentDeps{
 						Logger:                   logger,
 						ReviewFeedbackRepository: reviewFeedbackRepo,
+						KubernetesJobService:     jobService,
 					}
 
 					// Use the aggregated content as the comment body
