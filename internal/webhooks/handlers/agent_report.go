@@ -1778,6 +1778,29 @@ func handlePlanCreated(
 		agentRunUpdated = true
 	}
 
+	// Reset failed execution run to queued state before transitioning to started
+	// TransitionToStarted only allows queued -> started transitions, so we must reset failed runs first
+	if executionRun.State == "failed" {
+		executionRun.State = "queued"
+		executionRun.StartedAt = nil
+		executionRun.CompletedAt = nil
+		executionRun.ErrorMessage = nil
+		if err := agentRunRepo.Update(executionRun); err != nil {
+			logger.Error("Failed to reset failed execution run to queued state",
+				zap.Error(err),
+				zap.Int("execution_agent_run_id", executionRun.ID),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to reset execution run state",
+			})
+			return
+		}
+		logger.Info("Reset failed execution run to queued state for retry",
+			zap.Int("execution_agent_run_id", executionRun.ID),
+		)
+	}
+
 	// Transition plan execution AgentRun to started state
 	// Note: execution run and plan creation run state transition are already committed in transaction
 	// If this fails, execution run exists and can be retried
