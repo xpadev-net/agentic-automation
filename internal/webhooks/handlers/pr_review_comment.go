@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -767,7 +768,21 @@ func startPlanCreationIfNeeded(
 		Output:           datatypes.JSON([]byte("{}")),
 	}
 
-	idempotencyKey := fmt.Sprintf("plan_creation:review_feedback:%d", reviewFeedback.ID)
+	// Detect plan recreation: if PlanAgentRunID is already set, this is a recreation
+	// Use a unique idempotency key with timestamp to create a new AgentRun with a new job name
+	var idempotencyKey string
+	if reviewFeedback.PlanAgentRunID != nil {
+		// Plan recreation: use unique idempotency key with timestamp
+		idempotencyKey = fmt.Sprintf("plan_creation:review_feedback:%d:recreation:%d", reviewFeedback.ID, time.Now().UnixNano())
+		logger.Info("Detected plan recreation, using unique idempotency key",
+			zap.Int("review_feedback_id", reviewFeedback.ID),
+			zap.Int("previous_agent_run_id", *reviewFeedback.PlanAgentRunID),
+			zap.String("delivery_id", deliveryID),
+		)
+	} else {
+		// New plan creation: use standard idempotency key
+		idempotencyKey = fmt.Sprintf("plan_creation:review_feedback:%d", reviewFeedback.ID)
+	}
 	createdRun, isNew, err := agentRunRepo.CreateOrGet(idempotencyKey, planRun)
 	if err != nil {
 		logger.Error("Failed to create or get plan creation agent run",
