@@ -379,6 +379,7 @@ func (r *ReviewFeedbackRepository) TryStartPlanCreationForPR(prID int, reviewFee
 	// This prevents race conditions where two concurrent transactions could both evaluate
 	// the NOT EXISTS check before either commits, allowing both to succeed.
 	// Row-level locking ensures only one transaction can proceed at a time.
+	// Note: SQLite doesn't support FOR UPDATE, so we omit it for SQLite (tests only).
 	var success bool
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		// Lock all rows for this PR that are in 'pending' or 'creating' status.
@@ -388,9 +389,18 @@ func (r *ReviewFeedbackRepository) TryStartPlanCreationForPR(prID int, reviewFee
 			PlanCreationStatus string
 		}
 		var lockedRows []lockedRow
+
+		// Detect database type to handle SQLite (which doesn't support FOR UPDATE)
+		dbName := tx.Dialector.Name()
 		lockQuery := `SELECT id, plan_creation_status FROM review_feedback 
 WHERE pr_id = ? AND plan_creation_status IN ('pending', 'creating') 
-ORDER BY id FOR UPDATE`
+ORDER BY id`
+
+		// Add FOR UPDATE for databases that support it (MySQL, PostgreSQL)
+		// SQLite doesn't support FOR UPDATE, but transactions still provide some isolation
+		if dbName != "sqlite" {
+			lockQuery += " FOR UPDATE"
+		}
 
 		if err := tx.Raw(lockQuery, prID).Scan(&lockedRows).Error; err != nil {
 			return err
