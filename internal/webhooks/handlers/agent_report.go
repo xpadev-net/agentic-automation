@@ -331,8 +331,22 @@ func HandleAgentReport(c *gin.Context) {
 			return
 		}
 
-		// Upsert PullRequest and link to AgentRun
+		// Check if PR is newly created (before Upsert)
 		prRepo := repositories.NewPullRequestRepository(db)
+		_, err = prRepo.FindByRepoAndNumber(issue.Repo, *req.PRNumber)
+		isNewPR = goerrors.Is(err, gorm.ErrRecordNotFound)
+		if err != nil && !isNewPR {
+			logger.Warn("Failed to check if PR exists before upsert",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+				zap.String("repo", issue.Repo),
+				zap.Int("pr_number", *req.PRNumber),
+			)
+			// Continue processing, assume it's a new PR if check fails
+			isNewPR = true
+		}
+
+		// Upsert PullRequest and link to AgentRun
 		pr := &models.PullRequest{
 			Repo:    issue.Repo,
 			Number:  *req.PRNumber,
@@ -390,6 +404,62 @@ func HandleAgentReport(c *gin.Context) {
 				zap.Int("agent_run_id", agentRunID),
 				zap.String("status", reviewFeedback.Status),
 			)
+		}
+
+		// Request Codex review using RequestReview (idempotent)
+		// Parse owner/repo from Issue.Repo (format: owner/repo)
+		owner := ""
+		repo := ""
+		if parts := strings.SplitN(issue.Repo, "/", 2); len(parts) == 2 {
+			owner, repo = parts[0], parts[1]
+		}
+
+		if owner != "" && repo != "" {
+			// Initialize GitHub App client (DI/global), then per-repo client
+			if appGitHubClient == nil {
+				if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+					appGitHubClient = ghApp
+				} else {
+					logger.Warn("Failed to init GitHub App client; skip Codex review request", zap.Error(err))
+				}
+			}
+
+			if appGitHubClient != nil {
+				rawClient, err := appGitHubClient.ForRepo(c.Request.Context(), owner, repo)
+				if err != nil {
+					logger.Warn("Failed to init per-repo GitHub client; skip Codex review request", zap.Error(err))
+				} else {
+					githubClient := clients.NewFromGitHub(rawClient, logger)
+					codexReviewService := services.NewCodexReviewService(githubClient, reviewFeedbackRepo, logger)
+
+					if _, err := codexReviewService.RequestReview(
+						c.Request.Context(),
+						owner,
+						repo,
+						savedPR.Number,
+						savedPR.ID,
+						agentRun.IdempotencyKey,
+					); err != nil {
+						logger.Warn("Failed to request Codex review",
+							zap.Error(err),
+							zap.String("owner", owner),
+							zap.String("repo", repo),
+							zap.Int("pr_number", savedPR.Number),
+							zap.Int("pr_id", savedPR.ID),
+							zap.Int("agent_run_id", agentRunID),
+						)
+						// Continue processing even if RequestReview fails (non-blocking)
+					} else {
+						logger.Info("Requested Codex review",
+							zap.String("owner", owner),
+							zap.String("repo", repo),
+							zap.Int("pr_number", savedPR.Number),
+							zap.Int("pr_id", savedPR.ID),
+							zap.Int("agent_run_id", agentRunID),
+						)
+					}
+				}
+			}
 		}
 	}
 
@@ -700,8 +770,9 @@ func HandleAgentReport(c *gin.Context) {
 	// ------------------------------------------------------------------
 	// PR created notification (US2 T083)
 	// Post status comments to both Issue and PR upon success
+	// Only for newly created PRs (not for existing PRs with new pushes)
 	// ------------------------------------------------------------------
-	if req.Status == "succeeded" && req.PRNumber != nil {
+	if req.Status == "succeeded" && req.PRNumber != nil && isNewPR {
 		// Load Issue for repo context
 		issueRepo := repositories.NewIssueRepository()
 		issue, err := issueRepo.FindByID(agentRun.IssueID)
