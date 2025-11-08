@@ -2,7 +2,9 @@ package services
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -232,22 +234,25 @@ func (s *IssueContextService) CollectIssueContext(ctx context.Context, owner, re
 	return issueCtx, nil
 }
 
-// FormatPrompt formats the IssueContext into a string prompt that can be passed
+// FormatPrompt formats the IssueContext into an XML-like string prompt that can be passed
 // to the agent-runner via the --prompt command-line argument.
 //
-// The format follows the structure defined in contracts/ai-agent-execution.md:
-//   - Issue header: "Issue #<number>: <title>"
-//   - Description section with Issue body
-//   - User Instruction section (if provided, for follow-up requests)
-//   - Previous Conversation section with all comments (or "(none)" if empty)
-//   - Labels section with comma-separated labels (or "(none)" if empty)
+// The format uses XML-like structure with CDATA sections for text content:
+//   - Root element: <issue_context>
+//   - Issue information with number attribute and nested title/description
+//   - User Instruction section (if provided, wrapped in CDATA)
+//   - Previous Conversation section with comment elements (user and created_at attributes)
+//   - Labels section with individual label elements
+//
+// Text content (description, user_instruction, comment body) is wrapped in CDATA sections
+// to avoid XML escaping issues.
 //
 // Parameters:
 //   - issueCtx: IssueContext to format (must not be nil)
 //   - userInstruction: Optional user instruction from comment (e.g., "/run-agent <instruction>")
 //
 // Returns:
-//   - string: Formatted prompt string ready for agent-runner
+//   - string: Formatted XML-like prompt string ready for agent-runner
 func (s *IssueContextService) FormatPrompt(issueCtx *IssueContext, userInstruction string) string {
 	if issueCtx == nil {
 		s.logger.Warn("FormatPrompt called with nil IssueContext, returning empty string")
@@ -256,49 +261,86 @@ func (s *IssueContextService) FormatPrompt(issueCtx *IssueContext, userInstructi
 
 	var builder strings.Builder
 
-	// Issue header
-	builder.WriteString(fmt.Sprintf("Issue #%d: %s\n\n", issueCtx.Number, issueCtx.Title))
+	// Root element
+	builder.WriteString("<issue_context>\n")
 
-	// Description section
-	builder.WriteString("Description:\n")
-	if issueCtx.Body != "" {
-		builder.WriteString(issueCtx.Body)
-	} else {
-		builder.WriteString("(none)")
+	// Issue element with number attribute
+	builder.WriteString(fmt.Sprintf("  <issue number=\"%d\">\n", issueCtx.Number))
+
+	// Title (escape XML special characters)
+	builder.WriteString("    <title>")
+	if issueCtx.Title != "" {
+		_ = xml.EscapeText(&builder, []byte(issueCtx.Title))
 	}
-	builder.WriteString("\n\n")
+	builder.WriteString("</title>\n")
+
+	// Description with CDATA
+	builder.WriteString("    <description>")
+	if issueCtx.Body != "" {
+		builder.WriteString(fmt.Sprintf("<![CDATA[%s]]>", issueCtx.Body))
+	}
+	builder.WriteString("</description>\n")
+
+	builder.WriteString("  </issue>\n")
 
 	// User Instruction section (if provided)
 	if userInstruction != "" {
-		builder.WriteString("User Instruction:\n")
+		builder.WriteString("  <user_instruction><![CDATA[")
 		builder.WriteString(userInstruction)
-		builder.WriteString("\n\n")
+		builder.WriteString("]]></user_instruction>\n")
 	}
 
-	// Previous Conversation section (renamed from Comments)
-	builder.WriteString("Previous Conversation:\n")
+	// Previous Conversation section
+	builder.WriteString("  <previous_conversation>\n")
 	if len(issueCtx.Comments) == 0 {
-		builder.WriteString("(none)\n")
+		builder.WriteString("  </previous_conversation>\n")
 	} else {
 		for _, comment := range issueCtx.Comments {
-			// Format: "- <user>: <body>"
 			user := comment.User
 			if user == "" {
 				user = "(unknown)"
 			}
-			builder.WriteString(fmt.Sprintf("- %s: %s\n", user, comment.Body))
+			// Escape XML attribute value (user)
+			escapedUser := html.EscapeString(user)
+
+			// Format created_at as ISO 8601 (RFC3339)
+			createdAtStr := ""
+			if !comment.CreatedAt.IsZero() {
+				createdAtStr = comment.CreatedAt.Format(time.RFC3339)
+			}
+
+			builder.WriteString("    <comment")
+			builder.WriteString(fmt.Sprintf(" user=\"%s\"", escapedUser))
+			if createdAtStr != "" {
+				builder.WriteString(fmt.Sprintf(" created_at=\"%s\"", createdAtStr))
+			}
+			builder.WriteString(">\n")
+
+			// Comment body with CDATA
+			if comment.Body != "" {
+				builder.WriteString(fmt.Sprintf("      <![CDATA[%s]]>\n", comment.Body))
+			}
+
+			builder.WriteString("    </comment>\n")
 		}
+		builder.WriteString("  </previous_conversation>\n")
 	}
-	builder.WriteString("\n")
 
 	// Labels section
-	builder.WriteString("Labels: ")
+	builder.WriteString("  <labels>\n")
 	if len(issueCtx.Labels) == 0 {
-		builder.WriteString("(none)")
+		builder.WriteString("  </labels>\n")
 	} else {
-		builder.WriteString(strings.Join(issueCtx.Labels, ", "))
+		for _, label := range issueCtx.Labels {
+			// Escape XML special characters in label
+			builder.WriteString("    <label>")
+			_ = xml.EscapeText(&builder, []byte(label))
+			builder.WriteString("</label>\n")
+		}
+		builder.WriteString("  </labels>\n")
 	}
-	builder.WriteString("\n")
+
+	builder.WriteString("</issue_context>\n")
 
 	return builder.String()
 }
