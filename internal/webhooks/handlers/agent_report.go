@@ -889,29 +889,51 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 
 			// Check if plan creation run is already succeeded or failed (duplicate report)
 			if agentRun.State == "succeeded" || agentRun.State == "failed" {
-				logger.Info("Duplicate plan report ignored (issue-triggered, state check)",
-					zap.Int("agent_run_id", agentRunID),
-					zap.String("state", agentRun.State),
-				)
-
 				// Find existing execution AgentRun if exists (linked to current plan creation run)
-				var executionAgentRunID *int
 				var executionRuns []*models.AgentRun
 				if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
 					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
-					executionAgentRunID = &executionRuns[0].ID
+					executionRun := executionRuns[0]
+					// Check execution run state: if queued or failed, allow retry of execution setup
+					if executionRun.State == "queued" || executionRun.State == "failed" {
+						logger.Info("Plan run succeeded but execution run is queued/failed, retrying execution setup",
+							zap.Int("agent_run_id", agentRunID),
+							zap.Int("execution_agent_run_id", executionRun.ID),
+							zap.String("execution_state", executionRun.State),
+						)
+						// Continue processing to retry execution setup (don't treat as duplicate)
+						// The execution run will be reused and execution setup will be retried
+					} else {
+						// Execution run is started or succeeded, treat as successfully processed
+						logger.Info("Duplicate plan report ignored (issue-triggered, execution already in progress)",
+							zap.Int("agent_run_id", agentRunID),
+							zap.String("state", agentRun.State),
+							zap.Int("execution_agent_run_id", executionRun.ID),
+							zap.String("execution_state", executionRun.State),
+						)
+						response := gin.H{
+							"message":                "Plan report already processed",
+							"plan_agent_run_id":      agentRunID,
+							"state":                  agentRun.State,
+							"execution_agent_run_id": executionRun.ID,
+						}
+						c.JSON(http.StatusOK, response)
+						return
+					}
+				} else {
+					// No execution run found, treat as duplicate
+					logger.Info("Duplicate plan report ignored (issue-triggered, state check, no execution run)",
+						zap.Int("agent_run_id", agentRunID),
+						zap.String("state", agentRun.State),
+					)
+					response := gin.H{
+						"message":           "Plan report already processed",
+						"plan_agent_run_id": agentRunID,
+						"state":             agentRun.State,
+					}
+					c.JSON(http.StatusOK, response)
+					return
 				}
-
-				response := gin.H{
-					"message":           "Plan report already processed",
-					"plan_agent_run_id": agentRunID,
-					"state":             agentRun.State,
-				}
-				if executionAgentRunID != nil {
-					response["execution_agent_run_id"] = *executionAgentRunID
-				}
-				c.JSON(http.StatusOK, response)
-				return
 			}
 		} else {
 			// For plan_rejected, check state normally (no atomic transition needed)
@@ -1453,201 +1475,242 @@ func handlePlanCreated(
 
 	// Defensive check: verify no existing execution AgentRun exists (linked to current plan creation run)
 	// This provides an additional safety layer beyond the atomic state transition
+	// However, if execution run exists but is queued/failed, we should retry execution setup
+	var existingExecutionRun *models.AgentRun
 	var existingExecutionRuns []*models.AgentRun
 	if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
 		agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err == nil && len(existingExecutionRuns) > 0 {
-		logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
+		existingExecutionRun = existingExecutionRuns[0]
+		// If execution run is started or succeeded, treat as already in progress
+		if existingExecutionRun.State == "started" || existingExecutionRun.State == "succeeded" {
+			logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
+				zap.Int("plan_agent_run_id", agentRunID),
+				zap.Int("execution_agent_run_id", existingExecutionRun.ID),
+				zap.String("execution_state", existingExecutionRun.State),
+			)
+			c.JSON(http.StatusOK, gin.H{
+				"message":                "Plan created, execution already in progress",
+				"plan_agent_run_id":      agentRunID,
+				"execution_agent_run_id": existingExecutionRun.ID,
+			})
+			return
+		}
+		// If execution run is queued or failed, we'll reuse it and retry execution setup
+		logger.Info("Execution AgentRun exists but is queued/failed, will retry execution setup",
 			zap.Int("plan_agent_run_id", agentRunID),
-			zap.Int("execution_agent_run_id", existingExecutionRuns[0].ID),
+			zap.Int("execution_agent_run_id", existingExecutionRun.ID),
+			zap.String("execution_state", existingExecutionRun.State),
 		)
-		c.JSON(http.StatusOK, gin.H{
-			"message":                "Plan created, execution already in progress",
-			"plan_agent_run_id":      agentRunID,
-			"execution_agent_run_id": existingExecutionRuns[0].ID,
-		})
-		return
+		// Continue processing to retry execution setup with existing execution run
+		// Skip transaction and go directly to execution start retry
 	}
 
-	// Extract prompt from plan creation AgentRun.Input for plan execution
-	// Note: This prompt is stored in executionRun.Input but not used by CreateJobForPlanExecution
-	// which uses the planContent directly. Keeping for backward compatibility and reference.
-	var executionPrompt string
-	if len(agentRun.Input) > 0 {
-		var inputMap map[string]interface{}
-		if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
-			if prompt, ok := inputMap["prompt"].(string); ok && strings.TrimSpace(prompt) != "" {
-				executionPrompt = strings.TrimSpace(prompt)
+	// If existing execution run is queued/failed, skip transaction and retry execution setup directly
+	var executionRun *models.AgentRun
+	if existingExecutionRun != nil && (existingExecutionRun.State == "queued" || existingExecutionRun.State == "failed") {
+		// Reuse existing execution run and retry execution setup
+		executionRun = existingExecutionRun
+		// Update plan content if needed
+		if executionRun.PlanContent == nil || *executionRun.PlanContent != planContentForStorage {
+			executionRun.PlanContent = &planContentForStorage
+			if err := agentRunRepo.Update(executionRun); err != nil {
+				logger.Warn("Failed to update execution run plan content during retry",
+					zap.Error(err),
+					zap.Int("execution_agent_run_id", executionRun.ID),
+				)
 			}
 		}
-	}
-	// Fallback to issue title/body if prompt not found
-	if executionPrompt == "" {
-		executionPrompt = fmt.Sprintf("Issue #%d: %s", issue.Number, issue.Title)
-		if issue.Body != nil && strings.TrimSpace(*issue.Body) != "" {
-			executionPrompt += "\n\n" + strings.TrimSpace(*issue.Body)
+		// Skip transaction and go directly to execution start retry
+		// Mark agentRun as updated for consistency
+		agentRun.State = "succeeded"
+		agentRun.PlanContent = &planContentForStorage
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+		agentRunUpdated = true
+	} else {
+		// Extract prompt from plan creation AgentRun.Input for plan execution
+		// Note: This prompt is stored in executionRun.Input but not used by CreateJobForPlanExecution
+		// which uses the planContent directly. Keeping for backward compatibility and reference.
+		var executionPrompt string
+		if len(agentRun.Input) > 0 {
+			var inputMap map[string]interface{}
+			if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
+				if prompt, ok := inputMap["prompt"].(string); ok && strings.TrimSpace(prompt) != "" {
+					executionPrompt = strings.TrimSpace(prompt)
+				}
+			}
 		}
-	}
+		// Fallback to issue title/body if prompt not found
+		if executionPrompt == "" {
+			executionPrompt = fmt.Sprintf("Issue #%d: %s", issue.Number, issue.Title)
+			if issue.Body != nil && strings.TrimSpace(*issue.Body) != "" {
+				executionPrompt += "\n\n" + strings.TrimSpace(*issue.Body)
+			}
+		}
 
-	// Create plan execution AgentRun (ExecutionMode: "plan_execution")
-	executionRun := &models.AgentRun{
-		IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", agentRun.IssueID, agentRunID, time.Now().UnixNano()),
-		IssueID:          agentRun.IssueID,
-		PRID:             nil, // No PR yet for issue-triggered execution
-		State:            "queued",
-		AgentType:        req.AgentType,
-		ExecutionMode:    "plan_execution",
-		PlanContent:      &planContentForStorage, // Include plan content for reference
-		ReviewFeedbackID: nil,                    // No review feedback for issue-triggered execution
-		PlanAgentRunID:   &agentRunID,            // Link to plan creation AgentRun
-		RetryCount:       0,
-	}
+		// Create plan execution AgentRun (ExecutionMode: "plan_execution")
+		executionRun = &models.AgentRun{
+			IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", agentRun.IssueID, agentRunID, time.Now().UnixNano()),
+			IssueID:          agentRun.IssueID,
+			PRID:             nil, // No PR yet for issue-triggered execution
+			State:            "queued",
+			AgentType:        req.AgentType,
+			ExecutionMode:    "plan_execution",
+			PlanContent:      &planContentForStorage, // Include plan content for reference
+			ReviewFeedbackID: nil,                    // No review feedback for issue-triggered execution
+			PlanAgentRunID:   &agentRunID,            // Link to plan creation AgentRun
+			RetryCount:       0,
+		}
 
-	// Build structured input JSON for plan execution
-	inputPayload := map[string]any{
-		"schema_version": "1",
-		"prompt":         executionPrompt,
-		"agent_type":     req.AgentType,
-		"plan_content":   planContentForStorage,
-	}
-	inputBytes, marshalErr := json.Marshal(inputPayload)
-	if marshalErr != nil {
-		logger.Warn("Failed to marshal structured input payload for plan execution", zap.Error(marshalErr))
-		// Fallback to minimal JSON
-		inputBytes, _ = json.Marshal(map[string]any{
+		// Build structured input JSON for plan execution
+		inputPayload := map[string]any{
 			"schema_version": "1",
 			"prompt":         executionPrompt,
 			"agent_type":     req.AgentType,
-		})
-	}
-	executionRun.Input = datatypes.JSON(inputBytes)
-
-	// Get completion timestamp for transactional update
-	// Use agentRun.CompletedAt if already set, otherwise use current time
-	now := time.Now()
-	if agentRun.CompletedAt != nil {
-		now = *agentRun.CompletedAt
-	}
-
-	// Use transaction to atomically create execution run and transition plan creation run to succeeded
-	// This ensures that if execution run creation succeeds, plan creation run state is also updated
-	// If execution run creation fails, plan creation run state remains unchanged (allowing retry)
-	err = db.Transaction(func(tx *gorm.DB) error {
-		// First, check the current state of the plan creation run within transaction
-		// Use optimistic locking to ensure state hasn't changed
-		var currentRun models.AgentRun
-		if err := tx.First(&currentRun, agentRunID).Error; err != nil {
-			return err
+			"plan_content":   planContentForStorage,
 		}
-
-		// If already succeeded, check for existing execution run and return error to rollback
-		if currentRun.State == "succeeded" {
-			// Check for existing execution run within transaction
-			var existingExecutionRuns []*models.AgentRun
-			if err := tx.Where("plan_agent_run_id = ? AND execution_mode = ?",
-				agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err != nil {
-				return err
-			}
-			if len(existingExecutionRuns) > 0 {
-				// Return custom error to rollback transaction and signal that execution run already exists
-				return &executionRunAlreadyExistsError{executionRunID: existingExecutionRuns[0].ID}
-			}
-			// If no execution run exists but state is succeeded, this is unexpected but idempotent
-			return nil
-		}
-
-		// Verify state matches expected value before proceeding
-		if currentRun.State != agentRun.State {
-			return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, currentRun.State)
-		}
-
-		// Create execution run within transaction (only if state check passed)
-		if err := tx.Create(executionRun).Error; err != nil {
-			return err
-		}
-
-		// Transition plan creation run to "succeeded" state within transaction
-		// Use optimistic locking with WHERE condition to ensure state hasn't changed
-		result := tx.Model(&models.AgentRun{}).
-			Where("id = ? AND state = ?", agentRunID, agentRun.State).
-			Updates(map[string]interface{}{
-				"state":         "succeeded",
-				"plan_content":  planContentForStorage,
-				"error_message": nil,
-				"output":        buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, ""),
-				"completed_at":  now,
+		inputBytes, marshalErr := json.Marshal(inputPayload)
+		if marshalErr != nil {
+			logger.Warn("Failed to marshal structured input payload for plan execution", zap.Error(marshalErr))
+			// Fallback to minimal JSON
+			inputBytes, _ = json.Marshal(map[string]any{
+				"schema_version": "1",
+				"prompt":         executionPrompt,
+				"agent_type":     req.AgentType,
 			})
+		}
+		executionRun.Input = datatypes.JSON(inputBytes)
 
-		if result.Error != nil {
-			return result.Error
+		// Get completion timestamp for transactional update
+		// Use agentRun.CompletedAt if already set, otherwise use current time
+		now := time.Now()
+		if agentRun.CompletedAt != nil {
+			now = *agentRun.CompletedAt
 		}
 
-		// Check if update actually affected any rows
-		// If RowsAffected == 0, the state was changed by another goroutine
-		if result.RowsAffected == 0 {
-			// Reload to check current state
-			var reloadedRun models.AgentRun
-			if err := tx.First(&reloadedRun, agentRunID).Error; err != nil {
+		// Use transaction to atomically create execution run and transition plan creation run to succeeded
+		// This ensures that if execution run creation succeeds, plan creation run state is also updated
+		// If execution run creation fails, plan creation run state remains unchanged (allowing retry)
+		err = db.Transaction(func(tx *gorm.DB) error {
+			// First, check the current state of the plan creation run within transaction
+			// Use optimistic locking to ensure state hasn't changed
+			var currentRun models.AgentRun
+			if err := tx.First(&currentRun, agentRunID).Error; err != nil {
 				return err
 			}
-			// If already succeeded, that's fine (idempotent) but execution run was already created
-			// This should not happen due to the check above, but handle it gracefully
-			if reloadedRun.State == "succeeded" {
-				// Delete the execution run we just created since state was already succeeded
-				if deleteErr := tx.Delete(executionRun).Error; deleteErr != nil {
-					return fmt.Errorf("failed to delete execution run after state check: %w", deleteErr)
-				}
-				// Check for existing execution run
+
+			// If already succeeded, check for existing execution run and return error to rollback
+			if currentRun.State == "succeeded" {
+				// Check for existing execution run within transaction
 				var existingExecutionRuns []*models.AgentRun
 				if err := tx.Where("plan_agent_run_id = ? AND execution_mode = ?",
 					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err != nil {
 					return err
 				}
 				if len(existingExecutionRuns) > 0 {
+					// Return custom error to rollback transaction and signal that execution run already exists
 					return &executionRunAlreadyExistsError{executionRunID: existingExecutionRuns[0].ID}
 				}
+				// If no execution run exists but state is succeeded, this is unexpected but idempotent
 				return nil
 			}
-			// Otherwise, state changed unexpectedly
-			return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, reloadedRun.State)
-		}
 
-		return nil
-	})
+			// Verify state matches expected value before proceeding
+			if currentRun.State != agentRun.State {
+				return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, currentRun.State)
+			}
 
-	if err != nil {
-		// Check if error is executionRunAlreadyExistsError (idempotent case)
-		var existsErr *executionRunAlreadyExistsError
-		if goerrors.As(err, &existsErr) {
-			logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
+			// Create execution run within transaction (only if state check passed)
+			if err := tx.Create(executionRun).Error; err != nil {
+				return err
+			}
+
+			// Transition plan creation run to "succeeded" state within transaction
+			// Use optimistic locking with WHERE condition to ensure state hasn't changed
+			result := tx.Model(&models.AgentRun{}).
+				Where("id = ? AND state = ?", agentRunID, agentRun.State).
+				Updates(map[string]interface{}{
+					"state":         "succeeded",
+					"plan_content":  planContentForStorage,
+					"error_message": nil,
+					"output":        buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, ""),
+					"completed_at":  now,
+				})
+
+			if result.Error != nil {
+				return result.Error
+			}
+
+			// Check if update actually affected any rows
+			// If RowsAffected == 0, the state was changed by another goroutine
+			if result.RowsAffected == 0 {
+				// Reload to check current state
+				var reloadedRun models.AgentRun
+				if err := tx.First(&reloadedRun, agentRunID).Error; err != nil {
+					return err
+				}
+				// If already succeeded, that's fine (idempotent) but execution run was already created
+				// This should not happen due to the check above, but handle it gracefully
+				if reloadedRun.State == "succeeded" {
+					// Delete the execution run we just created since state was already succeeded
+					if deleteErr := tx.Delete(executionRun).Error; deleteErr != nil {
+						return fmt.Errorf("failed to delete execution run after state check: %w", deleteErr)
+					}
+					// Check for existing execution run
+					var existingExecutionRuns []*models.AgentRun
+					if err := tx.Where("plan_agent_run_id = ? AND execution_mode = ?",
+						agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&existingExecutionRuns).Error; err != nil {
+						return err
+					}
+					if len(existingExecutionRuns) > 0 {
+						return &executionRunAlreadyExistsError{executionRunID: existingExecutionRuns[0].ID}
+					}
+					return nil
+				}
+				// Otherwise, state changed unexpectedly
+				return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, reloadedRun.State)
+			}
+
+			return nil
+		})
+
+		if err != nil {
+			// Check if error is executionRunAlreadyExistsError (idempotent case)
+			var existsErr *executionRunAlreadyExistsError
+			if goerrors.As(err, &existsErr) {
+				logger.Info("Execution AgentRun already exists for issue-triggered plan, skipping creation",
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.Int("execution_agent_run_id", existsErr.executionRunID),
+				)
+				c.JSON(http.StatusOK, gin.H{
+					"message":                "Plan created, execution already in progress",
+					"plan_agent_run_id":      agentRunID,
+					"execution_agent_run_id": existsErr.executionRunID,
+				})
+				return
+			}
+
+			logger.Error("Failed to create plan execution AgentRun or transition plan creation run state",
+				zap.Error(err),
 				zap.Int("plan_agent_run_id", agentRunID),
-				zap.Int("execution_agent_run_id", existsErr.executionRunID),
 			)
-			c.JSON(http.StatusOK, gin.H{
-				"message":                "Plan created, execution already in progress",
-				"plan_agent_run_id":      agentRunID,
-				"execution_agent_run_id": existsErr.executionRunID,
+			restoreReviewAndAgent()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to create plan execution agent run",
 			})
 			return
 		}
-
-		logger.Error("Failed to create plan execution AgentRun or transition plan creation run state",
-			zap.Error(err),
-			zap.Int("plan_agent_run_id", agentRunID),
-		)
-		restoreReviewAndAgent()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to create plan execution agent run",
-		})
-		return
 	}
 
-	// Mark agentRun as updated for rollback purposes
-	agentRun.State = "succeeded"
-	agentRun.PlanContent = &planContentForStorage
-	agentRun.ErrorMessage = nil
-	agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
-	agentRunUpdated = true
+	// Mark agentRun as updated for rollback purposes (if not already done in retry path)
+	if !agentRunUpdated {
+		agentRun.State = "succeeded"
+		agentRun.PlanContent = &planContentForStorage
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+		agentRunUpdated = true
+	}
 
 	// Transition plan execution AgentRun to started state
 	// Note: execution run and plan creation run state transition are already committed in transaction
