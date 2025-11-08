@@ -10,7 +10,7 @@ import (
 	"agentic-automation/internal/utils"
 	"context"
 	"encoding/json"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -700,7 +700,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		var errorType string
 		var httpStatusCode int
 		var ghErr *clients.GitHubError
-		if errors.As(err, &ghErr) {
+		if stderrors.As(err, &ghErr) {
 			errorType = "GitHubError"
 			if ghErr.ErrorResponse != nil && ghErr.ErrorResponse.Response != nil {
 				httpStatusCode = ghErr.ErrorResponse.Response.StatusCode
@@ -762,7 +762,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Step 7: Get AgentRun (created by idempotency middleware)
 	agentRun, err := repositories.NewAgentRunRepository(db).GetByIDempotencyKey(deliveryID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error("AgentRun not found for delivery ID (should be created by middleware)",
 				zap.Error(err),
 				zap.String("delivery_id", deliveryID),
@@ -805,7 +805,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Step 8: Get Issue (created by idempotency middleware)
 	issue, err := issueRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.Issue.Number)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error("Issue not found (should be created by middleware)",
 				zap.Error(err),
 				zap.String("delivery_id", deliveryID),
@@ -1004,7 +1004,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 		vr, verr := validator.ValidateUnblocked(ctx, owner, repo, payload.Issue.Number)
 		if verr != nil {
-			if errors.Is(verr, services.ErrBlockedDependencies) {
+			if stderrors.Is(verr, services.ErrBlockedDependencies) {
 				logger.Info("Execution blocked due to dependencies",
 					zap.Int("agent_run_id", agentRun.ID),
 					zap.Int("issue_number", payload.Issue.Number),

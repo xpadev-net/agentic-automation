@@ -10,7 +10,7 @@ import (
 	"agentic-automation/internal/utils"
 	"context"
 	"encoding/json"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -220,7 +220,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 
 	pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.PullRequest.Number)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			// PRレコードが見つからない場合（無関係なリポジトリや古いPR）は、
 			// エラーを返さずにプラン作成をスキップして成功を返す
 			// これにより、GitHubが通常のコメントでもwebhookをリトライしないようにする
@@ -335,7 +335,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		var errorType string
 		var httpStatusCode int
 		var ghErr *clients.GitHubError
-		if errors.As(err, &ghErr) {
+		if stderrors.As(err, &ghErr) {
 			errorType = "GitHubError"
 			if ghErr.ErrorResponse != nil && ghErr.ErrorResponse.Response != nil {
 				httpStatusCode = ghErr.ErrorResponse.Response.StatusCode
