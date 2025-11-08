@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"agentic-automation/internal/clients"
+	"agentic-automation/internal/services"
 )
 
 // ErrorCode represents a standardized error code for the system
@@ -286,13 +289,15 @@ func GetErrorCode(err error) ErrorCode {
 	}
 
 	// Check if it's a GitHubError
-	if extractor, ok := err.(GitHubErrorCodeExtractor); ok {
-		return extractor.GetErrorCode()
+	var githubErr *clients.GitHubError
+	if errors.As(err, &githubErr) {
+		return githubErr.GetErrorCode()
 	}
 
 	// Check if it's a CircularDependencyError
-	if extractor, ok := err.(CircularDependencyErrorCodeExtractor); ok {
-		return extractor.GetErrorCode()
+	var circularErr *services.CircularDependencyError
+	if errors.As(err, &circularErr) {
+		return circularErr.GetErrorCode()
 	}
 
 	// Default to unexpected error

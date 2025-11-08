@@ -2,8 +2,12 @@ package utils
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
+
+	"agentic-automation/internal/clients"
+	"agentic-automation/internal/services"
 )
 
 func TestErrorCodeConstants(t *testing.T) {
@@ -273,6 +277,31 @@ func TestGetErrorCode_WithExtractors(t *testing.T) {
 	got = GetErrorCode(mockCircularErr)
 	if got != ERR_DEPENDENCY_CIRCULAR {
 		t.Errorf("GetErrorCode() with CircularDependencyErrorCodeExtractor = %v, want %v", got, ERR_DEPENDENCY_CIRCULAR)
+	}
+}
+
+func TestGetErrorCode_WithWrappedErrors(t *testing.T) {
+	// Test with wrapped GitHubError
+	githubErr := &clients.GitHubError{Code: ERR_GITHUB_NOT_FOUND}
+	wrappedErr := fmt.Errorf("failed to get issue: %w", githubErr)
+	got := GetErrorCode(wrappedErr)
+	if got != ERR_GITHUB_NOT_FOUND {
+		t.Errorf("GetErrorCode() with wrapped GitHubError = %v, want %v", got, ERR_GITHUB_NOT_FOUND)
+	}
+
+	// Test with wrapped CircularDependencyError
+	circularErr := &services.CircularDependencyError{Code: ERR_DEPENDENCY_CIRCULAR}
+	wrappedErr = fmt.Errorf("validation failed: %w", circularErr)
+	got = GetErrorCode(wrappedErr)
+	if got != ERR_DEPENDENCY_CIRCULAR {
+		t.Errorf("GetErrorCode() with wrapped CircularDependencyError = %v, want %v", got, ERR_DEPENDENCY_CIRCULAR)
+	}
+
+	// Test with double-wrapped CircularDependencyError
+	doubleWrappedErr := fmt.Errorf("outer error: %w", wrappedErr)
+	got = GetErrorCode(doubleWrappedErr)
+	if got != ERR_DEPENDENCY_CIRCULAR {
+		t.Errorf("GetErrorCode() with double-wrapped CircularDependencyError = %v, want %v", got, ERR_DEPENDENCY_CIRCULAR)
 	}
 }
 
