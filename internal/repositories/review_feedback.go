@@ -375,33 +375,77 @@ func (r *ReviewFeedbackRepository) TryStartPlanCreationForPR(prID int, reviewFee
 		return false, errors.New("planAgentRunID must be greater than 0")
 	}
 
-	// Use a single atomic UPDATE statement with NOT EXISTS subquery to prevent race conditions.
-	// This ensures that only one transaction can succeed when multiple try to update concurrently.
-	// The UPDATE is atomic at the database level - if two transactions execute simultaneously,
-	// only one will succeed because the NOT EXISTS check is evaluated atomically with the update.
-	query := `UPDATE review_feedback 
-SET plan_creation_status = 'creating', plan_agent_run_id = ?
-WHERE id = ? 
-  AND pr_id = ?
-  AND plan_creation_status = 'pending'
-  AND NOT EXISTS (
-    SELECT 1 FROM review_feedback rf2 
-    WHERE rf2.pr_id = ? 
-      AND rf2.plan_creation_status = 'creating' 
-      AND rf2.id != ?
-  )`
+	// Use SELECT FOR UPDATE in a transaction to lock rows before checking and updating.
+	// This prevents race conditions where two concurrent transactions could both evaluate
+	// the NOT EXISTS check before either commits, allowing both to succeed.
+	// Row-level locking ensures only one transaction can proceed at a time.
+	var success bool
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// Lock all rows for this PR that are in 'pending' or 'creating' status.
+		// ORDER BY id ensures consistent lock ordering to prevent deadlocks.
+		type lockedRow struct {
+			ID                 int
+			PlanCreationStatus string
+		}
+		var lockedRows []lockedRow
+		lockQuery := `SELECT id, plan_creation_status FROM review_feedback 
+WHERE pr_id = ? AND plan_creation_status IN ('pending', 'creating') 
+ORDER BY id FOR UPDATE`
 
-	result := r.db.Exec(query, planAgentRunID, reviewFeedbackID, prID, prID, reviewFeedbackID)
-	if result.Error != nil {
-		return false, result.Error
+		if err := tx.Raw(lockQuery, prID).Scan(&lockedRows).Error; err != nil {
+			return err
+		}
+
+		// Check if any locked rows are already in 'creating' status
+		for _, row := range lockedRows {
+			if row.PlanCreationStatus == "creating" {
+				// Another ReviewFeedback for this PR is already in 'creating' status
+				success = false
+				return nil
+			}
+		}
+
+		// No rows are in 'creating' status, so we can update the target row.
+		// Verify the target row is in the locked set and is 'pending'
+		targetFound := false
+		for _, row := range lockedRows {
+			if row.ID == reviewFeedbackID {
+				if row.PlanCreationStatus != "pending" {
+					// Target row is not in 'pending' status
+					success = false
+					return nil
+				}
+				targetFound = true
+				break
+			}
+		}
+
+		if !targetFound {
+			// Target row is not in 'pending' or 'creating' status (might be in another state)
+			success = false
+			return nil
+		}
+
+		// Update the target row to 'creating'
+		updateQuery := `UPDATE review_feedback 
+SET plan_creation_status = 'creating', plan_agent_run_id = ?
+WHERE id = ? AND pr_id = ? AND plan_creation_status = 'pending'`
+
+		result := tx.Exec(updateQuery, planAgentRunID, reviewFeedbackID, prID)
+		if result.Error != nil {
+			return result.Error
+		}
+
+		// If rows affected is 1, the update succeeded
+		success = result.RowsAffected == 1
+		return nil
+	})
+
+	if err != nil {
+		return false, err
 	}
 
-	// If rows affected is 1, the update succeeded (no other ReviewFeedback for the PR is 'creating' and this one was 'pending')
-	// If rows affected is 0, either:
-	// - The status was not 'pending'
-	// - Another ReviewFeedback for the same PR is already in 'creating' status
-	// - Another process already started plan creation
-	return result.RowsAffected == 1, nil
+	return success, nil
 }
 
 // FindNewerReviewsByPRID finds review feedbacks for a PR that have a GitHubCommentID
