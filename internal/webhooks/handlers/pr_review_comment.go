@@ -3,13 +3,14 @@ package handlers
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/errors"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"agentic-automation/internal/utils"
 	"context"
 	"encoding/json"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -109,7 +110,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		logger.Warn("Missing X-GitHub-Delivery header",
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("missing X-GitHub-Delivery header"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_MISSING_DELIVERY, "missing X-GitHub-Delivery header", nil))
 		return
 	}
 
@@ -120,7 +121,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("webhook payload not found in context"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_PAYLOAD_NOT_FOUND, "webhook payload not found in context", nil))
 		return
 	}
 
@@ -130,7 +131,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("invalid webhook payload type"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid webhook payload type", nil))
 		return
 	}
 
@@ -205,7 +206,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			zap.String("full_name", payload.Repository.FullName),
 			zap.String("delivery_id", deliveryID),
 		)
-		c.Error(errors.New("invalid repository full name format"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 		return
 	}
 	owner := repoParts[0]
@@ -219,7 +220,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 
 	pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.PullRequest.Number)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			// PRレコードが見つからない場合（無関係なリポジトリや古いPR）は、
 			// エラーを返さずにプラン作成をスキップして成功を返す
 			// これにより、GitHubが通常のコメントでもwebhookをリトライしないようにする
@@ -293,7 +294,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			logger.Error("GitHub App client not available",
 				zap.String("delivery_id", deliveryID),
 			)
-			c.Error(errors.New("github client not provided"))
+			c.Error(errors.NewCodedError(errors.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 			return
 		}
 		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
@@ -334,7 +335,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		var errorType string
 		var httpStatusCode int
 		var ghErr *clients.GitHubError
-		if errors.As(err, &ghErr) {
+		if stderrors.As(err, &ghErr) {
 			errorType = "GitHubError"
 			if ghErr.ErrorResponse != nil && ghErr.ErrorResponse.Response != nil {
 				httpStatusCode = ghErr.ErrorResponse.Response.StatusCode

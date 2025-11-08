@@ -476,8 +476,9 @@ func TestHandleAgentReport_NotFound(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	assertJSONResponse(t, w, http.StatusNotFound, map[string]interface{}{
-		"error":   "AGENT_RUN_NOT_FOUND",
-		"message": "AgentRun with ID 99999 not found",
+		"error":      "ERR_AGENT_RUN_NOT_FOUND",
+		"message":    "AgentRunが見つかりません",
+		"error_code": "ERR_AGENT_RUN_NOT_FOUND",
 	})
 }
 

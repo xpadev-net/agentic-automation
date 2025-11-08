@@ -3,13 +3,14 @@ package handlers
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/errors"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"agentic-automation/internal/utils"
 	"context"
 	"encoding/json"
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -257,7 +258,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		logger.Warn("Missing X-GitHub-Delivery header",
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("missing X-GitHub-Delivery header"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_MISSING_DELIVERY, "missing X-GitHub-Delivery header", nil))
 		return
 	}
 
@@ -271,7 +272,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("webhook payload not found in context"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_PAYLOAD_NOT_FOUND, "webhook payload not found in context", nil))
 		return
 	}
 
@@ -281,7 +282,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			zap.String("delivery_id", deliveryID),
 			zap.String("path", c.Request.URL.Path),
 		)
-		c.Error(errors.New("invalid webhook payload type"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid webhook payload type", nil))
 		return
 	}
 
@@ -392,7 +393,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					zap.String("full_name", payload.Repository.FullName),
 					zap.String("delivery_id", deliveryID),
 				)
-				c.Error(errors.New("invalid repository full name format"))
+				c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 				return
 			}
 			owner := repoParts[0]
@@ -405,7 +406,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					logger.Error("GitHub App client not available",
 						zap.String("delivery_id", deliveryID),
 					)
-					c.Error(errors.New("github client not provided"))
+					c.Error(errors.NewCodedError(errors.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 					return
 				}
 				rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
@@ -656,7 +657,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			zap.String("full_name", payload.Repository.FullName),
 			zap.String("delivery_id", deliveryID),
 		)
-		c.Error(errors.New("invalid repository full name format"))
+		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 		return
 	}
 	owner := repoParts[0]
@@ -666,7 +667,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	if authorizationService == nil || issueContextService == nil || githubNotificationService == nil {
 		if deps.GitHubClient == nil {
 			if appGitHubClient == nil {
-				c.Error(errors.New("github client not provided"))
+				c.Error(errors.NewCodedError(errors.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 				return
 			}
 			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
@@ -699,7 +700,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		var errorType string
 		var httpStatusCode int
 		var ghErr *clients.GitHubError
-		if errors.As(err, &ghErr) {
+		if stderrors.As(err, &ghErr) {
 			errorType = "GitHubError"
 			if ghErr.ErrorResponse != nil && ghErr.ErrorResponse.Response != nil {
 				httpStatusCode = ghErr.ErrorResponse.Response.StatusCode
@@ -761,14 +762,14 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Step 7: Get AgentRun (created by idempotency middleware)
 	agentRun, err := repositories.NewAgentRunRepository(db).GetByIDempotencyKey(deliveryID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error("AgentRun not found for delivery ID (should be created by middleware)",
 				zap.Error(err),
 				zap.String("delivery_id", deliveryID),
 				zap.Int("issue_number", payload.Issue.Number),
 				zap.String("repo", payload.Repository.FullName),
 			)
-			c.Error(errors.New("agent run not found for delivery ID"))
+			c.Error(errors.NewCodedError(errors.ERR_AGENT_RUN_NOT_FOUND, "agent run not found for delivery ID", nil))
 			return
 		}
 		logger.Error("Failed to get AgentRun by idempotency key",
@@ -804,14 +805,14 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Step 8: Get Issue (created by idempotency middleware)
 	issue, err := issueRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.Issue.Number)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error("Issue not found (should be created by middleware)",
 				zap.Error(err),
 				zap.String("delivery_id", deliveryID),
 				zap.Int("issue_number", payload.Issue.Number),
 				zap.String("repo", payload.Repository.FullName),
 			)
-			c.Error(errors.New("issue not found"))
+			c.Error(errors.NewCodedError(errors.ERR_DB_RECORD_NOT_FOUND, "issue not found", nil))
 			return
 		}
 		logger.Error("Failed to get Issue",
@@ -1003,7 +1004,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 		vr, verr := validator.ValidateUnblocked(ctx, owner, repo, payload.Issue.Number)
 		if verr != nil {
-			if errors.Is(verr, services.ErrBlockedDependencies) {
+			if stderrors.Is(verr, services.ErrBlockedDependencies) {
 				logger.Info("Execution blocked due to dependencies",
 					zap.Int("agent_run_id", agentRun.ID),
 					zap.Int("issue_number", payload.Issue.Number),

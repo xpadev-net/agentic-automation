@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"agentic-automation/internal/errors"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/utils"
 	"go.uber.org/zap"
@@ -13,6 +14,7 @@ import (
 // Cycle is a closed path where the first and last elements are equal.
 type CircularDependencyError struct {
 	Cycle []int
+	Code  errors.ErrorCode
 }
 
 func (e *CircularDependencyError) Error() string {
@@ -24,6 +26,14 @@ func (e *CircularDependencyError) Error() string {
 		parts = append(parts, fmt.Sprintf("%d", id))
 	}
 	return "circular dependency detected: " + strings.Join(parts, " -> ")
+}
+
+// GetErrorCode returns the error code for this error
+func (e *CircularDependencyError) GetErrorCode() errors.ErrorCode {
+	if e.Code != "" {
+		return e.Code
+	}
+	return errors.ERR_DEPENDENCY_CIRCULAR
 }
 
 // CircularDependencyDetector provides cycle detection over a dependency graph.
@@ -46,7 +56,10 @@ func (d *CircularDependencyDetector) DetectCycleFromGraph(g *utils.DependencyGra
 		return nil, nil
 	}
 	if cycle, ok := g.DetectCycle(); ok {
-		err := &CircularDependencyError{Cycle: cycle}
+		err := &CircularDependencyError{
+			Cycle: cycle,
+			Code:  errors.ERR_DEPENDENCY_CIRCULAR,
+		}
 		d.logger.Info("circular dependency detected", zap.Ints("cycle", cycle))
 		return cycle, err
 	}
@@ -77,7 +90,10 @@ func (d *CircularDependencyDetector) ValidateAcyclic(g *utils.DependencyGraph) e
 		return nil
 	}
 	if cycle, ok := g.DetectCycle(); ok {
-		err := &CircularDependencyError{Cycle: cycle}
+		err := &CircularDependencyError{
+			Cycle: cycle,
+			Code:  errors.ERR_DEPENDENCY_CIRCULAR,
+		}
 		d.logger.Info("circular dependency detected", zap.Ints("cycle", cycle))
 		return err
 	}
