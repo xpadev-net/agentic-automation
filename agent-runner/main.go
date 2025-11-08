@@ -311,12 +311,31 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			return fmt.Errorf("REVIEW_FEEDBACK_CONTENT is required for plan_creation mode")
 		}
 	} else if executionMode == "plan_execution" {
+		fmt.Fprintf(os.Stderr, "Loading plan content for plan_execution mode\n")
+		planContentEnv := os.Getenv("PLAN_CONTENT")
+		planContentFile := os.Getenv("PLAN_CONTENT_FILE")
+		fmt.Fprintf(os.Stderr, "  PLAN_CONTENT env var: %s (length: %d)\n",
+			func() string {
+				if planContentEnv == "" {
+					return "(not set)"
+				}
+				return "(set)"
+			}(), len(planContentEnv))
+		fmt.Fprintf(os.Stderr, "  PLAN_CONTENT_FILE env var: %s\n",
+			func() string {
+				if planContentFile == "" {
+					return "(not set)"
+				}
+				return planContentFile
+			}())
 		planContent, err = readContentFromEnvOrFile("PLAN_CONTENT", "PLAN_CONTENT_FILE")
 		if err != nil {
 			return fmt.Errorf("failed to load plan content: %w", err)
 		}
+		fmt.Fprintf(os.Stderr, "  Loaded plan content length: %d characters\n", len(planContent))
 		if planContent == "" {
-			return fmt.Errorf("PLAN_CONTENT is required for plan_execution mode")
+			return fmt.Errorf("PLAN_CONTENT is required for plan_execution mode (env var length: %d, file path: %q)",
+				len(planContentEnv), planContentFile)
 		}
 	}
 
@@ -430,6 +449,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	case "plan_creation":
 		fullPrompt = context.BuildPlanCreationPrompt(reviewContent)
 	case "plan_execution":
+		fmt.Fprintf(os.Stderr, "  Plan content length for prompt: %d characters\n", len(planContent))
 		fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent)
 	default:
 		fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs)

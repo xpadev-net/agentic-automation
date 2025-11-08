@@ -694,8 +694,19 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 
 	if config.ExecutionMode == "plan_execution" {
 		planContent := strings.TrimSpace(config.PlanContent)
+		c.logger.Info("Processing plan content for plan_execution mode",
+			zap.String("job_name", jobName),
+			zap.Int("plan_content_length", len(config.PlanContent)),
+			zap.Int("plan_content_length_trimmed", len(planContent)),
+			zap.Bool("plan_content_empty", planContent == ""),
+		)
 		if planContent != "" {
 			if len(planContent) > maxInlineContentSize {
+				c.logger.Info("Plan content exceeds max inline size, using ConfigMap",
+					zap.String("job_name", jobName),
+					zap.Int("plan_content_length", len(planContent)),
+					zap.Int("max_inline_size", maxInlineContentSize),
+				)
 				configMapName, err := c.createConfigMapForPlanContent(ctx, jobName, planContent)
 				if err != nil {
 					return nil, fmt.Errorf("failed to create plan content configmap: %w", err)
@@ -719,12 +730,27 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 					Name:  "PLAN_CONTENT_FILE",
 					Value: "/config/plan/plan_content.txt",
 				})
+				c.logger.Info("Plan content environment variable set (file)",
+					zap.String("job_name", jobName),
+					zap.String("env_var", "PLAN_CONTENT_FILE"),
+					zap.String("value", "/config/plan/plan_content.txt"),
+				)
 			} else {
 				env = append(env, corev1.EnvVar{
 					Name:  "PLAN_CONTENT",
 					Value: planContent,
 				})
+				c.logger.Info("Plan content environment variable set (inline)",
+					zap.String("job_name", jobName),
+					zap.String("env_var", "PLAN_CONTENT"),
+					zap.Int("value_length", len(planContent)),
+				)
 			}
+		} else {
+			c.logger.Warn("Plan content is empty for plan_execution mode",
+				zap.String("job_name", jobName),
+				zap.Int("original_length", len(config.PlanContent)),
+			)
 		}
 	}
 
