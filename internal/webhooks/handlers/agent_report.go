@@ -850,6 +850,8 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 	// Check for duplicate plan report
 	// For review-triggered: check ReviewFeedback.PlanCreationStatus
 	// For issue-triggered: check AgentRun.State
+	// Store original state for rollback purposes (for issue-triggered plan creation)
+	var originalStateForRollback string
 	if reviewFeedback != nil {
 		// Review-triggered plan creation: check ReviewFeedback status
 		currentStatus := strings.TrimSpace(reviewFeedback.PlanCreationStatus)
@@ -867,10 +869,15 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 			})
 			return
 		}
+		// For review-triggered, use current state for rollback
+		originalStateForRollback = agentRun.State
 	} else {
 		// Issue-triggered plan creation: attempt atomic state transition first
 		// This prevents race conditions when multiple plan reports arrive simultaneously
 		if req.Status == "plan_created" {
+			// Save original state before atomic transition for rollback purposes
+			originalStateForRollback = agentRun.State
+
 			// Try to atomically transition from "started" to "succeeded"
 			// If this succeeds, we are the first to process this report
 			// If this fails, another report has already been processed
@@ -907,9 +914,9 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 					}
 
 					response := gin.H{
-						"message":            "Plan report already processed",
-						"plan_agent_run_id":  agentRunID,
-						"state":              updatedRun.State,
+						"message":           "Plan report already processed",
+						"plan_agent_run_id": agentRunID,
+						"state":             updatedRun.State,
 					}
 					if executionAgentRunID != nil {
 						response["execution_agent_run_id"] = *executionAgentRunID
@@ -932,6 +939,7 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 			}
 
 			// State transition succeeded - we are the first to process this report
+			// originalStateForRollback is already set above, before the UpdateState call
 			// Reload agentRun to get updated state
 			agentRun, err = agentRunRepo.GetByID(agentRunID)
 			if err != nil {
@@ -947,6 +955,7 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 			}
 			logger.Info("Atomically transitioned plan creation AgentRun to succeeded state",
 				zap.Int("agent_run_id", agentRunID),
+				zap.String("original_state", originalStateForRollback),
 			)
 		} else {
 			// For plan_rejected, check state normally (no atomic transition needed)
@@ -975,6 +984,8 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 				c.JSON(http.StatusOK, response)
 				return
 			}
+			// For plan_rejected, use current state for rollback
+			originalStateForRollback = agentRun.State
 		}
 	}
 
@@ -991,7 +1002,7 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 
 	switch req.Status {
 	case "plan_created":
-		handlePlanCreated(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db)
+		handlePlanCreated(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db, originalStateForRollback)
 	case "plan_rejected":
 		handlePlanRejected(c, ctx, agentRunID, agentRun, reviewFeedback, req, sanitizedLogs, agentRunRepo, reviewFeedbackRepo, db)
 	default:
@@ -1016,6 +1027,7 @@ func handlePlanCreated(
 	agentRunRepo repositories.AgentRunRepository,
 	reviewFeedbackRepo *repositories.ReviewFeedbackRepository,
 	db *gorm.DB,
+	originalState string,
 ) {
 	logger := config.GetLogger()
 	planContent := strings.TrimSpace(req.PlanContent)
@@ -1062,8 +1074,8 @@ func handlePlanCreated(
 					zap.Int("execution_agent_run_id", executionRuns[0].ID),
 				)
 				c.JSON(http.StatusOK, gin.H{
-					"message":            "Plan content updated, execution already in progress",
-					"plan_agent_run_id":  agentRunID,
+					"message":                "Plan content updated, execution already in progress",
+					"plan_agent_run_id":      agentRunID,
 					"execution_agent_run_id": executionRuns[0].ID,
 				})
 				return
@@ -1077,8 +1089,8 @@ func handlePlanCreated(
 				zap.Int("execution_agent_run_id", *reviewFeedback.ExecutionAgentRunID),
 			)
 			c.JSON(http.StatusOK, gin.H{
-				"message":            "Plan content updated, execution already in progress",
-				"plan_agent_run_id":  agentRunID,
+				"message":                "Plan content updated, execution already in progress",
+				"plan_agent_run_id":      agentRunID,
 				"execution_agent_run_id": *reviewFeedback.ExecutionAgentRunID,
 			})
 			return
@@ -1104,7 +1116,12 @@ func handlePlanCreated(
 	}
 
 	previousAgentRunPlan := agentRun.PlanContent
-	previousAgentRunState := agentRun.State
+	// Use originalState parameter for rollback (captured before atomic state transition)
+	// If originalState is empty, fall back to current state (should not happen in normal flow)
+	previousAgentRunState := originalState
+	if previousAgentRunState == "" {
+		previousAgentRunState = agentRun.State
+	}
 	previousAgentRunError := agentRun.ErrorMessage
 	previousAgentRunOutput := agentRun.Output
 	previousAgentRunCompletedAt := agentRun.CompletedAt
@@ -1148,7 +1165,11 @@ func handlePlanCreated(
 	// Update plan creation AgentRun
 	planRunID := agentRunID
 	agentRun.PlanContent = &planContentForStorage
-	agentRun.State = "succeeded"
+	// Only set state to "succeeded" if not already set (for review-triggered plan creation)
+	// For issue-triggered plan creation, state was already set to "succeeded" via atomic transition
+	if agentRun.State != "succeeded" {
+		agentRun.State = "succeeded"
+	}
 	agentRun.ErrorMessage = nil
 	agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
 
@@ -1226,109 +1247,110 @@ func handlePlanCreated(
 		// If new reviews exist, invalidate the current plan and recreate it with updated context
 		// This prevents executing a stale plan that has been invalidated by new review input
 		if reviewFeedback.GitHubCommentID != nil && *reviewFeedback.GitHubCommentID > 0 {
-		newerReviews, err := reviewFeedbackRepo.FindNewerReviewsByPRID(reviewFeedback.PRID, *reviewFeedback.GitHubCommentID)
-		if err != nil {
-			logger.Warn("Failed to check for newer reviews before execution job creation",
-				zap.Error(err),
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.Int64("github_comment_id", *reviewFeedback.GitHubCommentID),
-			)
-			// Continue with execution job creation even if check fails
-		} else if len(newerReviews) > 0 {
-			logger.Info("New reviews found before execution job creation, recreating plan with updated context",
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.Int("newer_reviews_count", len(newerReviews)),
-				zap.Int64("original_comment_id", *reviewFeedback.GitHubCommentID),
-			)
-
-			// Aggregate new review contents
-			var aggregatedContent strings.Builder
-			if reviewFeedback.Content != nil && *reviewFeedback.Content != "" {
-				aggregatedContent.WriteString(*reviewFeedback.Content)
-			}
-			for _, newReview := range newerReviews {
-				if newReview.Content != nil && *newReview.Content != "" {
-					if aggregatedContent.Len() > 0 {
-						aggregatedContent.WriteString("\n\n--- Additional Review ---\n\n")
-					}
-					aggregatedContent.WriteString(*newReview.Content)
-				}
-			}
-
-			// Update reviewFeedback with aggregated content and reset plan status
-			aggregatedContentStr := aggregatedContent.String()
-			reviewFeedback.Content = &aggregatedContentStr
-			reviewFeedback.PlanCreationStatus = "pending"
-			reviewFeedback.PlanContent = nil
-			reviewFeedback.PlanAgentRunID = nil
-			reviewFeedback.ExecutionAgentRunID = nil
-
-			// Update to the latest GitHubCommentID
-			latestReview := newerReviews[0] // Already ordered by created_at DESC
-			if latestReview.GitHubCommentID != nil {
-				reviewFeedback.GitHubCommentID = latestReview.GitHubCommentID
-			}
-
-			if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-				logger.Error("Failed to update review feedback for plan recreation",
+			newerReviews, err := reviewFeedbackRepo.FindNewerReviewsByPRID(reviewFeedback.PRID, *reviewFeedback.GitHubCommentID)
+			if err != nil {
+				logger.Warn("Failed to check for newer reviews before execution job creation",
 					zap.Error(err),
 					zap.Int("review_feedback_id", reviewFeedback.ID),
+					zap.Int64("github_comment_id", *reviewFeedback.GitHubCommentID),
 				)
-				// Continue with normal response even if update fails
-			} else {
-				// Trigger plan recreation by calling startPlanCreationIfNeeded
-				// Create minimal deps structure for this
-				planDeps := PullRequestReviewCommentDeps{
-					Logger:                   logger,
-					ReviewFeedbackRepository: reviewFeedbackRepo,
-				}
+				// Continue with execution job creation even if check fails
+			} else if len(newerReviews) > 0 {
+				logger.Info("New reviews found before execution job creation, recreating plan with updated context",
+					zap.Int("review_feedback_id", reviewFeedback.ID),
+					zap.Int("newer_reviews_count", len(newerReviews)),
+					zap.Int64("original_comment_id", *reviewFeedback.GitHubCommentID),
+				)
 
-				// Use the aggregated content as the comment body
-				commentBody := aggregatedContentStr
-				if commentBody == "" {
-					commentBody = "Review feedback"
+				// Aggregate new review contents
+				var aggregatedContent strings.Builder
+				if reviewFeedback.Content != nil && *reviewFeedback.Content != "" {
+					aggregatedContent.WriteString(*reviewFeedback.Content)
 				}
-
-				// Use the latest comment ID or a placeholder
-				commentID := int64(0)
-				if latestReview.GitHubCommentID != nil {
-					commentID = *latestReview.GitHubCommentID
-				}
-
-				// Trigger plan recreation (async - don't wait for result)
-				go func() {
-					// Create a new context for the background goroutine
-					bgCtx := context.Background()
-					_, planErr := startPlanCreationIfNeeded(
-						bgCtx,
-						planDeps,
-						logger,
-						pr,
-						commentBody,
-						commentID,
-						"", // commentUserLogin - not critical for recreation
-						0,  // commentUserID - not critical for recreation
-						fmt.Sprintf("plan-recreation-%d", reviewFeedback.ID),
-					)
-					if planErr != nil {
-						logger.Error("Failed to recreate plan with new reviews",
-							zap.Error(planErr),
-							zap.Int("review_feedback_id", reviewFeedback.ID),
-						)
-					} else {
-						logger.Info("Plan recreation triggered successfully",
-							zap.Int("review_feedback_id", reviewFeedback.ID),
-						)
+				for _, newReview := range newerReviews {
+					if newReview.Content != nil && *newReview.Content != "" {
+						if aggregatedContent.Len() > 0 {
+							aggregatedContent.WriteString("\n\n--- Additional Review ---\n\n")
+						}
+						aggregatedContent.WriteString(*newReview.Content)
 					}
-				}()
-			}
+				}
 
-			// Early return: skip execution job creation since plan is being recreated
-			c.JSON(http.StatusOK, gin.H{
-				"message":      "Plan invalidated by new reviews, recreating plan",
-				"agent_run_id": agentRunID,
-			})
-			return
+				// Update reviewFeedback with aggregated content and reset plan status
+				aggregatedContentStr := aggregatedContent.String()
+				reviewFeedback.Content = &aggregatedContentStr
+				reviewFeedback.PlanCreationStatus = "pending"
+				reviewFeedback.PlanContent = nil
+				reviewFeedback.PlanAgentRunID = nil
+				reviewFeedback.ExecutionAgentRunID = nil
+
+				// Update to the latest GitHubCommentID
+				latestReview := newerReviews[0] // Already ordered by created_at DESC
+				if latestReview.GitHubCommentID != nil {
+					reviewFeedback.GitHubCommentID = latestReview.GitHubCommentID
+				}
+
+				if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+					logger.Error("Failed to update review feedback for plan recreation",
+						zap.Error(err),
+						zap.Int("review_feedback_id", reviewFeedback.ID),
+					)
+					// Continue with normal response even if update fails
+				} else {
+					// Trigger plan recreation by calling startPlanCreationIfNeeded
+					// Create minimal deps structure for this
+					planDeps := PullRequestReviewCommentDeps{
+						Logger:                   logger,
+						ReviewFeedbackRepository: reviewFeedbackRepo,
+					}
+
+					// Use the aggregated content as the comment body
+					commentBody := aggregatedContentStr
+					if commentBody == "" {
+						commentBody = "Review feedback"
+					}
+
+					// Use the latest comment ID or a placeholder
+					commentID := int64(0)
+					if latestReview.GitHubCommentID != nil {
+						commentID = *latestReview.GitHubCommentID
+					}
+
+					// Trigger plan recreation (async - don't wait for result)
+					go func() {
+						// Create a new context for the background goroutine
+						bgCtx := context.Background()
+						_, planErr := startPlanCreationIfNeeded(
+							bgCtx,
+							planDeps,
+							logger,
+							pr,
+							commentBody,
+							commentID,
+							"", // commentUserLogin - not critical for recreation
+							0,  // commentUserID - not critical for recreation
+							fmt.Sprintf("plan-recreation-%d", reviewFeedback.ID),
+						)
+						if planErr != nil {
+							logger.Error("Failed to recreate plan with new reviews",
+								zap.Error(planErr),
+								zap.Int("review_feedback_id", reviewFeedback.ID),
+							)
+						} else {
+							logger.Info("Plan recreation triggered successfully",
+								zap.Int("review_feedback_id", reviewFeedback.ID),
+							)
+						}
+					}()
+				}
+
+				// Early return: skip execution job creation since plan is being recreated
+				c.JSON(http.StatusOK, gin.H{
+					"message":      "Plan invalidated by new reviews, recreating plan",
+					"agent_run_id": agentRunID,
+				})
+				return
+			}
 		}
 
 		// Defensive check: verify no existing execution AgentRun exists for this review feedback
@@ -1340,8 +1362,8 @@ func handlePlanCreated(
 				zap.Int("review_feedback_id", reviewFeedback.ID),
 			)
 			c.JSON(http.StatusOK, gin.H{
-				"message":            "Plan created, execution already in progress",
-				"plan_agent_run_id":  agentRunID,
+				"message":                "Plan created, execution already in progress",
+				"plan_agent_run_id":      agentRunID,
 				"execution_agent_run_id": *reviewFeedback.ExecutionAgentRunID,
 			})
 			return
@@ -1463,7 +1485,7 @@ func handlePlanCreated(
 	// Handle issue-triggered plan creation (without ReviewFeedback)
 	// Create normal execution AgentRun for issue-triggered plan creation
 	branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
-	
+
 	// Defensive check: verify no existing execution AgentRun exists (linked to current plan creation run)
 	// This provides an additional safety layer beyond the atomic state transition
 	var existingExecutionRuns []*models.AgentRun
@@ -1474,13 +1496,13 @@ func handlePlanCreated(
 			zap.Int("execution_agent_run_id", existingExecutionRuns[0].ID),
 		)
 		c.JSON(http.StatusOK, gin.H{
-			"message":            "Plan created, execution already in progress",
-			"plan_agent_run_id":  agentRunID,
+			"message":                "Plan created, execution already in progress",
+			"plan_agent_run_id":      agentRunID,
 			"execution_agent_run_id": existingExecutionRuns[0].ID,
 		})
 		return
 	}
-	
+
 	// Extract prompt from plan creation AgentRun.Input for normal execution
 	var executionPrompt string
 	if len(agentRun.Input) > 0 {
@@ -1508,8 +1530,8 @@ func handlePlanCreated(
 		AgentType:        req.AgentType,
 		ExecutionMode:    "normal",
 		PlanContent:      &planContentForStorage, // Include plan content for reference
-		ReviewFeedbackID: nil,                     // No review feedback for issue-triggered execution
-		PlanAgentRunID:   &agentRunID,             // Link to plan creation AgentRun
+		ReviewFeedbackID: nil,                    // No review feedback for issue-triggered execution
+		PlanAgentRunID:   &agentRunID,            // Link to plan creation AgentRun
 		RetryCount:       0,
 	}
 
@@ -1638,6 +1660,7 @@ func handlePlanCreated(
 		"job_name":     job.Name,
 	})
 }
+
 func handlePlanRejected(
 	c *gin.Context,
 	ctx context.Context,

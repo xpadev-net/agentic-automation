@@ -211,6 +211,7 @@ func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
 		agentRunRepo,
 		reviewFeedbackRepo,
 		fixtures.db,
+		fixtures.agentRun.State,
 	)
 
 	response := w.Result()
@@ -323,6 +324,7 @@ func TestHandlePlanCreatedRollsBackWhenJobCreationFails(t *testing.T) {
 		agentRunRepo,
 		reviewFeedbackRepo,
 		fixtures.db,
+		fixtures.agentRun.State,
 	)
 
 	require.Equal(t, http.StatusInternalServerError, w.Code)
@@ -496,6 +498,7 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated(t *testing.T) {
 		agentRunRepo,
 		planRepo,
 		fixtures.db,
+		fixtures.agentRun.State,
 	)
 	require.Equal(t, 200, w1.Code)
 	require.Len(t, fakeJob.capturedPlan, len(utils.SanitizeUTF8("Step A")))
