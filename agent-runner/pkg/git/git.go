@@ -524,3 +524,163 @@ CREATE_SUCCESS:
 
 	return *pr.Number, nil
 }
+
+// FindPRByBranch finds an existing Pull Request for the given branch.
+// token: GitHub PAT for authentication (empty string will auto-fetch via GitHub App)
+// repo: Repository in format owner/repo (e.g., "octocat/Hello-World")
+// branchName: Name of the branch to search for
+// Returns: PR number if found, 0 if not found, or an error if search fails
+func FindPRByBranch(token, repo, branchName string) (int, error) {
+	// Validate inputs
+	if repo == "" {
+		return 0, fmt.Errorf("repository name is required")
+	}
+	if branchName == "" {
+		return 0, fmt.Errorf("branch name is required")
+	}
+
+	// Validate repo format (owner/repo)
+	repoParts := strings.Split(repo, "/")
+	if len(repoParts) != 2 {
+		return 0, fmt.Errorf("repository must be in format owner/repo, got: %q", repo)
+	}
+	owner := repoParts[0]
+	repoName := repoParts[1]
+
+	// Acquire token via GitHub App if not provided
+	if token == "" {
+		t, err := githubutil.GetGitHubToken(context.Background(), owner, repoName)
+		if err != nil {
+			return 0, fmt.Errorf("failed to obtain GitHub App installation token: %w", err)
+		}
+		token = t
+	}
+
+	// Create GitHub API client
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+
+	// Check if PR already exists for this branch
+	// Use Head filter to search for PRs with the same branch
+	head := fmt.Sprintf("%s:%s", owner, branchName)
+	opts := &github.PullRequestListOptions{
+		Head:  head,
+		State: "open",
+		ListOptions: github.ListOptions{
+			PerPage: 100,
+		},
+	}
+
+	prs, resp, err := client.PullRequests.List(ctx, owner, repoName, opts)
+	if err != nil {
+		// 401/403 retry once with refreshed token
+		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+			if t, terr := githubutil.GetGitHubToken(ctx, owner, repoName); terr == nil && t != "" && t != token {
+				token = t
+				ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+				tc = oauth2.NewClient(ctx, ts)
+				client = github.NewClient(tc)
+				prs, resp, err = client.PullRequests.List(ctx, owner, repoName, opts)
+				if err == nil {
+					// retry success → continue normal flow
+					goto LIST_SUCCESS
+				}
+			}
+		}
+		// Check if it's a rate limit error
+		if resp != nil && resp.StatusCode == 403 {
+			return 0, fmt.Errorf("GitHub API rate limit exceeded")
+		}
+		return 0, fmt.Errorf("failed to list pull requests: %w", err)
+	}
+LIST_SUCCESS:
+
+	// If PR exists, return its number
+	if len(prs) > 0 {
+		// Return the first matching PR (there should typically be only one)
+		if prs[0].Number != nil {
+			return *prs[0].Number, nil
+		}
+	}
+
+	// PR not found
+	return 0, nil
+}
+
+// PostPRComment posts a comment on a Pull Request via GitHub API.
+// token: GitHub PAT for authentication (empty string will auto-fetch via GitHub App)
+// repo: Repository in format owner/repo (e.g., "octocat/Hello-World")
+// prNumber: PR number to post comment on
+// comment: Comment body to post
+// Returns: error if posting fails
+func PostPRComment(token, repo string, prNumber int, comment string) error {
+	// Validate inputs
+	if repo == "" {
+		return fmt.Errorf("repository name is required")
+	}
+	if prNumber <= 0 {
+		return fmt.Errorf("PR number must be positive, got: %d", prNumber)
+	}
+	if comment == "" {
+		return fmt.Errorf("comment body is required")
+	}
+
+	// Validate repo format (owner/repo)
+	repoParts := strings.Split(repo, "/")
+	if len(repoParts) != 2 {
+		return fmt.Errorf("repository must be in format owner/repo, got: %q", repo)
+	}
+	owner := repoParts[0]
+	repoName := repoParts[1]
+
+	// Acquire token via GitHub App if not provided
+	if token == "" {
+		t, err := githubutil.GetGitHubToken(context.Background(), owner, repoName)
+		if err != nil {
+			return fmt.Errorf("failed to obtain GitHub App installation token: %w", err)
+		}
+		token = t
+	}
+
+	// Create GitHub API client
+	ctx := context.Background()
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+
+	// Create comment
+	issueComment := &github.IssueComment{
+		Body: &comment,
+	}
+
+	_, resp, err := client.Issues.CreateComment(ctx, owner, repoName, prNumber, issueComment)
+	if err != nil {
+		// 401/403 retry once with refreshed token
+		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+			if t, terr := githubutil.GetGitHubToken(ctx, owner, repoName); terr == nil && t != "" && t != token {
+				token = t
+				ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+				tc = oauth2.NewClient(ctx, ts)
+				client = github.NewClient(tc)
+				_, resp, err = client.Issues.CreateComment(ctx, owner, repoName, prNumber, issueComment)
+				if err == nil {
+					// retry success
+					return nil
+				}
+			}
+		}
+		// Check if it's a rate limit error
+		if resp != nil && resp.StatusCode == 403 {
+			return fmt.Errorf("GitHub API rate limit exceeded")
+		}
+		return fmt.Errorf("failed to post PR comment: %w", err)
+	}
+
+	return nil
+}

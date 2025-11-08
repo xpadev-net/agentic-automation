@@ -544,6 +544,21 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Pushed branch %s to remote\n", branchName)
 
+	// 12.5. Post @codex review comment if PR already exists (for retry cases)
+	existingPRNumber, err := git.FindPRByBranch("", repo, branchName)
+	if err != nil {
+		// Log warning but continue (non-blocking)
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to find existing PR for branch %s: %v (continuing)\n", branchName, err)
+	} else if existingPRNumber > 0 {
+		// PR exists, post comment
+		if err := git.PostPRComment("", repo, existingPRNumber, "@codex review"); err != nil {
+			// Log warning but continue (non-blocking)
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to post @codex review comment to PR #%d: %v (continuing)\n", existingPRNumber, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "Posted @codex review comment to PR #%d\n", existingPRNumber)
+		}
+	}
+
 	// 13. Save session to S3
 	fmt.Fprintf(os.Stderr, "Saving session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 	if err := storage.SaveSession(envCfg.AgentRunID, envCfg.AgentType); err != nil {
@@ -615,6 +630,14 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		return fmt.Errorf("PR creation failed: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
+
+	// 15.5. Post @codex review comment to PR
+	if err := git.PostPRComment("", repo, prNumber, "@codex review"); err != nil {
+		// Log warning but continue (non-blocking)
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to post @codex review comment to PR #%d: %v (continuing)\n", prNumber, err)
+	} else {
+		fmt.Fprintf(os.Stderr, "Posted @codex review comment to PR #%d\n", prNumber)
+	}
 
 	// 16. Run post-hooks
 	if manifest != nil && len(manifest.Hooks.Post) > 0 {
