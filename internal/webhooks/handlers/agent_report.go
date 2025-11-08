@@ -872,91 +872,38 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 		// For review-triggered, use current state for rollback
 		originalStateForRollback = agentRun.State
 	} else {
-		// Issue-triggered plan creation: attempt atomic state transition first
-		// This prevents race conditions when multiple plan reports arrive simultaneously
+		// Issue-triggered plan creation: check for duplicate reports by checking existing execution runs
+		// State transition will happen inside handlePlanCreated after execution run is created
 		if req.Status == "plan_created" {
-			// Save original state before atomic transition for rollback purposes
+			// Save original state for rollback purposes
 			originalStateForRollback = agentRun.State
 
-			// Try to atomically transition from "started" to "succeeded"
-			// If this succeeds, we are the first to process this report
-			// If this fails, another report has already been processed
-			err := agentRunRepo.UpdateState(agentRunID, "succeeded")
-			if err != nil {
-				// State transition failed - likely already processed by another request
-				// Reload agentRun to get current state
-				updatedRun, loadErr := agentRunRepo.GetByID(agentRunID)
-				if loadErr != nil {
-					logger.Error("Failed to reload AgentRun after state transition failure",
-						zap.Error(loadErr),
-						zap.Int("agent_run_id", agentRunID),
-					)
-					c.JSON(http.StatusInternalServerError, gin.H{
-						"error":   "INTERNAL_ERROR",
-						"message": "Failed to reload agent run",
-					})
-					return
+			// Check if plan creation run is already succeeded or failed (duplicate report)
+			if agentRun.State == "succeeded" || agentRun.State == "failed" {
+				logger.Info("Duplicate plan report ignored (issue-triggered, state check)",
+					zap.Int("agent_run_id", agentRunID),
+					zap.String("state", agentRun.State),
+				)
+
+				// Find existing execution AgentRun if exists (linked to current plan creation run)
+				var executionAgentRunID *int
+				var executionRuns []*models.AgentRun
+				if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
+					agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
+					executionAgentRunID = &executionRuns[0].ID
 				}
 
-				// Check if state is already succeeded or failed (duplicate report)
-				if updatedRun.State == "succeeded" || updatedRun.State == "failed" {
-					logger.Info("Duplicate plan report ignored (issue-triggered, atomic check)",
-						zap.Int("agent_run_id", agentRunID),
-						zap.String("state", updatedRun.State),
-					)
-
-					// Find existing execution AgentRun if exists (linked to current plan creation run)
-					var executionAgentRunID *int
-					var executionRuns []*models.AgentRun
-					if err := db.Where("plan_agent_run_id = ? AND execution_mode = ?",
-						agentRunID, "plan_execution").Order("created_at DESC").Limit(1).Find(&executionRuns).Error; err == nil && len(executionRuns) > 0 {
-						executionAgentRunID = &executionRuns[0].ID
-					}
-
-					response := gin.H{
-						"message":           "Plan report already processed",
-						"plan_agent_run_id": agentRunID,
-						"state":             updatedRun.State,
-					}
-					if executionAgentRunID != nil {
-						response["execution_agent_run_id"] = *executionAgentRunID
-					}
-					c.JSON(http.StatusOK, response)
-					return
+				response := gin.H{
+					"message":           "Plan report already processed",
+					"plan_agent_run_id": agentRunID,
+					"state":             agentRun.State,
 				}
-
-				// State transition failed for other reason - log and return error
-				logger.Error("Failed to atomically transition AgentRun state",
-					zap.Error(err),
-					zap.Int("agent_run_id", agentRunID),
-					zap.String("current_state", updatedRun.State),
-				)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":   "STATE_TRANSITION_ERROR",
-					"message": "Failed to transition agent run state",
-				})
+				if executionAgentRunID != nil {
+					response["execution_agent_run_id"] = *executionAgentRunID
+				}
+				c.JSON(http.StatusOK, response)
 				return
 			}
-
-			// State transition succeeded - we are the first to process this report
-			// originalStateForRollback is already set above, before the UpdateState call
-			// Reload agentRun to get updated state
-			agentRun, err = agentRunRepo.GetByID(agentRunID)
-			if err != nil {
-				logger.Error("Failed to reload AgentRun after successful state transition",
-					zap.Error(err),
-					zap.Int("agent_run_id", agentRunID),
-				)
-				c.JSON(http.StatusInternalServerError, gin.H{
-					"error":   "INTERNAL_ERROR",
-					"message": "Failed to reload agent run",
-				})
-				return
-			}
-			logger.Info("Atomically transitioned plan creation AgentRun to succeeded state",
-				zap.Int("agent_run_id", agentRunID),
-				zap.String("original_state", originalStateForRollback),
-			)
 		} else {
 			// For plan_rejected, check state normally (no atomic transition needed)
 			if agentRun.State == "succeeded" || agentRun.State == "failed" {
@@ -1165,27 +1112,36 @@ func handlePlanCreated(
 	// Update plan creation AgentRun
 	planRunID := agentRunID
 	agentRun.PlanContent = &planContentForStorage
-	// Only set state to "succeeded" if not already set (for review-triggered plan creation)
-	// For issue-triggered plan creation, state was already set to "succeeded" via atomic transition
-	if agentRun.State != "succeeded" {
-		agentRun.State = "succeeded"
-	}
-	agentRun.ErrorMessage = nil
-	agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+	// For issue-triggered plan creation, state transition will happen in transaction after execution run is created
+	// For review-triggered plan creation, set state to "succeeded" here
+	if reviewFeedback == nil {
+		// Issue-triggered: state will be updated in transaction
+		// Only update plan content and output for now
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+		// Don't update state yet - will be done in transaction
+	} else {
+		// Review-triggered: update state here
+		if agentRun.State != "succeeded" {
+			agentRun.State = "succeeded"
+		}
+		agentRun.ErrorMessage = nil
+		agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
 
-	if err := agentRunRepo.Update(agentRun); err != nil {
-		logger.Error("Failed to update plan creation AgentRun",
-			zap.Error(err),
-			zap.Int("agent_run_id", agentRunID),
-		)
-		restoreReviewAndAgent()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to update plan agent run",
-		})
-		return
+		if err := agentRunRepo.Update(agentRun); err != nil {
+			logger.Error("Failed to update plan creation AgentRun",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+			)
+			restoreReviewAndAgent()
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "Failed to update plan agent run",
+			})
+			return
+		}
+		agentRunUpdated = true
 	}
-	agentRunUpdated = true
 
 	// Update ReviewFeedback only if it exists (for review-triggered plan creation)
 	if reviewFeedback != nil && reviewFeedbackRepo != nil {
@@ -1556,13 +1512,55 @@ func handlePlanCreated(
 	}
 	executionRun.Input = datatypes.JSON(inputBytes)
 
-	if err := db.Create(executionRun).Error; err != nil {
-		logger.Error("Failed to create plan execution AgentRun",
+	// Use transaction to atomically create execution run and transition plan creation run to succeeded
+	// This ensures that if execution run creation succeeds, plan creation run state is also updated
+	// If execution run creation fails, plan creation run state remains unchanged (allowing retry)
+	err = db.Transaction(func(tx *gorm.DB) error {
+		// Create execution run within transaction
+		if err := tx.Create(executionRun).Error; err != nil {
+			return err
+		}
+
+		// Transition plan creation run to "succeeded" state within transaction
+		// Use optimistic locking with WHERE condition to ensure state hasn't changed
+		result := tx.Model(&models.AgentRun{}).
+			Where("id = ? AND state = ?", agentRunID, agentRun.State).
+			Updates(map[string]interface{}{
+				"state":         "succeeded",
+				"plan_content":  planContentForStorage,
+				"error_message": nil,
+				"output":        buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, ""),
+			})
+
+		if result.Error != nil {
+			return result.Error
+		}
+
+		// Check if update actually affected any rows
+		// If RowsAffected == 0, the state was changed by another goroutine
+		if result.RowsAffected == 0 {
+			// Reload to check current state
+			var currentRun models.AgentRun
+			if err := tx.First(&currentRun, agentRunID).Error; err != nil {
+				return err
+			}
+			// If already succeeded, that's fine (idempotent)
+			if currentRun.State == "succeeded" {
+				return nil
+			}
+			// Otherwise, state changed unexpectedly
+			return fmt.Errorf("plan creation run state changed unexpectedly: expected %s, got %s", agentRun.State, currentRun.State)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		logger.Error("Failed to create plan execution AgentRun or transition plan creation run state",
 			zap.Error(err),
 			zap.Int("plan_agent_run_id", agentRunID),
 		)
 		restoreReviewAndAgent()
-		persistRollback()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "INTERNAL_ERROR",
 			"message": "Failed to create plan execution agent run",
@@ -1570,21 +1568,24 @@ func handlePlanCreated(
 		return
 	}
 
+	// Mark agentRun as updated for rollback purposes
+	agentRun.State = "succeeded"
+	agentRun.PlanContent = &planContentForStorage
+	agentRun.ErrorMessage = nil
+	agentRun.Output = buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, "")
+	agentRunUpdated = true
+
 	// Transition plan execution AgentRun to started state
+	// Note: execution run and plan creation run state transition are already committed in transaction
+	// If this fails, execution run exists and can be retried
 	stateMachine := services.NewAgentRunStateMachine(agentRunRepo, logger)
 	if err := stateMachine.TransitionToStarted(executionRun.ID); err != nil {
 		logger.Error("Failed to transition plan execution AgentRun to started state",
 			zap.Error(err),
 			zap.Int("execution_agent_run_id", executionRun.ID),
 		)
-		restoreReviewAndAgent()
-		persistRollback()
-		if deleteErr := db.Delete(executionRun).Error; deleteErr != nil {
-			logger.Warn("Failed to delete execution AgentRun after state transition error",
-				zap.Error(deleteErr),
-				zap.Int("execution_agent_run_id", executionRun.ID),
-			)
-		}
+		// Execution run already exists in database, so we can retry later
+		// Don't delete it or rollback plan creation run state
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "STATE_TRANSITION_ERROR",
 			"message": "Failed to transition execution agent run to started",
@@ -1597,17 +1598,11 @@ func handlePlanCreated(
 		logger.Error("Failed to initialize Kubernetes client for plan execution",
 			zap.Error(err),
 		)
-		restoreReviewAndAgent()
-		persistRollback()
+		// Execution run already exists in database, so we can retry later
+		// Rollback execution run state to queued so it can be retried
 		if rollbackErr := stateMachine.TransitionToQueued(executionRun.ID); rollbackErr != nil {
 			logger.Warn("Failed to rollback execution AgentRun state",
 				zap.Error(rollbackErr),
-				zap.Int("execution_agent_run_id", executionRun.ID),
-			)
-		}
-		if deleteErr := db.Delete(executionRun).Error; deleteErr != nil {
-			logger.Warn("Failed to delete execution AgentRun after Kubernetes client error",
-				zap.Error(deleteErr),
 				zap.Int("execution_agent_run_id", executionRun.ID),
 			)
 		}
@@ -1625,6 +1620,7 @@ func handlePlanCreated(
 			zap.Error(err),
 			zap.Int("execution_agent_run_id", executionRun.ID),
 		)
+		// Execution run already exists in database, mark it as failed so it can be retried
 		failureReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(err.Error()), utils.GetDBOutputLimitBytes(), "… [truncated]")
 		executionRun.State = "failed"
 		executionRun.ErrorMessage = &failureReason
@@ -1634,9 +1630,7 @@ func handlePlanCreated(
 				zap.Int("execution_agent_run_id", executionRun.ID),
 			)
 		}
-
-		restoreReviewAndAgent()
-		persistRollback()
+		// Rollback execution run state to queued so it can be retried
 		if rollbackErr := stateMachine.TransitionToQueued(executionRun.ID); rollbackErr != nil {
 			logger.Warn("Failed to rollback execution AgentRun state",
 				zap.Error(rollbackErr),
