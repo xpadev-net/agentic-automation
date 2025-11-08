@@ -216,13 +216,19 @@ func (r *agentRunRepository) UpdateState(id int, state string) error {
 				NewState:     state,
 			}
 		}
-		// If transitioning to succeeded, verify pr_id is set
+		// If transitioning to succeeded, verify pr_id is set (except for plan_creation mode)
 		if state == "succeeded" {
-			if currentRun.PRID == nil {
-				return ErrMissingPRIDForSucceeded
+			// For plan_creation mode, pr_id may be nil, so skip the check
+			if currentRun.ExecutionMode != "plan_creation" {
+				if currentRun.PRID == nil {
+					return ErrMissingPRIDForSucceeded
+				}
+				// Include pr_id IS NOT NULL in WHERE condition to ensure pr_id is still set at update time
+				updateCondition = r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ? AND pr_id IS NOT NULL", id, currentState)
+			} else {
+				// For plan_creation mode, just check state (pr_id can be nil)
+				updateCondition = r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ?", id, currentState)
 			}
-			// Include pr_id IS NOT NULL in WHERE condition to ensure pr_id is still set at update time
-			updateCondition = r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ? AND pr_id IS NOT NULL", id, currentState)
 		} else {
 			// For failed transition, just check state
 			updateCondition = r.db.Model(&models.AgentRun{}).Where("id = ? AND state = ?", id, currentState)

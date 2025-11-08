@@ -35,7 +35,7 @@ type fakePlanJobService struct {
 }
 
 func (f *fakePlanJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error) {
-	return nil, nil
+	return &batchv1.Job{}, nil
 }
 
 func (f *fakePlanJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *services.AggregatedFeedback, branchName string) (*batchv1.Job, error) {
@@ -87,6 +87,7 @@ func setupPlanTestFixtures(t *testing.T) *planTestFixtures {
 			execution_mode TEXT DEFAULT 'normal',
 			plan_content TEXT,
 			review_feedback_id INTEGER,
+			plan_agent_run_id INTEGER,
 			input TEXT,
 			output TEXT,
 			retry_count INTEGER DEFAULT 0,
@@ -210,6 +211,7 @@ func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
 		agentRunRepo,
 		reviewFeedbackRepo,
 		fixtures.db,
+		fixtures.agentRun.State,
 	)
 
 	response := w.Result()
@@ -322,6 +324,7 @@ func TestHandlePlanCreatedRollsBackWhenJobCreationFails(t *testing.T) {
 		agentRunRepo,
 		reviewFeedbackRepo,
 		fixtures.db,
+		fixtures.agentRun.State,
 	)
 
 	require.Equal(t, http.StatusInternalServerError, w.Code)
@@ -495,6 +498,7 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated(t *testing.T) {
 		agentRunRepo,
 		planRepo,
 		fixtures.db,
+		fixtures.agentRun.State,
 	)
 	require.Equal(t, 200, w1.Code)
 	require.Len(t, fakeJob.capturedPlan, len(utils.SanitizeUTF8("Step A")))
@@ -542,4 +546,171 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated(t *testing.T) {
 
 	// ensure job service did not receive a second plan
 	require.Equal(t, utils.SanitizeUTF8("Step A"), fakeJob.capturedPlan)
+}
+
+func TestHandlePlanReportIgnoresDuplicatePlanCreated_IssueTriggered(t *testing.T) {
+	t.Setenv("AGENT_OUTPUT_DB_LIMIT_BYTES", "64")
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	schemaStatements := []string{
+		`CREATE TABLE IF NOT EXISTS agent_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			idempotency_key TEXT UNIQUE,
+			issue_id INTEGER,
+			pr_id INTEGER,
+			state TEXT DEFAULT 'queued',
+			agent_type TEXT DEFAULT 'claude-code',
+			execution_mode TEXT DEFAULT 'normal',
+			plan_content TEXT,
+			review_feedback_id INTEGER,
+			plan_agent_run_id INTEGER,
+			input TEXT,
+			output TEXT,
+			retry_count INTEGER DEFAULT 0,
+			error_message TEXT,
+			commit_sha TEXT,
+			s3_session_key TEXT,
+			session_saved_at DATETIME,
+			started_at DATETIME,
+			completed_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS issues (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT,
+			number INTEGER,
+			github_issue_id INTEGER,
+			title TEXT,
+			body TEXT,
+			labels TEXT,
+			state TEXT DEFAULT 'open',
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
+	}
+
+	for _, stmt := range schemaStatements {
+		require.NoError(t, db.Exec(stmt).Error)
+	}
+
+	issue := &models.Issue{Repo: "owner/repo", Number: 1}
+	require.NoError(t, db.Create(issue).Error)
+
+	// Create issue-triggered plan creation AgentRun (ReviewFeedbackID is nil)
+	// State must be "started" because UpdateState only allows transition from "started" to "succeeded"
+	agentRun := &models.AgentRun{
+		IdempotencyKey:   "issue-plan-run",
+		IssueID:          issue.ID,
+		State:            "started",
+		AgentType:        "claude-code",
+		ExecutionMode:    "plan_creation",
+		ReviewFeedbackID: nil, // Issue-triggered
+	}
+	require.NoError(t, db.Create(agentRun).Error)
+
+	fakeJob := &fakePlanJobService{}
+
+	origClientFactory := kubernetesClientFactory
+	origJobFactory := kubernetesJobServiceFactory
+	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+		return nil, nil
+	}
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+		return fakeJob
+	}
+	defer func() {
+		kubernetesClientFactory = origClientFactory
+		kubernetesJobServiceFactory = origJobFactory
+	}()
+
+	// First plan report: should succeed
+	firstPayload := map[string]any{
+		"status":       "plan_created",
+		"agent_type":   "claude-code",
+		"plan_content": "Step A",
+	}
+	firstBody, err := json.Marshal(firstPayload)
+	require.NoError(t, err)
+
+	w1 := httptest.NewRecorder()
+	ctx1, _ := gin.CreateTestContext(w1)
+	path1 := "/api/agent-runs/" + strconv.Itoa(agentRun.ID) + "/report"
+	ctx1.Request = httptest.NewRequest("POST", path1, bytes.NewReader(firstBody))
+	ctx1.Request.Header.Set("Content-Type", "application/json")
+	ctx1.Params = gin.Params{gin.Param{Key: "id", Value: strconv.Itoa(agentRun.ID)}}
+
+	HandleAgentReport(ctx1)
+
+	require.Equal(t, http.StatusOK, w1.Code)
+
+	// Verify first plan report was processed
+	var refreshedAgentRun models.AgentRun
+	require.NoError(t, db.First(&refreshedAgentRun, agentRun.ID).Error)
+	require.Equal(t, "succeeded", refreshedAgentRun.State)
+	require.NotNil(t, refreshedAgentRun.PlanContent)
+
+	// Verify execution AgentRun was created
+	var executionRuns []models.AgentRun
+	require.NoError(t, db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
+		issue.ID, "plan_execution").Find(&executionRuns).Error)
+	require.Len(t, executionRuns, 1)
+	originalExecutionID := executionRuns[0].ID
+	originalPlanCallCount := fakeJob.planCallCount
+
+	// Second plan report: should be ignored as duplicate
+	secondPayload := map[string]any{
+		"status":       "plan_created",
+		"agent_type":   "claude-code",
+		"plan_content": "Step B",
+	}
+	secondBody, err := json.Marshal(secondPayload)
+	require.NoError(t, err)
+
+	w2 := httptest.NewRecorder()
+	ctx2, _ := gin.CreateTestContext(w2)
+	path2 := "/api/agent-runs/" + strconv.Itoa(agentRun.ID) + "/report"
+	ctx2.Request = httptest.NewRequest("POST", path2, bytes.NewReader(secondBody))
+	ctx2.Request.Header.Set("Content-Type", "application/json")
+	ctx2.Params = gin.Params{gin.Param{Key: "id", Value: strconv.Itoa(agentRun.ID)}}
+
+	HandleAgentReport(ctx2)
+
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	// Verify response signals duplicate processing
+	// Note: When state is already "succeeded", UpdateState fails and the duplicate check
+	// should catch it. However, if the state check happens after UpdateState fails,
+	// the response may indicate that execution is already in progress.
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp))
+	// Accept either message as both indicate duplicate processing
+	message := resp["message"].(string)
+	require.True(t, message == "Plan report already processed" || message == "Plan content updated, execution already in progress" || message == "Plan created, execution already in progress",
+		"Expected duplicate processing message, got: %s", message)
+	// State field may not be present in all response types
+	if state, ok := resp["state"]; ok {
+		require.Equal(t, "succeeded", state)
+	}
+	require.Equal(t, float64(agentRun.ID), resp["plan_agent_run_id"])
+	require.Equal(t, float64(originalExecutionID), resp["execution_agent_run_id"])
+
+	// Verify no new execution run was created
+	var allExecutionRuns []models.AgentRun
+	require.NoError(t, db.Where("issue_id = ? AND execution_mode = ? AND plan_content IS NOT NULL",
+		issue.ID, "plan_execution").Find(&allExecutionRuns).Error)
+	require.Len(t, allExecutionRuns, 1)
+	require.Equal(t, originalExecutionID, allExecutionRuns[0].ID)
+
+	// Verify job service was not called again
+	require.Equal(t, originalPlanCallCount, fakeJob.planCallCount)
 }
