@@ -313,7 +313,7 @@ func TestCreatePR_InvalidInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := CreatePR(tt.token, tt.repo, tt.branchName, tt.issueNumber, "", "")
+			_, err := CreatePR(tt.token, tt.repo, tt.branchName, tt.issueNumber, "", "", "master")
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got nil")

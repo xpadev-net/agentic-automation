@@ -400,7 +400,7 @@ func checkGitFunctionsImplemented(t *testing.T) bool {
 	}
 
 	// Check CreatePR
-	_, err = git.CreatePR("", "", "", 0, "", "")
+	_, err = git.CreatePR("", "", "", 0, "", "", "master")
 	if err != nil && strings.Contains(err.Error(), "not implemented") {
 		t.Skip("git.CreatePR not implemented yet")
 		return false

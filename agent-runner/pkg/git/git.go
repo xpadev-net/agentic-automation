@@ -11,6 +11,7 @@ import (
 	"agent-runner/pkg/agent"
 	githubutil "agent-runner/pkg/github"
 	"agent-runner/pkg/utils"
+
 	"github.com/google/go-github/v57/github"
 	"golang.org/x/oauth2"
 )
@@ -268,10 +269,46 @@ func HasChanges(workDir string) (bool, error) {
 
 // CommitChanges and PushBranch are implemented in committer.go (T036).
 
+// GetDefaultBranch retrieves the default branch of a repository using GitHub API.
+// repo: Repository in format owner/repo (e.g., "octocat/Hello-World")
+// Returns the default branch name (e.g., "master" or "main"), or an error if retrieval fails.
+func GetDefaultBranch(repo string) (string, error) {
+	// Validate repo format (owner/repo)
+	repoParts := strings.Split(repo, "/")
+	if len(repoParts) != 2 {
+		return "", fmt.Errorf("repository must be in format owner/repo, got: %q", repo)
+	}
+	owner := repoParts[0]
+	repoName := repoParts[1]
+
+	// Acquire token via GitHub App
+	ctx := context.Background()
+	token, err := githubutil.GetGitHubToken(ctx, owner, repoName)
+	if err != nil {
+		return "", fmt.Errorf("failed to obtain GitHub App installation token: %w", err)
+	}
+
+	// Create GitHub API client
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+
+	// Get repository information to retrieve default branch
+	base := "master" // default fallback
+	if repoInfo, repoResp, derr := client.Repositories.Get(ctx, owner, repoName); derr == nil && repoInfo != nil && repoInfo.DefaultBranch != nil && *repoInfo.DefaultBranch != "" {
+		base = *repoInfo.DefaultBranch
+		_ = repoResp // rate limit handled by caller if needed
+	}
+
+	return base, nil
+}
+
 // GeneratePRTitleAndBody generates PR title and body using cursor-agent in read-only mode.
 // It uses Issue information, changed files, commit message, and git diff to generate the PR content.
 // Returns title and body, or an error if generation fails.
-func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commitMsg, agentType, cursorModel string) (string, string, error) {
+func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commitMsg, agentType, cursorModel, baseBranch string) (string, string, error) {
 	// Only cursor-agent is supported for PR generation
 	if agentType != "cursor-agent" {
 		return "", "", fmt.Errorf("PR generation is only supported for cursor-agent, got: %s", agentType)
@@ -283,6 +320,24 @@ func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commit
 		return "", "", fmt.Errorf("failed to get changed files: %w", err)
 	}
 
+	// If no changes in working tree (already committed), get changed files from base branch
+	if len(changedFiles) == 0 && baseBranch != "" {
+		// Get changed files from base branch diff
+		diffOutput, err := runGitDiff(workDir, "--name-only", fmt.Sprintf("%s..HEAD", baseBranch))
+		if err != nil {
+			return "", "", fmt.Errorf("failed to get changed files from base branch: %w", err)
+		}
+		if diffOutput != "" {
+			// Parse diff output to get file list
+			lines := strings.Split(strings.TrimSpace(diffOutput), "\n")
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					changedFiles = append(changedFiles, strings.TrimSpace(line))
+				}
+			}
+		}
+	}
+
 	// Build changed files list
 	changedFilesList := strings.Join(changedFiles, "\n- ")
 	if changedFilesList != "" {
@@ -292,7 +347,12 @@ func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commit
 	}
 
 	// Build prompt with structured information
-	prompt := fmt.Sprintf("以下の情報を基に、Pull Requestのタイトルと概要を生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<commit_message>\n%s\n</commit_message>\n\n作業ディレクトリで `git diff` を実行して変更内容を確認し、それを基にPRタイトルと概要を生成してください。\n\n出力形式:\n以下のXML形式で出力してください。\n<title>PRタイトル</title>\n<body>PR概要（Markdown形式可）</body>", issueNumber, issuePrompt, changedFilesList, commitMsg)
+	// Use base branch diff command if base branch is provided, otherwise use regular git diff
+	diffCommand := "git diff"
+	if baseBranch != "" {
+		diffCommand = fmt.Sprintf("git diff %s..HEAD", baseBranch)
+	}
+	prompt := fmt.Sprintf("以下の情報を基に、Pull Requestのタイトルと概要を生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<commit_message>\n%s\n</commit_message>\n\n作業ディレクトリで `%s` を実行して変更内容を確認し、それを基にPRタイトルと概要を生成してください。\n\n出力形式:\n以下のXML形式で出力してください。\n<title>PRタイトル</title>\n<body>PR概要（Markdown形式可）</body>", issueNumber, issuePrompt, changedFilesList, commitMsg, diffCommand)
 
 	// Execute cursor-agent in read-only mode
 	executor := agent.NewExecutor(agentType)
@@ -318,8 +378,9 @@ func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commit
 // issueNumber: Issue number to reference in PR title
 // title: Optional PR title (if empty, uses default format)
 // body: Optional PR body (if empty, uses default format)
+// baseBranch: Base branch name (e.g., "master" or "main")
 // Returns: PR number (existing or newly created)
-func CreatePR(token, repo, branchName string, issueNumber int, title, body string) (int, error) {
+func CreatePR(token, repo, branchName string, issueNumber int, title, body, baseBranch string) (int, error) {
 	// Validate inputs
 	if repo == "" {
 		return 0, fmt.Errorf("repository name is required")
@@ -399,11 +460,10 @@ LIST_SUCCESS:
 		}
 	}
 
-	// Determine base branch using repository default branch
-	base := "master"
-	if repoInfo, repoResp, derr := client.Repositories.Get(ctx, owner, repoName); derr == nil && repoInfo != nil && repoInfo.DefaultBranch != nil && *repoInfo.DefaultBranch != "" {
-		base = *repoInfo.DefaultBranch
-		_ = repoResp // rate limit handled by caller if needed
+	// Use provided base branch, fallback to master if empty
+	base := baseBranch
+	if base == "" {
+		base = "master"
 	}
 	// Fallback to main if default branch retrieval failed and master fails later
 	// Use provided title/body if available, otherwise use default format

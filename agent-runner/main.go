@@ -321,6 +321,17 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Cloned repository %s to %s\n", repo, envCfg.WorkDir)
 
+	// 4.5. Get default branch (base branch) for PR generation and creation
+	fmt.Fprintf(os.Stderr, "Getting default branch for repository %s\n", repo)
+	baseBranch, err := git.GetDefaultBranch(repo)
+	if err != nil {
+		// Log warning but continue with default (master)
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to get default branch: %v (using 'master' as fallback)\n", err)
+		baseBranch = "master"
+	} else {
+		fmt.Fprintf(os.Stderr, "Default branch: %s\n", baseBranch)
+	}
+
 	// 5. Restore session from S3 (if retry_count > 0)
 	if envCfg.RetryCount > 0 {
 		fmt.Fprintf(os.Stderr, "Restoring session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
@@ -552,7 +563,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	var prTitle, prBody string
 	if envCfg.AgentType == "cursor-agent" {
 		fmt.Fprintf(os.Stderr, "Generating PR title and body\n")
-		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsg, envCfg.AgentType, envCfg.CursorModel)
+		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsg, envCfg.AgentType, envCfg.CursorModel, baseBranch)
 		if err != nil {
 			// Log warning but continue with default title/body
 			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
@@ -591,7 +602,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 	// 15. Create Pull Request
 	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
-	prNumber, err := git.CreatePR("", repo, branchName, issueID, prTitle, prBody)
+	prNumber, err := git.CreatePR("", repo, branchName, issueID, prTitle, prBody, baseBranch)
 	if err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("PR creation failed: %v", err),
