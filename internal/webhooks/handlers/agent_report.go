@@ -1914,22 +1914,33 @@ func handlePlanCreated(
 			zap.Error(err),
 			zap.Int("execution_agent_run_id", executionRun.ID),
 		)
-		// Execution run already exists in database, mark it as failed so it can be retried
-		failureReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(err.Error()), utils.GetDBOutputLimitBytes(), "… [truncated]")
-		executionRun.State = "failed"
-		executionRun.ErrorMessage = &failureReason
-		if updateErr := agentRunRepo.Update(executionRun); updateErr != nil {
-			logger.Warn("Failed to record execution AgentRun failure state",
-				zap.Error(updateErr),
-				zap.Int("execution_agent_run_id", executionRun.ID),
-			)
-		}
 		// Rollback execution run state to queued so it can be retried
+		// The execution run should be in "started" state at this point
 		if rollbackErr := stateMachine.TransitionToQueued(executionRun.ID); rollbackErr != nil {
 			logger.Warn("Failed to rollback execution AgentRun state",
 				zap.Error(rollbackErr),
 				zap.Int("execution_agent_run_id", executionRun.ID),
 			)
+			// If rollback fails because state is not "started", try direct reset to queued
+			// This handles edge cases where the state might have changed
+			currentRun, getErr := agentRunRepo.GetByID(executionRun.ID)
+			if getErr == nil && currentRun != nil && currentRun.State != "queued" {
+				currentRun.State = "queued"
+				currentRun.StartedAt = nil
+				currentRun.CompletedAt = nil
+				currentRun.ErrorMessage = nil
+				if directUpdateErr := agentRunRepo.Update(currentRun); directUpdateErr != nil {
+					logger.Warn("Failed to reset execution AgentRun to queued state directly",
+						zap.Error(directUpdateErr),
+						zap.Int("execution_agent_run_id", executionRun.ID),
+						zap.String("current_state", currentRun.State),
+					)
+				} else {
+					logger.Info("Reset execution AgentRun to queued state directly after TransitionToQueued failed",
+						zap.Int("execution_agent_run_id", executionRun.ID),
+					)
+				}
+			}
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "PLAN_EXECUTION_JOB_CREATION_FAILED",
