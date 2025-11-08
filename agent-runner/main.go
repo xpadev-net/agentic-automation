@@ -548,9 +548,30 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Saved session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 
-	// 14. Create Pull Request
+	// 14. Generate PR title and body (if cursor-agent is used)
+	var prTitle, prBody string
+	if envCfg.AgentType == "cursor-agent" {
+		fmt.Fprintf(os.Stderr, "Generating PR title and body\n")
+		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsg, envCfg.AgentType, envCfg.CursorModel)
+		if err != nil {
+			// Log warning but continue with default title/body
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
+			prTitle = ""
+			prBody = ""
+		} else {
+			prTitle = title
+			prBody = body
+			fmt.Fprintf(os.Stderr, "Generated PR title and body\n")
+		}
+	} else {
+		// For non-cursor-agent, use default format
+		prTitle = ""
+		prBody = ""
+	}
+
+	// 15. Create Pull Request
 	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
-	prNumber, err := git.CreatePR("", repo, branchName, issueID)
+	prNumber, err := git.CreatePR("", repo, branchName, issueID, prTitle, prBody)
 	if err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("PR creation failed: %v", err),
@@ -564,7 +585,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
 
-	// 15. Run post-hooks
+	// 16. Run post-hooks
 	if manifest != nil && len(manifest.Hooks.Post) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
 		if err := hooks.RunPostHooks(manifest.Hooks.Post, envCfg.WorkDir); err != nil {
@@ -577,7 +598,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		fmt.Fprintf(os.Stderr, "No post-hooks to execute\n")
 	}
 
-	// 16. Report success to Operator API
+	// 17. Report success to Operator API
 	fmt.Fprintf(os.Stderr, "Reporting success to Operator API\n")
 	if err := reporterClient.ReportSuccess(prNumber, branchName, commitSHA, envCfg.AgentType); err != nil {
 		return fmt.Errorf("failed to report success: %w", err)

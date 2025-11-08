@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"strings"
 
+	"agent-runner/pkg/agent"
 	githubutil "agent-runner/pkg/github"
+	"agent-runner/pkg/utils"
 	"github.com/google/go-github/v57/github"
 	"golang.org/x/oauth2"
 )
@@ -266,14 +268,78 @@ func HasChanges(workDir string) (bool, error) {
 
 // CommitChanges and PushBranch are implemented in committer.go (T036).
 
+// GeneratePRTitleAndBody generates PR title and body using cursor-agent in read-only mode.
+// It uses Issue information, changed files, commit message, and git diff to generate the PR content.
+// Returns title and body, or an error if generation fails.
+func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commitMsg, agentType, cursorModel string) (string, string, error) {
+	// Only cursor-agent is supported for PR generation
+	if agentType != "cursor-agent" {
+		return "", "", fmt.Errorf("PR generation is only supported for cursor-agent, got: %s", agentType)
+	}
+
+	// Get changed files
+	changedFiles, err := GetChangedFiles(workDir)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to get changed files: %w", err)
+	}
+
+	// Build changed files list
+	changedFilesList := strings.Join(changedFiles, "\n- ")
+	if changedFilesList != "" {
+		changedFilesList = "- " + changedFilesList
+	} else {
+		changedFilesList = "(no files changed)"
+	}
+
+	// Build prompt with structured information
+	prompt := fmt.Sprintf(`以下の情報を基に、Pull Requestのタイトルと概要を生成してください。
+
+<issue>
+<number>%d</number>
+<description>%s</description>
+</issue>
+
+<changed_files>
+%s
+</changed_files>
+
+<commit_message>
+%s
+</commit_message>
+
+作業ディレクトリで `git diff` を実行して変更内容を確認し、それを基にPRタイトルと概要を生成してください。
+
+出力形式:
+以下のXML形式で出力してください。
+<title>PRタイトル</title>
+<body>PR概要（Markdown形式可）</body>`, issueNumber, issuePrompt, changedFilesList, commitMsg)
+
+	// Execute cursor-agent in read-only mode
+	executor := agent.NewExecutor(agentType)
+	output, err := executor.ExecuteWithOptions(workDir, prompt, cursorModel, false)
+	if err != nil {
+		return "", "", fmt.Errorf("cursor-agent execution failed: %w", err)
+	}
+
+	// Parse output to extract title and body
+	title, body, err := utils.ParsePRTitleAndBody(output)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to parse PR title and body: %w", err)
+	}
+
+	return title, body, nil
+}
+
 // CreatePR creates a Pull Request via GitHub API.
 // If PR already exists for this branch, returns existing PR number (idempotent).
 // token: GitHub PAT for authentication
 // repo: Repository in format owner/repo (e.g., "octocat/Hello-World")
 // branchName: Name of the branch to create PR from
 // issueNumber: Issue number to reference in PR title
+// title: Optional PR title (if empty, uses default format)
+// body: Optional PR body (if empty, uses default format)
 // Returns: PR number (existing or newly created)
-func CreatePR(token, repo, branchName string, issueNumber int) (int, error) {
+func CreatePR(token, repo, branchName string, issueNumber int, title, body string) (int, error) {
 	// Validate inputs
 	if repo == "" {
 		return 0, fmt.Errorf("repository name is required")
@@ -360,8 +426,13 @@ LIST_SUCCESS:
 		_ = repoResp // rate limit handled by caller if needed
 	}
 	// Fallback to main if default branch retrieval failed and master fails later
-	title := fmt.Sprintf("Fix: issue #%d", issueNumber)
-	body := fmt.Sprintf("自動生成: エージェントによる修正\n\nclose #%d", issueNumber)
+	// Use provided title/body if available, otherwise use default format
+	if title == "" {
+		title = fmt.Sprintf("Fix: issue #%d", issueNumber)
+	}
+	if body == "" {
+		body = fmt.Sprintf("自動生成: エージェントによる修正\n\nclose #%d", issueNumber)
+	}
 
 	newPR := &github.NewPullRequest{
 		Title: &title,

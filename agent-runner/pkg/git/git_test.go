@@ -313,7 +313,7 @@ func TestCreatePR_InvalidInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := CreatePR(tt.token, tt.repo, tt.branchName, tt.issueNumber)
+			_, err := CreatePR(tt.token, tt.repo, tt.branchName, tt.issueNumber, "", "")
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got nil")
@@ -351,7 +351,7 @@ func TestCreatePR_Integration(t *testing.T) {
 	// branchName := "test-branch"
 	// issueNumber := 1
 	//
-	// prNumber, err := CreatePR(token, repo, branchName, issueNumber)
+	// prNumber, err := CreatePR(token, repo, branchName, issueNumber, "", "")
 	// if err != nil {
 	// 	t.Fatalf("CreatePR failed: %v", err)
 	// }
