@@ -569,6 +569,26 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		prBody = ""
 	}
 
+	// Ensure issue-closing keyword is present in PR body
+	if prBody != "" {
+		closingKeyword := fmt.Sprintf("close #%d", issueID)
+		// Check if any closing keyword pattern exists (case-insensitive)
+		bodyLower := strings.ToLower(prBody)
+		hasClosingKeyword := strings.Contains(bodyLower, strings.ToLower(closingKeyword)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("closes #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("closed #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("fix #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("fixes #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("fixed #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("resolve #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("resolves #%d", issueID)) ||
+			strings.Contains(bodyLower, fmt.Sprintf("resolved #%d", issueID))
+		if !hasClosingKeyword {
+			prBody = prBody + "\n\n" + closingKeyword
+			fmt.Fprintf(os.Stderr, "Added issue-closing keyword to PR body\n")
+		}
+	}
+
 	// 15. Create Pull Request
 	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
 	prNumber, err := git.CreatePR("", repo, branchName, issueID, prTitle, prBody)

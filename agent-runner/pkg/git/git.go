@@ -292,27 +292,7 @@ func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commit
 	}
 
 	// Build prompt with structured information
-	prompt := fmt.Sprintf(`以下の情報を基に、Pull Requestのタイトルと概要を生成してください。
-
-<issue>
-<number>%d</number>
-<description>%s</description>
-</issue>
-
-<changed_files>
-%s
-</changed_files>
-
-<commit_message>
-%s
-</commit_message>
-
-作業ディレクトリで `git diff` を実行して変更内容を確認し、それを基にPRタイトルと概要を生成してください。
-
-出力形式:
-以下のXML形式で出力してください。
-<title>PRタイトル</title>
-<body>PR概要（Markdown形式可）</body>`, issueNumber, issuePrompt, changedFilesList, commitMsg)
+	prompt := fmt.Sprintf("以下の情報を基に、Pull Requestのタイトルと概要を生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<commit_message>\n%s\n</commit_message>\n\n作業ディレクトリで `git diff` を実行して変更内容を確認し、それを基にPRタイトルと概要を生成してください。\n\n出力形式:\n以下のXML形式で出力してください。\n<title>PRタイトル</title>\n<body>PR概要（Markdown形式可）</body>", issueNumber, issuePrompt, changedFilesList, commitMsg)
 
 	// Execute cursor-agent in read-only mode
 	executor := agent.NewExecutor(agentType)
