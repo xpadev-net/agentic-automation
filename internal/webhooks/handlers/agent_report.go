@@ -689,6 +689,48 @@ func HandleAgentReport(c *gin.Context) {
 	}
 
 	// ------------------------------------------------------------------
+	// Delete Kubernetes Job on success (Issue #222)
+	// Delete the corresponding Job when status is "succeeded"
+	// This must be done BEFORE PR notification to ensure cleanup even if
+	// PR notification fails (e.g., due to GitHub client initialization errors)
+	// ------------------------------------------------------------------
+	if req.Status == "succeeded" {
+		kubernetesClient, err := kubernetesClientFactory(logger)
+		if err != nil {
+			logger.Warn("Failed to initialize Kubernetes client for job deletion",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+			)
+		} else {
+			var jobName string
+			// Generate job name based on execution mode
+			if agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
+				// Plan creation jobs use a different naming scheme
+				jobName = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
+			} else {
+				// Normal jobs and plan execution jobs use standard naming
+				jobName = kubernetesClient.GenerateJobName(agentRunID)
+			}
+
+			// Delete job (non-blocking - log errors but don't fail the response)
+			if err := kubernetesClient.DeleteJob(c.Request.Context(), jobName); err != nil {
+				logger.Warn("Failed to delete Kubernetes Job after successful execution",
+					zap.Error(err),
+					zap.Int("agent_run_id", agentRunID),
+					zap.String("job_name", jobName),
+					zap.String("execution_mode", agentRun.ExecutionMode),
+				)
+			} else {
+				logger.Info("Successfully deleted Kubernetes Job after successful execution",
+					zap.Int("agent_run_id", agentRunID),
+					zap.String("job_name", jobName),
+					zap.String("execution_mode", agentRun.ExecutionMode),
+				)
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// PR created notification (US2 T083)
 	// Post status comments to both Issue and PR upon success
 	// ------------------------------------------------------------------
@@ -762,46 +804,6 @@ func HandleAgentReport(c *gin.Context) {
 						zap.Int("pr_number", prNumber),
 					)
 				}
-			}
-		}
-	}
-
-	// ------------------------------------------------------------------
-	// Delete Kubernetes Job on success (Issue #222)
-	// Delete the corresponding Job when status is "succeeded"
-	// ------------------------------------------------------------------
-	if req.Status == "succeeded" {
-		kubernetesClient, err := kubernetesClientFactory(logger)
-		if err != nil {
-			logger.Warn("Failed to initialize Kubernetes client for job deletion",
-				zap.Error(err),
-				zap.Int("agent_run_id", agentRunID),
-			)
-		} else {
-			var jobName string
-			// Generate job name based on execution mode
-			if agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
-				// Plan creation jobs use a different naming scheme
-				jobName = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
-			} else {
-				// Normal jobs and plan execution jobs use standard naming
-				jobName = kubernetesClient.GenerateJobName(agentRunID)
-			}
-
-			// Delete job (non-blocking - log errors but don't fail the response)
-			if err := kubernetesClient.DeleteJob(c.Request.Context(), jobName); err != nil {
-				logger.Warn("Failed to delete Kubernetes Job after successful execution",
-					zap.Error(err),
-					zap.Int("agent_run_id", agentRunID),
-					zap.String("job_name", jobName),
-					zap.String("execution_mode", agentRun.ExecutionMode),
-				)
-			} else {
-				logger.Info("Successfully deleted Kubernetes Job after successful execution",
-					zap.Int("agent_run_id", agentRunID),
-					zap.String("job_name", jobName),
-					zap.String("execution_mode", agentRun.ExecutionMode),
-				)
 			}
 		}
 	}
