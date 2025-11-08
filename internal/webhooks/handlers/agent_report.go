@@ -1521,6 +1521,13 @@ func handlePlanCreated(
 	}
 	executionRun.Input = datatypes.JSON(inputBytes)
 
+	// Get completion timestamp for transactional update
+	// Use agentRun.CompletedAt if already set, otherwise use current time
+	now := time.Now()
+	if agentRun.CompletedAt != nil {
+		now = *agentRun.CompletedAt
+	}
+
 	// Use transaction to atomically create execution run and transition plan creation run to succeeded
 	// This ensures that if execution run creation succeeds, plan creation run state is also updated
 	// If execution run creation fails, plan creation run state remains unchanged (allowing retry)
@@ -1567,6 +1574,7 @@ func handlePlanCreated(
 				"plan_content":  planContentForStorage,
 				"error_message": nil,
 				"output":        buildPlanOutputJSON("plan_created", req.AgentType, planContentForStorage, sanitizedLogs, ""),
+				"completed_at":  now,
 			})
 
 		if result.Error != nil {
