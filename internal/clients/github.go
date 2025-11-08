@@ -654,6 +654,45 @@ func (c *Client) ListCheckRunsForCheckSuite(ctx context.Context, owner, repo str
 	return allCheckRuns, nil
 }
 
+// ListCheckRunsForRef retrieves all check runs for a commit SHA (ref)
+// Handles pagination to return all check runs, not just the first page
+func (c *Client) ListCheckRunsForRef(ctx context.Context, owner, repo, ref string) ([]*github.CheckRun, error) {
+	c.logger.Info("Listing GitHub check runs for ref",
+		zap.String("owner", owner),
+		zap.String("repo", repo),
+		zap.String("ref", ref),
+	)
+
+	opts := &github.ListCheckRunsOptions{
+		ListOptions: github.ListOptions{
+			Page:    1,
+			PerPage: 100, // Maximum per page to minimize API calls
+		},
+	}
+
+	var allCheckRuns []*github.CheckRun
+	var resp *github.Response
+
+	for {
+		checkRunsResult, pageResp, err := c.Checks.ListCheckRunsForRef(ctx, owner, repo, ref, opts)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "ListCheckRunsForRef")
+		}
+
+		allCheckRuns = append(allCheckRuns, checkRunsResult.CheckRuns...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
+	}
+
+	c.handleRateLimit(resp)
+	return allCheckRuns, nil
+}
+
 // GetCheckRunLogs retrieves logs for a specific check run
 // Note: GitHub API doesn't provide direct logs endpoint, so this uses the check run details
 // The actual logs URL is available in CheckRun.HTMLURL

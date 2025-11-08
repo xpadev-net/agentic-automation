@@ -71,88 +71,92 @@ const deliveryHeader = "X-GitHub-Delivery"
 // appGitHubClient holds a process-wide GitHub App client (DI from server)
 var appGitHubClient *clients.GitHubClient
 
-// ciStatusProviderAdapter は PR に紐づく最新の aggregated CI 状態を返す軽量アダプタ
+// ciStatusProviderAdapter は GitHub APIから直接CI状態を取得するアダプタ
 type ciStatusProviderAdapter struct {
-	repo *repositories.CIStatusRepository
-	prID int
+	githubClient *clients.Client
+	owner        string
+	repo         string
+	prNumber     int
+	logger       *zap.Logger
 }
 
-func (a *ciStatusProviderAdapter) GetAggregatedState(_ context.Context, _ string, _ string, _ int) (services.CIState, error) {
-	if a.repo == nil || a.prID == 0 {
+func (a *ciStatusProviderAdapter) GetAggregatedState(ctx context.Context, owner, repo string, prNumber int) (services.CIState, error) {
+	if a.githubClient == nil {
+		if a.logger != nil {
+			a.logger.Warn("GitHub client not available in ciStatusProviderAdapter")
+		}
 		return services.CIStateUnknown, nil
 	}
-	statuses, err := a.repo.FindByPRID(a.prID)
+
+	// Use the stored owner/repo/prNumber if available, otherwise use parameters
+	actualOwner := a.owner
+	actualRepo := a.repo
+	actualPRNumber := a.prNumber
+	if actualOwner == "" {
+		actualOwner = owner
+	}
+	if actualRepo == "" {
+		actualRepo = repo
+	}
+	if actualPRNumber == 0 {
+		actualPRNumber = prNumber
+	}
+
+	// Get PR to retrieve head SHA
+	pr, err := a.githubClient.GetPullRequest(ctx, actualOwner, actualRepo, actualPRNumber)
 	if err != nil {
+		if a.logger != nil {
+			a.logger.Warn("Failed to get PR for CI status check",
+				zap.Error(err),
+				zap.String("owner", actualOwner),
+				zap.String("repo", actualRepo),
+				zap.Int("pr_number", actualPRNumber),
+			)
+		}
 		return services.CIStateUnknown, err
 	}
-	// 最新 aggregated を 1 件選定する
-	var latest *models.CIStatus
-	// helper: 比較関数（CompletedAt > UpdatedAt > CheckSuiteID 数値）
-	isNewer := func(a, b *models.CIStatus) bool {
-		// CompletedAt: nil は古い扱い
-		if a.CompletedAt != nil || b.CompletedAt != nil {
-			if a.CompletedAt == nil {
-				return false
-			}
-			if b.CompletedAt == nil {
-				return true
-			}
-			if a.CompletedAt.After(*b.CompletedAt) {
-				return true
-			}
-			if b.CompletedAt.After(*a.CompletedAt) {
-				return false
-			}
-		}
-		// UpdatedAt
-		if a.UpdatedAt.After(b.UpdatedAt) {
-			return true
-		}
-		if b.UpdatedAt.After(a.UpdatedAt) {
-			return false
-		}
-		// CheckSuiteID 数値比較（失敗時は同等扱い）
-		var ai, bi int64
-		if a.CheckSuiteID != "" {
-			if v, err := strconv.ParseInt(a.CheckSuiteID, 10, 64); err == nil {
-				ai = v
-			}
-		}
-		if b.CheckSuiteID != "" {
-			if v, err := strconv.ParseInt(b.CheckSuiteID, 10, 64); err == nil {
-				bi = v
-			}
-		}
-		return ai > bi
-	}
 
-	for i := range statuses {
-		s := &statuses[i]
-		if s.Name != "aggregated" {
-			continue
+	if pr == nil || pr.Head == nil || pr.Head.SHA == nil {
+		if a.logger != nil {
+			a.logger.Warn("PR head SHA not available",
+				zap.String("owner", actualOwner),
+				zap.String("repo", actualRepo),
+				zap.Int("pr_number", actualPRNumber),
+			)
 		}
-		if latest == nil || isNewer(s, latest) {
-			latest = s
-		}
-	}
-
-	if latest == nil {
 		return services.CIStateUnknown, nil
 	}
 
-	// 最新 1 件のみから CIState を決定
-	if latest.Conclusion != nil {
-		switch *latest.Conclusion {
-		case "failure":
-			return services.CIStateFailed, nil
-		case "success":
-			return services.CIStateSuccess, nil
-		default:
-			return services.CIStatePending, nil
+	headSHA := *pr.Head.SHA
+
+	// Get check runs for the head SHA
+	checkRuns, err := a.githubClient.ListCheckRunsForRef(ctx, actualOwner, actualRepo, headSHA)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Warn("Failed to get check runs for ref",
+				zap.Error(err),
+				zap.String("owner", actualOwner),
+				zap.String("repo", actualRepo),
+				zap.String("ref", headSHA),
+			)
 		}
+		return services.CIStateUnknown, err
 	}
-	// 結論未設定は進行中とみなす
-	return services.CIStatePending, nil
+
+	// Aggregate check runs using the existing service function
+	agg := services.AggregateFromRuns(checkRuns)
+
+	// Map aggregated result to CIState
+	switch agg.Aggregated {
+	case "success":
+		return services.CIStateSuccess, nil
+	case "failed":
+		return services.CIStateFailed, nil
+	case "pending":
+		return services.CIStatePending, nil
+	default:
+		return services.CIStateUnknown, nil
+	}
 }
 
 // alwaysApprovedChecker は本イベントで承認検知済みのため常に true を返すアダプタ
@@ -444,8 +448,13 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			}
 
 			// CIStatusProvider/CodexApprovalCheckerのアダプタを作成
-			ciRepo := repositories.NewCIStatusRepository()
-			ciProvider := &ciStatusProviderAdapter{repo: ciRepo, prID: pr.ID}
+			ciProvider := &ciStatusProviderAdapter{
+				githubClient: githubClient,
+				owner:        owner,
+				repo:         repo,
+				prNumber:     pr.Number,
+				logger:       logger,
+			}
 			conflictDetector := services.NewMergeConflictDetector(githubClient, logger)
 			checker := services.NewMergeConditionChecker(ciProvider, &alwaysApprovedChecker{}, conflictDetector, logger)
 
