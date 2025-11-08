@@ -482,7 +482,7 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		CursorAllowWrite:      false,
 	}
 
-	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	jobName := s.kubernetesClient.GeneratePlanCreationJobName(agentRun.ID, reviewFeedback.ID)
 
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
 	if err != nil {

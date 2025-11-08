@@ -213,6 +213,13 @@ func (c *KubernetesClient) GenerateJobName(agentRunID int) string {
 	return fmt.Sprintf("agent-runner-%d", agentRunID)
 }
 
+// GeneratePlanCreationJobName generates a unique job name for plan creation
+// by including review_feedback_id to ensure uniqueness when the same agentRunID
+// is used for multiple plan creation attempts
+func (c *KubernetesClient) GeneratePlanCreationJobName(agentRunID int, reviewFeedbackID int) string {
+	return fmt.Sprintf("agent-runner-%d-plan-%d", agentRunID, reviewFeedbackID)
+}
+
 // buildEnvVars builds environment variables for the Job container
 func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{
