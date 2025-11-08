@@ -218,6 +218,14 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		return nil, fmt.Errorf("prompt must not be empty")
 	}
 
+	if s.kubernetesClient == nil {
+		s.logger.Error("kubernetesClient must not be nil",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("kubernetesClient is not initialized")
+	}
+
 	// Get required environment variables
 	agentRunnerImage, err := getRequiredEnv("AGENT_RUNNER_IMAGE", s.logger)
 	if err != nil {
@@ -309,6 +317,14 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 			zap.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("prompt must not be empty")
+	}
+
+	if s.kubernetesClient == nil {
+		s.logger.Error("kubernetesClient must not be nil",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("kubernetesClient is not initialized")
 	}
 
 	// Get required environment variables
@@ -424,6 +440,14 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 			zap.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("issue must not be nil")
+	}
+
+	if s.kubernetesClient == nil {
+		s.logger.Error("kubernetesClient must not be nil",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("kubernetesClient is not initialized")
 	}
 
 	// Extract content for plan creation
@@ -566,6 +590,14 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 			zap.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("planContent must not be empty")
+	}
+
+	if s.kubernetesClient == nil {
+		s.logger.Error("kubernetesClient must not be nil",
+			zap.Int("agent_run_id", agentRun.ID),
+			zap.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("kubernetesClient is not initialized")
 	}
 
 	agentRunnerImage, err := getRequiredEnv("AGENT_RUNNER_IMAGE", s.logger)
