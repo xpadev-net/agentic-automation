@@ -2,27 +2,26 @@ version: "1.0"
 
 hooks:
   pre: []
-  post:
-    - name: "deps"
-      command: "go mod download && go mod tidy"
-      description: "Download and tidy Go module dependencies"
-      timeout: "3m"
-      required: true
-    - name: "fmt"
-      command: "test -z \"$(gofmt -l .)\""
-      description: "Check Go code formatting"
-      timeout: "1m"
-      required: true
-    - name: "test"
-      command: "go test ./... -v"
-      description: "Run all tests"
-      timeout: "10m"
-      required: true
-    - name: "build"
-      command: "go build ./..."
-      description: "Compile all packages"
-      timeout: "5m"
-      required: true
+  post: []
 
-validation: []
-
+validation:
+  - name: "deps"
+    command: "go mod download && go mod tidy"
+    description: "Download and tidy Go module dependencies"
+    timeout: "3m"
+    required: true
+  - name: "fmt"
+    command: "test -z \"$(gofmt -l .)\""
+    description: "Check Go code formatting"
+    timeout: "1m"
+    required: true
+  - name: "test"
+    command: "go test ./... -v"
+    description: "Run all tests"
+    timeout: "10m"
+    required: true
+  - name: "build"
+    command: "go build ./..."
+    description: "Compile all packages"
+    timeout: "5m"
+    required: true
