@@ -698,6 +698,48 @@ func HandleAgentReport(c *gin.Context) {
 	}
 
 	// ------------------------------------------------------------------
+	// Delete Kubernetes Job on success (Issue #222)
+	// Delete the corresponding Job when status is "succeeded"
+	// This must be done BEFORE PR notification to ensure cleanup even if
+	// PR notification fails (e.g., due to GitHub client initialization errors)
+	// ------------------------------------------------------------------
+	if req.Status == "succeeded" {
+		kubernetesClient, err := kubernetesClientFactory(logger)
+		if err != nil {
+			logger.Warn("Failed to initialize Kubernetes client for job deletion",
+				zap.Error(err),
+				zap.Int("agent_run_id", agentRunID),
+			)
+		} else {
+			var jobName string
+			// Generate job name based on execution mode
+			if agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
+				// Plan creation jobs use a different naming scheme
+				jobName = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
+			} else {
+				// Normal jobs and plan execution jobs use standard naming
+				jobName = kubernetesClient.GenerateJobName(agentRunID)
+			}
+
+			// Delete job (non-blocking - log errors but don't fail the response)
+			if err := kubernetesClient.DeleteJob(c.Request.Context(), jobName); err != nil {
+				logger.Warn("Failed to delete Kubernetes Job after successful execution",
+					zap.Error(err),
+					zap.Int("agent_run_id", agentRunID),
+					zap.String("job_name", jobName),
+					zap.String("execution_mode", agentRun.ExecutionMode),
+				)
+			} else {
+				logger.Info("Successfully deleted Kubernetes Job after successful execution",
+					zap.Int("agent_run_id", agentRunID),
+					zap.String("job_name", jobName),
+					zap.String("execution_mode", agentRun.ExecutionMode),
+				)
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// PR created notification (US2 T083)
 	// Post status comments to both Issue and PR upon success
 	// ------------------------------------------------------------------
@@ -1195,6 +1237,58 @@ func handlePlanCreated(
 		}
 		reviewFeedbackUpdated = true
 	}
+
+	// Initialize Kubernetes client early for job cleanup (Issue #222)
+	// This ensures cleanup happens even if early return occurs due to new reviews
+	kubernetesClient, err := kubernetesClientFactory(logger)
+	if err != nil {
+		logFields := []zap.Field{
+			zap.Error(err),
+			zap.Int("agent_run_id", agentRunID),
+		}
+		if reviewFeedback != nil {
+			logFields = append(logFields, zap.Int("review_feedback_id", reviewFeedback.ID))
+		}
+		logger.Warn("Failed to initialize Kubernetes client for job cleanup", logFields...)
+		// Continue processing even if client initialization fails
+		// defer will skip deletion if kubernetesClient is nil
+	}
+
+	// Defer job deletion to ensure cleanup happens regardless of return path (Issue #222)
+	// This handles early returns when new reviews invalidate the plan
+	defer func() {
+		if kubernetesClient != nil && agentRunID > 0 {
+			var planCreationJobName string
+			if reviewFeedback != nil {
+				// Review-triggered: use GeneratePlanCreationJobName
+				planCreationJobName = kubernetesClient.GeneratePlanCreationJobName(agentRunID, reviewFeedback.ID)
+			} else {
+				// Issue-triggered: use GenerateJobName
+				planCreationJobName = kubernetesClient.GenerateJobName(agentRunID)
+			}
+
+			if err := kubernetesClient.DeleteJob(ctx, planCreationJobName); err != nil {
+				logFields := []zap.Field{
+					zap.Error(err),
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.String("job_name", planCreationJobName),
+				}
+				if reviewFeedback != nil {
+					logFields = append(logFields, zap.Int("review_feedback_id", reviewFeedback.ID))
+				}
+				logger.Warn("Failed to delete plan creation Kubernetes Job", logFields...)
+			} else {
+				logFields := []zap.Field{
+					zap.Int("plan_agent_run_id", agentRunID),
+					zap.String("job_name", planCreationJobName),
+				}
+				if reviewFeedback != nil {
+					logFields = append(logFields, zap.Int("review_feedback_id", reviewFeedback.ID))
+				}
+				logger.Info("Successfully deleted plan creation Kubernetes Job", logFields...)
+			}
+		}
+	}()
 
 	issueRepo := repositories.NewIssueRepository()
 	issue, err := issueRepo.FindByID(agentRun.IssueID)
@@ -1901,7 +1995,7 @@ func handlePlanCreated(
 		return
 	}
 
-	kubernetesClient, err := kubernetesClientFactory(logger)
+	kubernetesClient, err = kubernetesClientFactory(logger)
 	if err != nil {
 		logger.Error("Failed to initialize Kubernetes client for plan execution",
 			zap.Error(err),
@@ -1914,6 +2008,8 @@ func handlePlanCreated(
 				zap.Int("execution_agent_run_id", executionRun.ID),
 			)
 		}
+		restoreReviewAndAgent()
+		persistRollback()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "KUBERNETES_CLIENT_ERROR",
 			"message": "Failed to initialize Kubernetes client",
@@ -1968,6 +2064,9 @@ func handlePlanCreated(
 		zap.Int("execution_agent_run_id", executionRun.ID),
 		zap.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 	)
+
+	// Note: Plan creation job deletion is handled by defer function defined earlier
+	// This ensures cleanup happens even if early return occurs due to new reviews
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":      "Plan created and plan execution job started",
