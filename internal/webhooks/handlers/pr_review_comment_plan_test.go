@@ -23,6 +23,32 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// mockCodexReviewService is a mock implementation of CodexReviewService for testing
+type mockCodexReviewService struct {
+	requestReviewCalled bool
+	requestReviewArgs   struct {
+		ctx            context.Context
+		owner          string
+		repo           string
+		prNumber       int
+		prID           int
+		idempotencyKey string
+	}
+	requestReviewResult *models.ReviewFeedback
+	requestReviewErr    error
+}
+
+func (m *mockCodexReviewService) RequestReview(ctx context.Context, owner, repo string, prNumber, prID int, idempotencyKey string) (*models.ReviewFeedback, error) {
+	m.requestReviewCalled = true
+	m.requestReviewArgs.ctx = ctx
+	m.requestReviewArgs.owner = owner
+	m.requestReviewArgs.repo = repo
+	m.requestReviewArgs.prNumber = prNumber
+	m.requestReviewArgs.prID = prID
+	m.requestReviewArgs.idempotencyKey = idempotencyKey
+	return m.requestReviewResult, m.requestReviewErr
+}
+
 type recordingPlanJobService struct {
 	called             bool
 	lastAgentRunID     int

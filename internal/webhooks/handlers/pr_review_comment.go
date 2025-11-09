@@ -50,9 +50,9 @@ type PullRequestReviewCommentRepository struct {
 }
 
 // CodexReviewService interface for requesting Codex reviews
-// This interface will be implemented in T091
+// This interface matches the implementation in services.CodexReviewService
 type CodexReviewService interface {
-	RequestReview(ctx context.Context, owner, repo string, prNumber int) error
+	RequestReview(ctx context.Context, owner, repo string, prNumber, prID int, idempotencyKey string) (*models.ReviewFeedback, error)
 }
 
 // PullRequestReviewCommentDeps represents injectable dependencies for HandlePullRequestReviewComment
@@ -319,15 +319,13 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	}
 
 	// CodexReviewService 初期化（deps が nil の場合）
-	// T091 で実装予定のため、実装が存在する場合のみ初期化
 	codexReviewService := deps.CodexReviewService
 	if codexReviewService == nil {
-		// Note: services.NewCodexReviewService will be implemented in T091
-		// For now, we check if it exists and initialize if available
-		// If not implemented yet, codexReviewService will remain nil
-		// and Step 9 will handle it gracefully
-		// TODO: Uncomment when T091 is implemented
-		// codexReviewService = services.NewCodexReviewService(githubClient, logger)
+		reviewFeedbackRepo := deps.ReviewFeedbackRepository
+		if reviewFeedbackRepo == nil {
+			reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
+		}
+		codexReviewService = services.NewCodexReviewService(githubClient, reviewFeedbackRepo, logger)
 	}
 
 	hasPermission, err := authorizationService.CheckPermission(ctx, owner, repo, payload.Comment.User.Login)
@@ -415,7 +413,10 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		return
 	}
 
-	err = codexReviewService.RequestReview(ctx, owner, repo, payload.PullRequest.Number)
+	// Generate idempotency key for this review request
+	idempotencyKey := fmt.Sprintf("codex_review_request:pr_review_comment:%d:%d", pr.ID, payload.Comment.ID)
+
+	_, err = codexReviewService.RequestReview(ctx, owner, repo, payload.PullRequest.Number, pr.ID, idempotencyKey)
 	if err != nil {
 		logger.Error("Failed to request Codex review",
 			zap.Error(err),
@@ -431,40 +432,6 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		zap.String("delivery_id", deliveryID),
 		zap.Int("pr_number", payload.PullRequest.Number),
 		zap.String("repo", payload.Repository.FullName),
-	)
-
-	// Step 10: ReviewFeedback レコード作成
-	reviewFeedbackRepo := deps.ReviewFeedbackRepository
-	if reviewFeedbackRepo == nil {
-		reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
-	}
-
-	// Convert comment ID to int64
-	commentID := int64(payload.Comment.ID)
-	feedback := &models.ReviewFeedback{
-		PRID:             pr.ID,
-		Source:           "Codex",
-		Status:           "requested",
-		ApprovalDetected: false,
-		GitHubCommentID:  &commentID,
-	}
-
-	err = reviewFeedbackRepo.Create(feedback)
-	if err != nil {
-		logger.Error("Failed to create ReviewFeedback record",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_id", pr.ID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-		)
-		c.Error(err)
-		return
-	}
-
-	logger.Info("ReviewFeedback record created",
-		zap.Int("feedback_id", feedback.ID),
-		zap.Int("pr_id", pr.ID),
-		zap.String("delivery_id", deliveryID),
 	)
 
 	// Step 11: 成功レスポンス返却
