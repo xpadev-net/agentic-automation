@@ -2,7 +2,6 @@ package hooks
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -15,18 +14,14 @@ import (
 )
 
 const (
-	// maxOutputBufferSize is the maximum size in bytes for output buffers.
-	// This prevents excessive memory consumption when commands produce large amounts of output.
-	// When exceeded, only the last portion of output is kept.
-	maxOutputBufferSize = 10 * 1024 * 1024 // 10MB
-
 	// maxScannerBufferSize is the maximum buffer size for bufio.Scanner.
 	// This handles very long lines that might exceed the default 64KB buffer.
 	maxScannerBufferSize = 1024 * 1024 // 1MB
 
-	// maxOutputLines is the maximum number of lines to keep when buffer size is exceeded.
-	// This ensures we keep the most recent output which is usually the most relevant.
-	maxOutputLines = 1000
+	// maxErrorOutputLines is the maximum number of lines to keep for error reporting.
+	// Since output is already streamed to stdout/stderr, we only need to keep
+	// the last few lines for error context. This prevents excessive memory consumption.
+	maxErrorOutputLines = 100
 )
 
 // runCommand executes a single command with timeout and error handling.
@@ -79,10 +74,37 @@ func runCommand(cmd config.Command, workDir string) error {
 		}
 	}
 
-	// Buffer to store all output with size limit to prevent excessive memory consumption
-	var outputBuf bytes.Buffer
-	var outputMu sync.Mutex
-	var outputTruncated bool // Track if output was truncated due to size limit
+	// Ring buffer to store only the last N lines for error reporting.
+	// Since output is already streamed to stdout/stderr, we don't need to keep all output.
+	// This prevents excessive memory consumption when commands produce large amounts of output.
+	type lineBuffer struct {
+		lines []string
+		mu    sync.Mutex
+	}
+
+	outputLines := &lineBuffer{lines: make([]string, 0, maxErrorOutputLines)}
+	stderrLines := &lineBuffer{lines: make([]string, 0, maxErrorOutputLines)}
+
+	// Helper function to append line to ring buffer (keeps only last N lines)
+	appendToRingBuffer := func(buf *lineBuffer, line string) {
+		buf.mu.Lock()
+		defer buf.mu.Unlock()
+		buf.lines = append(buf.lines, line)
+		if len(buf.lines) > maxErrorOutputLines {
+			// Remove oldest line (ring buffer behavior)
+			buf.lines = buf.lines[1:]
+		}
+	}
+
+	// Helper function to get all lines from ring buffer as string
+	getBufferString := func(buf *lineBuffer) string {
+		buf.mu.Lock()
+		defer buf.mu.Unlock()
+		if len(buf.lines) == 0 {
+			return ""
+		}
+		return strings.Join(buf.lines, "\n") + "\n"
+	}
 
 	// Prefix for output lines
 	prefix := fmt.Sprintf("[hook: %s] ", cmd.Name)
@@ -90,31 +112,6 @@ func runCommand(cmd config.Command, workDir string) error {
 	// Channels for goroutine errors
 	stdoutErrCh := make(chan error, 1)
 	stderrErrCh := make(chan error, 1)
-
-	// Helper function to append line to buffer with size limit
-	appendToBuffer := func(buf *bytes.Buffer, line string, truncated *bool) {
-		lineWithNewline := line + "\n"
-		lineSize := len(lineWithNewline)
-
-		// If adding this line would exceed the limit, truncate old content
-		if buf.Len()+lineSize > maxOutputBufferSize {
-			*truncated = true
-			// Keep only the last maxOutputLines lines
-			content := buf.String()
-			lines := strings.Split(content, "\n")
-			if len(lines) > maxOutputLines {
-				// Keep the last maxOutputLines lines
-				lines = lines[len(lines)-maxOutputLines:]
-				buf.Reset()
-				buf.WriteString(strings.Join(lines, "\n"))
-				if buf.Len() > 0 && !strings.HasSuffix(buf.String(), "\n") {
-					buf.WriteString("\n")
-				}
-			}
-		}
-
-		buf.WriteString(lineWithNewline)
-	}
 
 	// Goroutine to read and stream stdout
 	go func() {
@@ -127,10 +124,8 @@ func runCommand(cmd config.Command, workDir string) error {
 			line := scanner.Text()
 			lineWithPrefix := prefix + line + "\n"
 
-			// Append to output buffer with size limit
-			outputMu.Lock()
-			appendToBuffer(&outputBuf, line, &outputTruncated)
-			outputMu.Unlock()
+			// Append to ring buffer (keeps only last N lines for error reporting)
+			appendToRingBuffer(outputLines, line)
 
 			// Stream to os.Stdout in real-time
 			fmt.Fprint(os.Stdout, lineWithPrefix)
@@ -144,8 +139,6 @@ func runCommand(cmd config.Command, workDir string) error {
 	}()
 
 	// Goroutine to read and stream stderr
-	stderrBuf := &bytes.Buffer{}
-	var stderrTruncated bool
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		// Increase buffer size to handle very long lines
@@ -156,8 +149,8 @@ func runCommand(cmd config.Command, workDir string) error {
 			line := scanner.Text()
 			lineWithPrefix := prefix + line + "\n"
 
-			// Append to stderr buffer with size limit
-			appendToBuffer(stderrBuf, line, &stderrTruncated)
+			// Append to ring buffer (keeps only last N lines for error reporting)
+			appendToRingBuffer(stderrLines, line)
 
 			// Stream to os.Stderr in real-time
 			fmt.Fprint(os.Stderr, lineWithPrefix)
@@ -200,7 +193,7 @@ func runCommand(cmd config.Command, workDir string) error {
 		// Kill the process to prevent deadlock from pipe filling up
 		killErr := killAndWait()
 
-		// Wait for stderr reading to complete before accessing stderrBuf
+		// Wait for stderr reading to complete before accessing stderrLines
 		// This prevents data race where stderr goroutine may still be writing
 		select {
 		case stderrErr := <-stderrErrCh:
@@ -211,23 +204,21 @@ func runCommand(cmd config.Command, workDir string) error {
 			// Continue anyway to avoid deadlock
 		}
 
-		// Get any output that was successfully read before the error
-		outputMu.Lock()
-		outputStr := outputBuf.String()
-		truncated := outputTruncated
-		outputMu.Unlock()
-
-		if stderrBuf.Len() > 0 {
-			outputStr += stderrBuf.String()
-		}
-		if stderrTruncated {
-			truncated = true
+		// Get last N lines from ring buffers for error reporting
+		outputStr := getBufferString(outputLines)
+		stderrStr := getBufferString(stderrLines)
+		if stderrStr != "" {
+			if outputStr != "" {
+				outputStr += stderrStr
+			} else {
+				outputStr = stderrStr
+			}
 		}
 
-		// Add truncation notice if output was truncated
-		if truncated {
-			outputStr = fmt.Sprintf("[Output truncated due to size limit (%d bytes). Showing last %d lines.]\n\n%s",
-				maxOutputBufferSize, maxOutputLines, outputStr)
+		// Add notice that only last N lines are shown (output is already streamed)
+		if outputStr != "" {
+			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Full output was streamed to stdout/stderr.]\n\n%s",
+				maxErrorOutputLines, outputStr)
 		}
 
 		if killErr != nil {
@@ -252,23 +243,21 @@ func runCommand(cmd config.Command, workDir string) error {
 		// Kill the process to prevent deadlock from pipe filling up
 		killErr := killAndWait()
 
-		// Get any output that was successfully read before the error
-		outputMu.Lock()
-		outputStr := outputBuf.String()
-		truncated := outputTruncated
-		outputMu.Unlock()
-
-		if stderrBuf.Len() > 0 {
-			outputStr += stderrBuf.String()
-		}
-		if stderrTruncated {
-			truncated = true
+		// Get last N lines from ring buffers for error reporting
+		outputStr := getBufferString(outputLines)
+		stderrStr := getBufferString(stderrLines)
+		if stderrStr != "" {
+			if outputStr != "" {
+				outputStr += stderrStr
+			} else {
+				outputStr = stderrStr
+			}
 		}
 
-		// Add truncation notice if output was truncated
-		if truncated {
-			outputStr = fmt.Sprintf("[Output truncated due to size limit (%d bytes). Showing last %d lines.]\n\n%s",
-				maxOutputBufferSize, maxOutputLines, outputStr)
+		// Add notice that only last N lines are shown (output is already streamed)
+		if outputStr != "" {
+			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Full output was streamed to stdout/stderr.]\n\n%s",
+				maxErrorOutputLines, outputStr)
 		}
 
 		if killErr != nil {
@@ -290,28 +279,24 @@ func runCommand(cmd config.Command, workDir string) error {
 	// Wait for command to complete
 	cmdErr := execCmd.Wait()
 
-	// Get final output
-	outputMu.Lock()
-	outputStr := outputBuf.String()
-	truncated := outputTruncated
-	outputMu.Unlock()
-
-	// Append stderr output if any
-	if stderrBuf.Len() > 0 {
-		outputStr += stderrBuf.String()
-	}
-	if stderrTruncated {
-		truncated = true
-	}
-
-	// Add truncation notice if output was truncated
-	if truncated {
-		outputStr = fmt.Sprintf("[Output truncated due to size limit (%d bytes). Showing last %d lines.]\n\n%s",
-			maxOutputBufferSize, maxOutputLines, outputStr)
-	}
-
-	// If command execution failed, return HookError with output
+	// If command execution failed, get last N lines from ring buffers for error reporting
 	if cmdErr != nil {
+		outputStr := getBufferString(outputLines)
+		stderrStr := getBufferString(stderrLines)
+		if stderrStr != "" {
+			if outputStr != "" {
+				outputStr += stderrStr
+			} else {
+				outputStr = stderrStr
+			}
+		}
+
+		// Add notice that only last N lines are shown (output is already streamed)
+		if outputStr != "" {
+			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Full output was streamed to stdout/stderr.]\n\n%s",
+				maxErrorOutputLines, outputStr)
+		}
+
 		return &HookError{
 			Name:    cmd.Name,
 			Command: cmd.Command,
