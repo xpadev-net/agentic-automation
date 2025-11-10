@@ -200,7 +200,7 @@ func BuildPlanCreationPrompt(reviewFeedback string) string {
 
 注意: タグの外側に説明文やその他の文章が含まれていても構いません。タグ内の内容が抽出されます。
 
-注意: このモードではファイルの変更は行いません。プランの作成のみを行ってください。`, reviewFeedback)
+注意: プランはファイルに書き出すのではなく、回答として直接出力してください。このモードではファイルの変更は行いません。プランの作成のみを行ってください。`, reviewFeedback)
 }
 
 // BuildPlanExecutionPrompt constructs the prompt for plan execution mode.
