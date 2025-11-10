@@ -81,21 +81,27 @@ func CloneRepo(token, repo, dest string) error {
 // CreateBranch creates a new git branch or checks out existing branch.
 // Behavior:
 //   - If existingBranchName is specified: Checks out the existing branch (for continuing work on existing PR)
-//   - If retryCount == 0: Creates new branch from master with "git checkout -b {branchName}"
+//     If the branch doesn't exist, creates it from baseBranch
+//   - If retryCount == 0: Creates new branch from baseBranch with "git checkout -b {branchName}"
 //   - If retryCount > 0: Checks out existing branch with "git checkout {branchName}"
 //     (or "git checkout -b {branchName} origin/{branchName}" if branch exists remotely but not locally)
+//     If the branch doesn't exist, creates it from baseBranch
 //
 // workDir: Working directory (must be a git repository)
 // branchName: Name of the branch to create or checkout
 // retryCount: Number of retries (0 = first attempt, >0 = retry)
 // existingBranchName: Optional existing branch name to checkout (if specified, this takes precedence)
-func CreateBranch(workDir, branchName string, retryCount int, existingBranchName string) error {
+// baseBranch: Base branch name to create from if branch doesn't exist (e.g., "master" or "main")
+func CreateBranch(workDir, branchName string, retryCount int, existingBranchName, baseBranch string) error {
 	// Validate inputs
 	if workDir == "" {
 		return fmt.Errorf("work directory is required")
 	}
 	if branchName == "" {
 		return fmt.Errorf("branch name is required")
+	}
+	if baseBranch == "" {
+		baseBranch = "master" // Default fallback
 	}
 
 	// Check if workDir is a git repository
@@ -105,61 +111,17 @@ func CreateBranch(workDir, branchName string, retryCount int, existingBranchName
 	}
 
 	// If existingBranchName is specified, checkout that branch (for continuing work on existing PR)
+	// If it doesn't exist, create it from baseBranch
 	if existingBranchName != "" {
-		return checkoutExistingBranch(workDir, existingBranchName)
+		return checkoutExistingBranch(workDir, existingBranchName, baseBranch)
 	}
 
 	if retryCount == 0 {
-		// First attempt: Create new branch from master
-		// First, ensure we're on master branch
-		checkoutMasterCmd := exec.Command("git", "checkout", "master")
-		checkoutMasterCmd.Dir = workDir
-		if err := checkoutMasterCmd.Run(); err != nil {
-			// If master doesn't exist, try main
-			checkoutMasterCmd = exec.Command("git", "checkout", "main")
-			checkoutMasterCmd.Dir = workDir
-			if err := checkoutMasterCmd.Run(); err != nil {
-				return fmt.Errorf("failed to checkout master/main branch: %w", err)
-			}
-		}
-
-		// Check if remote exists before fetching
-		checkRemoteCmd := exec.Command("git", "remote", "get-url", "origin")
-		checkRemoteCmd.Dir = workDir
-		hasRemote := checkRemoteCmd.Run() == nil
-
-		if hasRemote {
-			// Pull latest changes from master
-			fetchCmd := exec.Command("git", "fetch", "origin")
-			fetchCmd.Dir = workDir
-			if err := fetchCmd.Run(); err != nil {
-				return fmt.Errorf("failed to fetch from origin: %w", err)
-			}
-
-			// Reset to origin/master or origin/main
-			resetCmd := exec.Command("git", "reset", "--hard", "origin/master")
-			resetCmd.Dir = workDir
-			if err := resetCmd.Run(); err != nil {
-				resetCmd = exec.Command("git", "reset", "--hard", "origin/main")
-				resetCmd.Dir = workDir
-				if err := resetCmd.Run(); err != nil {
-					// If remote branch doesn't exist, continue with local branch
-					// This is acceptable for local repositories
-				}
-			}
-		}
-
-		// Create new branch
-		createBranchCmd := exec.Command("git", "checkout", "-b", branchName)
-		createBranchCmd.Dir = workDir
-		if err := createBranchCmd.Run(); err != nil {
-			return fmt.Errorf("failed to create branch %s: %w", branchName, err)
-		}
-
-		return nil
+		// First attempt: Create new branch from baseBranch
+		return createBranchFromBase(workDir, branchName, baseBranch)
 	}
 
-	// Retry: Checkout existing branch
+	// Retry: Checkout existing branch, or create from baseBranch if it doesn't exist
 	// First check if branch exists locally
 	checkLocalCmd := exec.Command("git", "show-ref", "--verify", "--quiet", fmt.Sprintf("refs/heads/%s", branchName))
 	checkLocalCmd.Dir = workDir
@@ -203,13 +165,14 @@ func CreateBranch(workDir, branchName string, retryCount int, existingBranchName
 		}
 	}
 
-	// Branch doesn't exist locally or remotely
-	return fmt.Errorf("branch %s does not exist locally or remotely", branchName)
+	// Branch doesn't exist locally or remotely, create it from baseBranch
+	return createBranchFromBase(workDir, branchName, baseBranch)
 }
 
 // checkoutExistingBranch checks out an existing branch (local or remote).
 // This is used when continuing work on an existing PR.
-func checkoutExistingBranch(workDir, branchName string) error {
+// If the branch doesn't exist, creates it from baseBranch.
+func checkoutExistingBranch(workDir, branchName, baseBranch string) error {
 	// First check if branch exists locally
 	checkLocalCmd := exec.Command("git", "show-ref", "--verify", "--quiet", fmt.Sprintf("refs/heads/%s", branchName))
 	checkLocalCmd.Dir = workDir
@@ -254,8 +217,59 @@ func checkoutExistingBranch(workDir, branchName string) error {
 		}
 	}
 
-	// Branch doesn't exist locally or remotely
-	return fmt.Errorf("branch %s does not exist locally or remotely", branchName)
+	// Branch doesn't exist locally or remotely, create it from baseBranch
+	return createBranchFromBase(workDir, branchName, baseBranch)
+}
+
+// createBranchFromBase creates a new branch from the specified base branch.
+func createBranchFromBase(workDir, branchName, baseBranch string) error {
+	// First, ensure we're on baseBranch
+	checkoutBaseCmd := exec.Command("git", "checkout", baseBranch)
+	checkoutBaseCmd.Dir = workDir
+	if err := checkoutBaseCmd.Run(); err != nil {
+		// If baseBranch doesn't exist, try alternative (master/main)
+		altBranch := "main"
+		if baseBranch == "main" {
+			altBranch = "master"
+		}
+		checkoutBaseCmd = exec.Command("git", "checkout", altBranch)
+		checkoutBaseCmd.Dir = workDir
+		if err := checkoutBaseCmd.Run(); err != nil {
+			return fmt.Errorf("failed to checkout base branch %s or %s: %w", baseBranch, altBranch, err)
+		}
+		baseBranch = altBranch
+	}
+
+	// Check if remote exists before fetching
+	checkRemoteCmd := exec.Command("git", "remote", "get-url", "origin")
+	checkRemoteCmd.Dir = workDir
+	hasRemote := checkRemoteCmd.Run() == nil
+
+	if hasRemote {
+		// Pull latest changes from baseBranch
+		fetchCmd := exec.Command("git", "fetch", "origin")
+		fetchCmd.Dir = workDir
+		if err := fetchCmd.Run(); err != nil {
+			return fmt.Errorf("failed to fetch from origin: %w", err)
+		}
+
+		// Reset to origin/baseBranch
+		resetCmd := exec.Command("git", "reset", "--hard", fmt.Sprintf("origin/%s", baseBranch))
+		resetCmd.Dir = workDir
+		if err := resetCmd.Run(); err != nil {
+			// If remote branch doesn't exist, continue with local branch
+			// This is acceptable for local repositories
+		}
+	}
+
+	// Create new branch
+	createBranchCmd := exec.Command("git", "checkout", "-b", branchName)
+	createBranchCmd.Dir = workDir
+	if err := createBranchCmd.Run(); err != nil {
+		return fmt.Errorf("failed to create branch %s: %w", err)
+	}
+
+	return nil
 }
 
 // HasChanges checks if there are any file changes in the workspace.
