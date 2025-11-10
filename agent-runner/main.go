@@ -282,21 +282,21 @@ type envConfig struct {
 }
 
 // commitChangesIfNeeded commits changes if there are any file changes.
-// Returns the commit SHA if a commit was made, empty string if no changes, and error if commit failed.
-func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string, reporterClient *reporter.Client, agentType string) (string, error) {
+// Returns the commit SHA, commit message if a commit was made, empty strings if no changes, and error if commit failed.
+func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string) (string, string, error) {
 	// Check for file changes
 	hasChanges, err := git.HasChanges(workDir)
 	if err != nil {
-		return "", fmt.Errorf("file change check failed: %w", err)
+		return "", "", fmt.Errorf("file change check failed: %w", err)
 	}
 	if !hasChanges {
 		fmt.Fprintf(os.Stderr, "No file changes to commit\n")
-		return "", nil
+		return "", "", nil
 	}
 
 	// Ensure git commit identity
 	if err := git.EnsureCommitIdentity(workDir, repo, issueID); err != nil {
-		return "", fmt.Errorf("git identity setup failed: %w", err)
+		return "", "", fmt.Errorf("git identity setup failed: %w", err)
 	}
 
 	// Build commit message
@@ -309,10 +309,10 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 	fmt.Fprintf(os.Stderr, "Committing changes: %s\n", commitMsg)
 	commitSHA, err := git.CommitChanges(workDir, commitMsg)
 	if err != nil {
-		return "", fmt.Errorf("git commit failed: %w", err)
+		return "", "", fmt.Errorf("git commit failed: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
-	return commitSHA, nil
+	return commitSHA, commitMsg, nil
 }
 
 // syncBranchWithBase synchronizes the working branch with the base branch.
@@ -582,6 +582,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	executor := agent.NewExecutor(envCfg.AgentType)
 	var agentOutput string
 	var commitSHA string
+	var lastCommitMsg string
 	var validationErr error
 
 	for retryCount := 0; retryCount <= maxValidationRetries; retryCount++ {
@@ -671,7 +672,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				fmt.Fprintf(os.Stderr, "Validation failed: %v\n", validationErr)
 				// Commit changes as checkpoint before retry
 				checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (validation retry checkpoint #%d)", issueID, retryCount)
-				checkpointSHA, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, reporterClient, envCfg.AgentType)
+				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
 				if commitErr != nil {
 					reportErr := reporterClient.ReportFailure(
 						fmt.Sprintf("Failed to commit checkpoint: %v", commitErr),
@@ -704,7 +705,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		if retryCount > 0 {
 			commitMsgPrefix = fmt.Sprintf("feat: implement issue #%d (validation retry #%d)", issueID, retryCount)
 		}
-		commitSHA, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix, reporterClient, envCfg.AgentType)
+		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix)
 		if err != nil {
 			reportErr := reporterClient.ReportFailure(
 				fmt.Sprintf("Git commit failed: %v", err),
@@ -785,7 +786,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 					// Commit changes after retry
 					retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
-					retryCommitSHA, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg, reporterClient, envCfg.AgentType)
+					retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg)
 					if commitErr != nil {
 						reportErr := reporterClient.ReportFailure(
 							fmt.Sprintf("Failed to commit after post-commit sync retry: %v", commitErr),
@@ -800,6 +801,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 					if retryCommitSHA != "" {
 						fmt.Fprintf(os.Stderr, "Committed changes after post-commit sync retry (SHA: %s)\n", retryCommitSHA)
 						commitSHA = retryCommitSHA
+						lastCommitMsg = retryCommitMsgValue
 					}
 				}
 
@@ -809,7 +811,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 					fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
 					// Commit changes as checkpoint before retry
 					checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
-					checkpointSHA, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, reporterClient, envCfg.AgentType)
+					checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
 					if commitErr != nil {
 						reportErr := reporterClient.ReportFailure(
 							fmt.Sprintf("Failed to commit checkpoint after post-commit sync: %v", commitErr),
@@ -877,7 +879,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	var prTitle, prBody string
 	if envCfg.AgentType == "cursor-agent" {
 		fmt.Fprintf(os.Stderr, "Generating PR title and body\n")
-		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsg, envCfg.AgentType, envCfg.CursorModel, baseBranch)
+		// Use lastCommitMsg if available, otherwise use default commit message
+		commitMsgForPR := lastCommitMsg
+		if commitMsgForPR == "" {
+			commitMsgForPR = fmt.Sprintf("feat: implement issue #%d", issueID)
+		}
+		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsgForPR, envCfg.AgentType, envCfg.CursorModel, baseBranch)
 		if err != nil {
 			// Log warning but continue with default title/body
 			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
