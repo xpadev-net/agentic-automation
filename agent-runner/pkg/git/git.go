@@ -266,7 +266,7 @@ func createBranchFromBase(workDir, branchName, baseBranch string) error {
 	createBranchCmd := exec.Command("git", "checkout", "-b", branchName)
 	createBranchCmd.Dir = workDir
 	if err := createBranchCmd.Run(); err != nil {
-		return fmt.Errorf("failed to create branch %s: %w", err)
+		return fmt.Errorf("failed to create branch %s: %w", branchName, err)
 	}
 
 	return nil
