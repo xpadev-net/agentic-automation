@@ -212,14 +212,34 @@ func BuildPlanCreationPrompt(reviewFeedback string) string {
 }
 
 // BuildPlanExecutionPrompt constructs the prompt for plan execution mode.
-func BuildPlanExecutionPrompt(originalPrompt, planContent string) string {
-	return fmt.Sprintf(`以下のプランに従って実装を行ってください。
+func BuildPlanExecutionPrompt(originalPrompt, planContent string, validationError ...string) string {
+	var result strings.Builder
+	result.WriteString(`以下のプランに従って実装を行ってください。
 
 元のタスク:
-%s
+`)
+	result.WriteString(originalPrompt)
+	result.WriteString(`
 
 実行すべきプラン:
-%s
+`)
+	result.WriteString(planContent)
 
-プランに従って実装を完了してください。`, originalPrompt, planContent)
+	// Validation errors
+	if len(validationError) > 0 && validationError[0] != "" {
+		result.WriteString(`
+
+Validation failures:
+`)
+		result.WriteString(validationError[0])
+		result.WriteString(`
+
+上記のvalidationエラーを修正し、プランに従って実装を完了してください。`)
+	} else {
+		result.WriteString(`
+
+プランに従って実装を完了してください。`)
+	}
+
+	return result.String()
 }

@@ -19,8 +19,8 @@ type Config struct {
 }
 
 // BuildPrompt builds the full prompt for the agent.
-// It combines the original prompt with previous attempts and CI logs.
-func BuildPrompt(prompt, previousAttempts, ciLogs string) string {
+// It combines the original prompt with previous attempts, CI logs, and validation errors.
+func BuildPrompt(prompt, previousAttempts, ciLogs string, validationError ...string) string {
 	var result strings.Builder
 
 	// Original prompt
@@ -44,6 +44,13 @@ func BuildPrompt(prompt, previousAttempts, ciLogs string) string {
 	if ciLogs != "" {
 		result.WriteString("\nCI failures:\n")
 		result.WriteString(ciLogs)
+	}
+
+	// Validation errors
+	if len(validationError) > 0 && validationError[0] != "" {
+		result.WriteString("\n\nValidation failures:\n")
+		result.WriteString(validationError[0])
+		result.WriteString("\n\nPlease fix the validation errors above and ensure all validations pass.")
 	}
 
 	return result.String()
