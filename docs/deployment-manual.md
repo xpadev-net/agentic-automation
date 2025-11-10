@@ -1313,6 +1313,11 @@ env:
 
 **注**: Operator API URL は、`KUBERNETES_NAMESPACE`、`OPERATOR_SERVICE_NAME`、`OPERATOR_SERVICE_PORT` から自動構築されます：`http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}`
 
+**ブランチ同期機能について**:
+- コミット後（Post-Commit Sync）に、作業ブランチがデフォルトブランチから遅れていないかを自動検知・同期します
+- 遅れている場合は自動的にマージを実行し、コンフリクトが発生した場合は AI エージェント（cursor-agent）で自動解消します
+- マージ/解決コミットは自動的に push されます
+
 ### B. Makefile コマンド一覧
 
 | コマンド | 説明 |

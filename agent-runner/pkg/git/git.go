@@ -698,3 +698,435 @@ func PostPRComment(token, repo string, prNumber int, comment string) error {
 
 	return nil
 }
+
+// IsBehind checks if headRef is behind baseRef by comparing their merge base.
+// It fetches from origin first to ensure we have the latest remote state.
+// Returns true if headRef is behind baseRef, false if up-to-date or ahead.
+func IsBehind(workDir, baseRef, headRef string) (bool, error) {
+	// Validate inputs
+	if workDir == "" {
+		return false, fmt.Errorf("work directory is required")
+	}
+	if baseRef == "" {
+		return false, fmt.Errorf("base reference is required")
+	}
+	if headRef == "" {
+		return false, fmt.Errorf("head reference is required")
+	}
+
+	// Fetch latest changes from origin
+	fetchCmd := exec.Command("git", "fetch", "origin")
+	fetchCmd.Dir = workDir
+	if err := fetchCmd.Run(); err != nil {
+		return false, fmt.Errorf("failed to fetch from origin: %w", err)
+	}
+
+	// Get merge base (common ancestor)
+	mergeBaseCmd := exec.Command("git", "merge-base", baseRef, headRef)
+	mergeBaseCmd.Dir = workDir
+	mergeBaseOutput, err := mergeBaseCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("failed to get merge base: %w", err)
+	}
+	mergeBase := strings.TrimSpace(string(mergeBaseOutput))
+
+	// Check if headRef is at merge base (meaning it's behind or equal)
+	// If headRef is ahead, merge base will be different from headRef
+	revParseCmd := exec.Command("git", "rev-parse", headRef)
+	revParseCmd.Dir = workDir
+	headOutput, err := revParseCmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("failed to get head commit: %w", err)
+	}
+	headSHA := strings.TrimSpace(string(headOutput))
+
+	// If merge base equals head, then head is behind or equal to base
+	if mergeBase == headSHA {
+		// Check if base is ahead of head
+		revListCmd := exec.Command("git", "rev-list", "--count", fmt.Sprintf("%s..%s", headRef, baseRef))
+		revListCmd.Dir = workDir
+		countOutput, err := revListCmd.Output()
+		if err != nil {
+			// If rev-list fails, assume not behind
+			return false, nil
+		}
+		count := strings.TrimSpace(string(countOutput))
+		if count == "0" {
+			return false, nil // Equal, not behind
+		}
+		return true, nil // Behind
+	}
+
+	// headRef is ahead or diverged, check if base has commits not in head
+	revListCmd := exec.Command("git", "rev-list", "--count", fmt.Sprintf("%s..%s", headRef, baseRef))
+	revListCmd.Dir = workDir
+	countOutput, err := revListCmd.Output()
+	if err != nil {
+		// If rev-list fails, assume not behind
+		return false, nil
+	}
+	count := strings.TrimSpace(string(countOutput))
+	return count != "0", nil
+}
+
+// MergeBase returns the merge base (common ancestor) commit SHA between baseRef and headRef.
+func MergeBase(workDir, baseRef, headRef string) (string, error) {
+	// Validate inputs
+	if workDir == "" {
+		return "", fmt.Errorf("work directory is required")
+	}
+	if baseRef == "" {
+		return "", fmt.Errorf("base reference is required")
+	}
+	if headRef == "" {
+		return "", fmt.Errorf("head reference is required")
+	}
+
+	mergeBaseCmd := exec.Command("git", "merge-base", baseRef, headRef)
+	mergeBaseCmd.Dir = workDir
+	output, err := mergeBaseCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get merge base: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// MergeBranch merges the specified branch (fromRef) into the current branch.
+// It performs a merge operation and returns an error only if the merge command fails.
+// Conflicts are not treated as errors here; they should be detected using ListConflicts.
+func MergeBranch(workDir, fromRef string) error {
+	// Validate inputs
+	if workDir == "" {
+		return fmt.Errorf("work directory is required")
+	}
+	if fromRef == "" {
+		return fmt.Errorf("from reference is required")
+	}
+
+	// Ensure fromRef is in the format origin/branchName if it's a remote branch
+	mergeRef := fromRef
+	if !strings.HasPrefix(fromRef, "origin/") && !strings.HasPrefix(fromRef, "refs/") {
+		// Assume it's a branch name, try origin/branchName first
+		mergeRef = fmt.Sprintf("origin/%s", fromRef)
+	}
+
+	// Execute git merge (fast-forward will happen automatically if possible)
+	mergeCmd := exec.Command("git", "merge", mergeRef, "--no-edit")
+	mergeCmd.Dir = workDir
+	output, err := mergeCmd.CombinedOutput()
+	if err != nil {
+		// Check if it's a merge conflict (exit code 1 can mean conflicts OR other errors)
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
+			// Verify that a merge actually started by checking for MERGE_HEAD
+			// MERGE_HEAD is only created when a merge conflict occurs
+			// If MERGE_HEAD doesn't exist, the merge failed for other reasons
+			// (e.g., working tree has unstaged changes, merge already in progress)
+			mergeHeadPath := fmt.Sprintf("%s/.git/MERGE_HEAD", workDir)
+			if _, statErr := os.Stat(mergeHeadPath); statErr == nil {
+				// MERGE_HEAD exists, this is a real merge conflict
+				// Return nil here, conflicts will be detected by ListConflicts
+				return nil
+			}
+			// MERGE_HEAD doesn't exist, merge failed for other reasons
+			// Propagate the error to the caller
+			return fmt.Errorf("git merge failed (not a conflict): %w, output: %s", err, string(output))
+		}
+		// Other exit codes are errors
+		return fmt.Errorf("git merge failed: %w, output: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// ListConflicts returns a list of files with merge conflicts.
+// It uses git diff --name-only --diff-filter=U to find unmerged files.
+func ListConflicts(workDir string) ([]string, error) {
+	// Validate inputs
+	if workDir == "" {
+		return nil, fmt.Errorf("work directory is required")
+	}
+
+	// Check for merge in progress
+	mergeHeadPath := fmt.Sprintf("%s/.git/MERGE_HEAD", workDir)
+	if _, err := os.Stat(mergeHeadPath); os.IsNotExist(err) {
+		// Not in merge state, no conflicts
+		return []string{}, nil
+	}
+
+	// Get list of unmerged files
+	// git diff returns exit code 1 when there are differences (unmerged files),
+	// and exit code 0 only when there are no differences
+	// We need to parse the output even when exit code is 1
+	diffCmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
+	diffCmd.Dir = workDir
+	output, err := diffCmd.CombinedOutput()
+	if err != nil {
+		// Exit code 1 means there are differences (conflicts), which is expected
+		// Exit code 0 means no differences (no conflicts)
+		// We need to parse the output in both cases
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
+			// Exit code 1: there are conflicts, parse the output
+			trimmed := strings.TrimSpace(string(output))
+			if trimmed == "" {
+				// No output means no conflicts (shouldn't happen with exit code 1, but handle it)
+				return []string{}, nil
+			}
+			lines := strings.Split(trimmed, "\n")
+			var conflicts []string
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					conflicts = append(conflicts, strings.TrimSpace(line))
+				}
+			}
+			return conflicts, nil
+		}
+		// Other exit codes are errors
+		return nil, fmt.Errorf("failed to list conflicts: %w", err)
+	}
+
+	// Exit code 0: no differences (no conflicts)
+	// Parse output to be safe, but should be empty
+	trimmed := strings.TrimSpace(string(output))
+	if trimmed == "" {
+		return []string{}, nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	var conflicts []string
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			conflicts = append(conflicts, strings.TrimSpace(line))
+		}
+	}
+
+	return conflicts, nil
+}
+
+// AbortMerge aborts an ongoing merge operation.
+// It runs `git merge --abort` to clean up the merge state.
+// If not in a merge state, it returns nil (idempotent).
+func AbortMerge(workDir string) error {
+	// Validate inputs
+	if workDir == "" {
+		return fmt.Errorf("work directory is required")
+	}
+
+	// Check if we're in a merge state
+	mergeHeadPath := fmt.Sprintf("%s/.git/MERGE_HEAD", workDir)
+	if _, err := os.Stat(mergeHeadPath); os.IsNotExist(err) {
+		// Not in merge state, nothing to abort
+		return nil
+	}
+
+	// Execute git merge --abort
+	abortCmd := exec.Command("git", "merge", "--abort")
+	abortCmd.Dir = workDir
+	output, err := abortCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git merge --abort failed: %w, output: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// HasConflictMarkers checks if the specified files contain conflict markers (<<<<<<<, =======, >>>>>>>).
+// It reads the file contents and checks for the presence of conflict markers.
+// Returns a list of files that still contain conflict markers.
+func HasConflictMarkers(workDir string, files []string) ([]string, error) {
+	// Validate inputs
+	if workDir == "" {
+		return nil, fmt.Errorf("work directory is required")
+	}
+	if len(files) == 0 {
+		return []string{}, nil
+	}
+
+	var filesWithMarkers []string
+
+	for _, file := range files {
+		filePath := fmt.Sprintf("%s/%s", workDir, file)
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			// If file doesn't exist or can't be read, skip it
+			// This can happen if the file was deleted during conflict resolution
+			continue
+		}
+
+		// Check for conflict markers
+		contentStr := string(content)
+		if strings.Contains(contentStr, "<<<<<<<") ||
+			strings.Contains(contentStr, "=======") ||
+			strings.Contains(contentStr, ">>>>>>>") {
+			filesWithMarkers = append(filesWithMarkers, file)
+		}
+	}
+
+	return filesWithMarkers, nil
+}
+
+// ResolveConflictsWithAI resolves merge conflicts using AI agent (cursor-agent).
+// It gets conflict files, builds a prompt with HEAD and MERGE_HEAD content,
+// executes cursor-agent to resolve conflicts, and commits the resolution.
+func ResolveConflictsWithAI(workDir, repo string, issueID int, agentType string) error {
+	// Validate inputs
+	if workDir == "" {
+		return fmt.Errorf("work directory is required")
+	}
+	if repo == "" {
+		return fmt.Errorf("repository is required")
+	}
+	if issueID <= 0 {
+		return fmt.Errorf("issue ID must be positive, got: %d", issueID)
+	}
+
+	// Only cursor-agent is supported for conflict resolution
+	if agentType != "cursor-agent" {
+		return fmt.Errorf("conflict resolution is only supported for cursor-agent, got: %s", agentType)
+	}
+
+	// Get list of conflict files
+	conflictFiles, err := ListConflicts(workDir)
+	if err != nil {
+		return fmt.Errorf("failed to list conflicts: %w", err)
+	}
+	if len(conflictFiles) == 0 {
+		// No conflicts, nothing to resolve
+		return nil
+	}
+
+	// Get HEAD and MERGE_HEAD commit SHAs
+	headCmd := exec.Command("git", "rev-parse", "HEAD")
+	headCmd.Dir = workDir
+	headOutput, err := headCmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get HEAD commit: %w", err)
+	}
+	headSHA := strings.TrimSpace(string(headOutput))
+
+	mergeHeadCmd := exec.Command("git", "rev-parse", "MERGE_HEAD")
+	mergeHeadCmd.Dir = workDir
+	mergeHeadOutput, err := mergeHeadCmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to get MERGE_HEAD commit: %w", err)
+	}
+	mergeHeadSHA := strings.TrimSpace(string(mergeHeadOutput))
+
+	// Build conflict file list for prompt
+	conflictFilesList := strings.Join(conflictFiles, "\n- ")
+	conflictFilesList = "- " + conflictFilesList
+
+	// Get diff for each conflict file to include in prompt
+	var conflictDiffs strings.Builder
+	for _, file := range conflictFiles {
+		// Get the conflicted file content from stage 2 (ours/HEAD)
+		showCmd := exec.Command("git", "show", fmt.Sprintf(":2:%s", file))
+		showCmd.Dir = workDir
+		ourContent, ourErr := showCmd.Output()
+
+		// Get the conflicted file content from stage 3 (theirs/MERGE_HEAD)
+		showCmd = exec.Command("git", "show", fmt.Sprintf(":3:%s", file))
+		showCmd.Dir = workDir
+		theirContent, theirErr := showCmd.Output()
+
+		// Read current file content (with conflict markers)
+		currentContent, readErr := os.ReadFile(fmt.Sprintf("%s/%s", workDir, file))
+
+		conflictDiffs.WriteString(fmt.Sprintf("\n## File: %s\n", file))
+		if ourErr == nil {
+			conflictDiffs.WriteString(fmt.Sprintf("### HEAD (current branch) version:\n```\n%s\n```\n", string(ourContent)))
+		}
+		if theirErr == nil {
+			conflictDiffs.WriteString(fmt.Sprintf("### MERGE_HEAD (incoming branch) version:\n```\n%s\n```\n", string(theirContent)))
+		}
+		if readErr == nil {
+			conflictDiffs.WriteString(fmt.Sprintf("### Current file with conflict markers:\n```\n%s\n```\n", string(currentContent)))
+		}
+	}
+
+	// Build prompt
+	prompt := fmt.Sprintf(`マージコンフリクトを解消してください。
+
+Issue #%d の作業中にマージコンフリクトが発生しました。
+
+コンフリクトファイル:
+%s
+
+HEAD (現在のブランチ): %s
+MERGE_HEAD (マージ元ブランチ): %s
+
+各ファイルについて、HEAD（現在のブランチ）とMERGE_HEAD（マージ元ブランチ）の変更を統合し、適切に解消してください。
+- ビルドを壊さない修正を心がけてください
+- テストが通過するようにしてください
+- 両方の変更を可能な限り保持してください
+- コンフリクトマーカー（<<<<<<<, =======, >>>>>>>）を削除し、解消済みのコードに置き換えてください
+
+%s
+
+すべてのコンフリクトファイルを解消し、コンフリクトマーカーを完全に削除してください。`, issueID, conflictFilesList, headSHA, mergeHeadSHA, conflictDiffs.String())
+
+	// Execute cursor-agent to resolve conflicts
+	executor := agent.NewExecutor(agentType)
+	output, err := executor.ExecuteWithOptions(workDir, prompt, "auto", true)
+	if err != nil {
+		return fmt.Errorf("cursor-agent execution failed: %w\nOutput: %s", err, output)
+	}
+
+	// Check for conflict markers in files directly BEFORE staging
+	// git diff --diff-filter=U reports conflicts until files are staged,
+	// so we check file contents directly to verify markers are removed
+	filesWithMarkers, err := HasConflictMarkers(workDir, conflictFiles)
+	if err != nil {
+		return fmt.Errorf("failed to check for conflict markers: %w", err)
+	}
+	if len(filesWithMarkers) > 0 {
+		return fmt.Errorf("conflict markers still present in files: %v\nAgent output: %s", filesWithMarkers, output)
+	}
+
+	// Stage only conflict files to avoid staging untracked files
+	// (e.g., coverage reports, build outputs from validations)
+	// Handle both file modifications and deletions (delete/modify or delete/delete conflicts)
+	for _, file := range conflictFiles {
+		filePath := fmt.Sprintf("%s/%s", workDir, file)
+		_, err := os.Stat(filePath)
+		if err == nil {
+			// File exists, stage it with git add
+			addCmd := exec.Command("git", "add", file)
+			addCmd.Dir = workDir
+			if err := addCmd.Run(); err != nil {
+				return fmt.Errorf("git add failed for file %s: %w", file, err)
+			}
+		} else if os.IsNotExist(err) {
+			// File was deleted, stage the deletion with git rm
+			rmCmd := exec.Command("git", "rm", file)
+			rmCmd.Dir = workDir
+			if err := rmCmd.Run(); err != nil {
+				return fmt.Errorf("git rm failed for file %s: %w", file, err)
+			}
+		} else {
+			// Other error (e.g., permission denied)
+			return fmt.Errorf("failed to check file status for %s: %w", file, err)
+		}
+	}
+
+	// Verify conflicts are resolved AFTER staging
+	// git diff --diff-filter=U works correctly after staging
+	remainingConflicts, err := ListConflicts(workDir)
+	if err != nil {
+		return fmt.Errorf("failed to verify conflict resolution: %w", err)
+	}
+	if len(remainingConflicts) > 0 {
+		return fmt.Errorf("conflicts not fully resolved, remaining files: %v\nAgent output: %s", remainingConflicts, output)
+	}
+
+	// Commit the resolution
+	commitMsg := "chore: resolve merge conflicts with AI"
+	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	commitCmd.Dir = workDir
+	commitOutput, err := commitCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git commit failed: %w, output: %s", err, string(commitOutput))
+	}
+
+	return nil
+}
