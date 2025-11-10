@@ -284,7 +284,8 @@ type envConfig struct {
 // syncBranchWithBase synchronizes the working branch with the base branch.
 // It checks if the branch is behind, merges if needed, and resolves conflicts with AI if any.
 // After resolving conflicts, it pushes the resolution commit.
-func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID int, agentType string, reporterClient *reporter.Client) error {
+// Returns (changed, error) where changed indicates if any merge or conflict resolution was performed.
+func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID int, agentType string, reporterClient *reporter.Client) (bool, error) {
 	fmt.Fprintf(os.Stderr, "Syncing branch %s with base branch %s\n", branchName, baseBranch)
 
 	// Check if branch is behind base branch
@@ -292,25 +293,25 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 	headRef := branchName
 	behind, err := git.IsBehind(workDir, baseRef, headRef)
 	if err != nil {
-		return fmt.Errorf("failed to check if branch is behind: %w", err)
+		return false, fmt.Errorf("failed to check if branch is behind: %w", err)
 	}
 
 	if !behind {
 		fmt.Fprintf(os.Stderr, "Branch %s is up-to-date with %s\n", branchName, baseBranch)
-		return nil
+		return false, nil
 	}
 
 	fmt.Fprintf(os.Stderr, "Branch %s is behind %s, merging...\n", branchName, baseBranch)
 
 	// Merge base branch into working branch
 	if err := git.MergeBranch(workDir, baseBranch); err != nil {
-		return fmt.Errorf("failed to merge %s into %s: %w", baseBranch, branchName, err)
+		return false, fmt.Errorf("failed to merge %s into %s: %w", baseBranch, branchName, err)
 	}
 
 	// Check for conflicts
 	conflicts, err := git.ListConflicts(workDir)
 	if err != nil {
-		return fmt.Errorf("failed to list conflicts: %w", err)
+		return false, fmt.Errorf("failed to list conflicts: %w", err)
 	}
 
 	if len(conflicts) > 0 {
@@ -320,17 +321,17 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 			// Abort merge before returning error to clean up workspace
 			fmt.Fprintf(os.Stderr, "Conflict resolution requires cursor-agent, but agent type is %s. Aborting merge...\n", agentType)
 			if abortErr := git.AbortMerge(workDir); abortErr != nil {
-				return fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s; failed to abort merge: %w", agentType, abortErr)
+				return false, fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s; failed to abort merge: %w", agentType, abortErr)
 			}
-			return fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s", agentType)
+			return false, fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s", agentType)
 		}
 		if err := git.ResolveConflictsWithAI(workDir, repo, issueID, agentType); err != nil {
 			// If conflict resolution fails, abort merge to clean up workspace
 			fmt.Fprintf(os.Stderr, "Failed to resolve conflicts with AI. Aborting merge...\n")
 			if abortErr := git.AbortMerge(workDir); abortErr != nil {
-				return fmt.Errorf("failed to resolve conflicts with AI: %w; failed to abort merge: %w", err, abortErr)
+				return false, fmt.Errorf("failed to resolve conflicts with AI: %w; failed to abort merge: %w", err, abortErr)
 			}
-			return fmt.Errorf("failed to resolve conflicts with AI: %w", err)
+			return false, fmt.Errorf("failed to resolve conflicts with AI: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Conflicts resolved successfully\n")
 	} else {
@@ -340,11 +341,12 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 	// Push merge/resolution commit
 	fmt.Fprintf(os.Stderr, "Pushing merge/resolution commit to remote\n")
 	if err := git.PushBranch(workDir, branchName, ""); err != nil {
-		return fmt.Errorf("failed to push merge/resolution commit: %w", err)
+		return false, fmt.Errorf("failed to push merge/resolution commit: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Pushed merge/resolution commit successfully\n")
 
-	return nil
+	// Return true to indicate that merge or conflict resolution was performed
+	return true, nil
 }
 
 // Run executes the agent-runner workflow.
@@ -648,7 +650,8 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 	// 11.5. Post-Commit Sync: コミット後にデフォルトブランチとの同期を確認
 	fmt.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
-	if err := syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType, reporterClient); err != nil {
+	changed, err := syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType, reporterClient)
+	if err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Post-Commit Sync failed: %v", err),
 			"",
@@ -660,6 +663,26 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		return fmt.Errorf("post-commit sync failed: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Post-Commit Sync completed successfully\n")
+
+	// 11.6. Re-run validations if merge or conflict resolution was performed
+	// This ensures that any changes introduced by the merge or AI conflict resolution
+	// are validated before pushing to prevent breaking changes from being pushed.
+	if changed {
+		fmt.Fprintf(os.Stderr, "Merge or conflict resolution was performed, re-running validations\n")
+		if manifest != nil && len(manifest.Validation) > 0 {
+			fmt.Fprintf(os.Stderr, "Executing %d validations after post-commit sync\n", len(manifest.Validation))
+			if err := hooks.RunValidations(manifest.Validation, envCfg.WorkDir); err != nil {
+				// Validation failures should NOT report to Operator API
+				// The retry orchestrator will handle retries based on Pod exit code
+				return fmt.Errorf("validation failed after post-commit sync: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Executed %d validations after post-commit sync\n", len(manifest.Validation))
+		} else {
+			fmt.Fprintf(os.Stderr, "No validations to execute after post-commit sync\n")
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "No merge or conflict resolution was performed, skipping re-validation\n")
+	}
 
 	// 12. Push branch
 	fmt.Fprintf(os.Stderr, "Pushing branch %s to remote\n", branchName)
