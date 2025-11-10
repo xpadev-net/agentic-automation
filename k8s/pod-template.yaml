@@ -176,13 +176,15 @@ spec:
             value: "5"  # Optional, default is 5
         
         # Resource requirements
+        # Note: Memory limit increased from 2Gi to 4Gi to handle memory-intensive tasks
+        # like vitest which can consume significant memory during test execution and report generation
         resources:
           requests:
             cpu: "500m"
             memory: "512Mi"
           limits:
             cpu: "2000m"
-            memory: "2Gi"
+            memory: "4Gi"
         
         # Working directory (matches WORKSPACE_DIR env var)
         workingDir: /workspace
@@ -256,6 +258,6 @@ spec:
         memory: "512Mi"
       limits:
         cpu: "2000m"
-        memory: "2Gi"
+        memory: "4Gi"
     workingDir: /workspace
 

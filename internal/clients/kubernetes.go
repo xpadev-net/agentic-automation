@@ -426,8 +426,10 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 	}
 
 	// Default resource limits
+	// Note: Memory limit increased from 2Gi to 4Gi to handle memory-intensive tasks
+	// like vitest which can consume significant memory during test execution and report generation
 	memoryRequest := appconfig.GetEnv("AGENT_RUNNER_MEMORY_REQUEST", "512Mi")
-	memoryLimit := appconfig.GetEnv("AGENT_RUNNER_MEMORY_LIMIT", "2Gi")
+	memoryLimit := appconfig.GetEnv("AGENT_RUNNER_MEMORY_LIMIT", "4Gi")
 	cpuRequest := appconfig.GetEnv("AGENT_RUNNER_CPU_REQUEST", "500m")
 	cpuLimit := appconfig.GetEnv("AGENT_RUNNER_CPU_LIMIT", "2000m")
 
