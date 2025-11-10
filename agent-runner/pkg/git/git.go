@@ -1083,11 +1083,14 @@ MERGE_HEAD (マージ元ブランチ): %s
 		return fmt.Errorf("conflict markers still present in files: %v\nAgent output: %s", filesWithMarkers, output)
 	}
 
-	// Stage all changes after marker verification
-	addCmd := exec.Command("git", "add", "-A")
-	addCmd.Dir = workDir
-	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add failed: %w", err)
+	// Stage only conflict files to avoid staging untracked files
+	// (e.g., coverage reports, build outputs from validations)
+	for _, file := range conflictFiles {
+		addCmd := exec.Command("git", "add", file)
+		addCmd.Dir = workDir
+		if err := addCmd.Run(); err != nil {
+			return fmt.Errorf("git add failed for file %s: %w", file, err)
+		}
 	}
 
 	// Verify conflicts are resolved AFTER staging
