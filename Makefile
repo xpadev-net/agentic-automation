@@ -107,7 +107,7 @@ docker-build: ## Build Docker image for agent-runner
 	@echo "Image: $(FULL_IMAGE_LATEST)"
 	@echo "Image: $(FULL_IMAGE_SHA)"
 	@echo "Base image: $(BASE_IMAGE_LATEST)"
-	cd agent-runner && docker build --build-arg GIT_SHA=$(GIT_SHA) --build-arg BUILT_AT=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) --build-arg BASE_IMAGE=$(BASE_IMAGE_LATEST) -t $(FULL_IMAGE_LATEST) -t $(FULL_IMAGE_SHA) .
+	cd agent-runner && docker build --build-arg GIT_SHA=$(GIT_SHA) --build-arg BUILT_AT=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) -t $(FULL_IMAGE_LATEST) -t $(FULL_IMAGE_SHA) .
 
 docker-push: ## Push Docker image to registry
 	@echo "Pushing Docker images..."

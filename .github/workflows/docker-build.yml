@@ -48,11 +48,9 @@ jobs:
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
           IMAGE_NAME="${{ matrix.component.image }}"
           BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          BASE_IMAGE="ghcr.io/$OWNER/agentic-automation-runner-base:latest"
           echo "OWNER=$OWNER" >> $GITHUB_OUTPUT
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_OUTPUT
           echo "BUILT_AT=$BUILT_AT" >> $GITHUB_OUTPUT
-          echo "BASE_IMAGE=$BASE_IMAGE" >> $GITHUB_OUTPUT
           echo "tags=ghcr.io/$OWNER/$IMAGE_NAME:latest,ghcr.io/$OWNER/$IMAGE_NAME:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
 
       - name: Log in to GitHub Container Registry
@@ -72,6 +70,5 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
             BUILT_AT=${{ steps.meta.outputs.BUILT_AT }}
-            BASE_IMAGE=${{ steps.meta.outputs.BASE_IMAGE }}
           # cache-from: type=gha,scope=${{ matrix.component.name }}
           # cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}

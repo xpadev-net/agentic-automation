@@ -32,8 +32,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X agent-runner/pkg/version.Commit=${
 # ==============================================================================
 # Runtime image using pre-built base image with Node.js, Go, and AI agent CLIs
 # The base image is built separately and cached, reducing build time
-ARG BASE_IMAGE=ghcr.io/xpadev/agentic-automation-runner-base:latest
-FROM ${BASE_IMAGE}
+FROM ghcr.io/xpadev/agentic-automation-runner-base:latest
 
 # Copy compiled agent-runner binary from builder stage
 # Note: COPY requires root, so we temporarily switch to root, but the binary is executable by agent user
