@@ -644,6 +644,54 @@ func TestAbortMerge_InvalidInputs(t *testing.T) {
 	}
 }
 
+// TestHasConflictMarkers_InvalidInputs tests HasConflictMarkers with invalid inputs.
+func TestHasConflictMarkers_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		workDir   string
+		files     []string
+		expectErr bool
+		errorMsg  string
+	}{
+		{
+			name:      "empty workDir",
+			workDir:   "",
+			files:     []string{"file1.txt"},
+			expectErr: true,
+			errorMsg:  "work directory is required",
+		},
+		{
+			name:      "empty files list",
+			workDir:   "/tmp/test",
+			files:     []string{},
+			expectErr: false,
+			errorMsg:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := HasConflictMarkers(tt.workDir, tt.files)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if result == nil {
+					t.Errorf("expected result to be non-nil")
+				}
+			}
+		})
+	}
+}
+
 // TestResolveConflictsWithAI_InvalidInputs tests ResolveConflictsWithAI with invalid inputs.
 func TestResolveConflictsWithAI_InvalidInputs(t *testing.T) {
 	tests := []struct {

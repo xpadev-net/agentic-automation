@@ -900,6 +900,41 @@ func AbortMerge(workDir string) error {
 	return nil
 }
 
+// HasConflictMarkers checks if the specified files contain conflict markers (<<<<<<<, =======, >>>>>>>).
+// It reads the file contents and checks for the presence of conflict markers.
+// Returns a list of files that still contain conflict markers.
+func HasConflictMarkers(workDir string, files []string) ([]string, error) {
+	// Validate inputs
+	if workDir == "" {
+		return nil, fmt.Errorf("work directory is required")
+	}
+	if len(files) == 0 {
+		return []string{}, nil
+	}
+
+	var filesWithMarkers []string
+
+	for _, file := range files {
+		filePath := fmt.Sprintf("%s/%s", workDir, file)
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			// If file doesn't exist or can't be read, skip it
+			// This can happen if the file was deleted during conflict resolution
+			continue
+		}
+
+		// Check for conflict markers
+		contentStr := string(content)
+		if strings.Contains(contentStr, "<<<<<<<") ||
+			strings.Contains(contentStr, "=======") ||
+			strings.Contains(contentStr, ">>>>>>>") {
+			filesWithMarkers = append(filesWithMarkers, file)
+		}
+	}
+
+	return filesWithMarkers, nil
+}
+
 // ResolveConflictsWithAI resolves merge conflicts using AI agent (cursor-agent).
 // It gets conflict files, builds a prompt with HEAD and MERGE_HEAD content,
 // executes cursor-agent to resolve conflicts, and commits the resolution.
@@ -1007,22 +1042,33 @@ MERGE_HEAD (マージ元ブランチ): %s
 		return fmt.Errorf("cursor-agent execution failed: %w\nOutput: %s", err, output)
 	}
 
-	// Stage all changes before verifying conflicts
+	// Verify conflicts are resolved BEFORE staging
 	// git diff --diff-filter=U only reports conflicts in unstaged files,
-	// so we need to stage files first to get accurate conflict detection
-	addCmd := exec.Command("git", "add", "-A")
-	addCmd.Dir = workDir
-	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add failed: %w", err)
-	}
-
-	// Verify conflicts are resolved (after staging)
+	// so we check before staging to catch unresolved conflicts
 	remainingConflicts, err := ListConflicts(workDir)
 	if err != nil {
 		return fmt.Errorf("failed to verify conflict resolution: %w", err)
 	}
 	if len(remainingConflicts) > 0 {
 		return fmt.Errorf("conflicts not fully resolved, remaining files: %v\nAgent output: %s", remainingConflicts, output)
+	}
+
+	// Also check for conflict markers in files directly
+	// This is a double-check because git add clears the unmerged state,
+	// so we need to verify before staging
+	filesWithMarkers, err := HasConflictMarkers(workDir, conflictFiles)
+	if err != nil {
+		return fmt.Errorf("failed to check for conflict markers: %w", err)
+	}
+	if len(filesWithMarkers) > 0 {
+		return fmt.Errorf("conflict markers still present in files: %v\nAgent output: %s", filesWithMarkers, output)
+	}
+
+	// Stage all changes after verification
+	addCmd := exec.Command("git", "add", "-A")
+	addCmd.Dir = workDir
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add failed: %w", err)
 	}
 
 	// Commit the resolution
