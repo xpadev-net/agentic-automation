@@ -1042,20 +1042,9 @@ MERGE_HEAD (マージ元ブランチ): %s
 		return fmt.Errorf("cursor-agent execution failed: %w\nOutput: %s", err, output)
 	}
 
-	// Verify conflicts are resolved BEFORE staging
-	// git diff --diff-filter=U only reports conflicts in unstaged files,
-	// so we check before staging to catch unresolved conflicts
-	remainingConflicts, err := ListConflicts(workDir)
-	if err != nil {
-		return fmt.Errorf("failed to verify conflict resolution: %w", err)
-	}
-	if len(remainingConflicts) > 0 {
-		return fmt.Errorf("conflicts not fully resolved, remaining files: %v\nAgent output: %s", remainingConflicts, output)
-	}
-
-	// Also check for conflict markers in files directly
-	// This is a double-check because git add clears the unmerged state,
-	// so we need to verify before staging
+	// Check for conflict markers in files directly BEFORE staging
+	// git diff --diff-filter=U reports conflicts until files are staged,
+	// so we check file contents directly to verify markers are removed
 	filesWithMarkers, err := HasConflictMarkers(workDir, conflictFiles)
 	if err != nil {
 		return fmt.Errorf("failed to check for conflict markers: %w", err)
@@ -1064,11 +1053,21 @@ MERGE_HEAD (マージ元ブランチ): %s
 		return fmt.Errorf("conflict markers still present in files: %v\nAgent output: %s", filesWithMarkers, output)
 	}
 
-	// Stage all changes after verification
+	// Stage all changes after marker verification
 	addCmd := exec.Command("git", "add", "-A")
 	addCmd.Dir = workDir
 	if err := addCmd.Run(); err != nil {
 		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// Verify conflicts are resolved AFTER staging
+	// git diff --diff-filter=U works correctly after staging
+	remainingConflicts, err := ListConflicts(workDir)
+	if err != nil {
+		return fmt.Errorf("failed to verify conflict resolution: %w", err)
+	}
+	if len(remainingConflicts) > 0 {
+		return fmt.Errorf("conflicts not fully resolved, remaining files: %v\nAgent output: %s", remainingConflicts, output)
 	}
 
 	// Commit the resolution
