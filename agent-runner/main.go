@@ -285,7 +285,7 @@ type envConfig struct {
 // It checks if the branch is behind, merges if needed, and resolves conflicts with AI if any.
 // Note: This function does NOT push changes. The caller is responsible for pushing after validations succeed.
 // Returns (changed, error) where changed indicates if any merge or conflict resolution was performed.
-func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID int, agentType string, reporterClient *reporter.Client) (bool, error) {
+func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID int, agentType string) (bool, error) {
 	fmt.Fprintf(os.Stderr, "Syncing branch %s with base branch %s\n", branchName, baseBranch)
 
 	// Check if branch is behind base branch
@@ -644,7 +644,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 	// 11.5. Post-Commit Sync: コミット後にデフォルトブランチとの同期を確認
 	fmt.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
-	changed, err := syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType, reporterClient)
+	changed, err := syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType)
 	if err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Post-Commit Sync failed: %v", err),
