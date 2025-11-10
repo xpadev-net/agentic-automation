@@ -1,4 +1,4 @@
-.PHONY: build test vet migrate-up migrate-down migrate-status run clean deps help docker-build docker-push docker-build-push docker-build-operator docker-push-operator docker-build-push-operator deploy-infra deploy-operator deploy-all k8s-secrets
+.PHONY: build test vet migrate-up migrate-down migrate-status run clean deps help docker-build docker-push docker-build-push docker-build-base docker-push-base docker-build-push-base docker-build-operator docker-push-operator docker-build-push-operator deploy-infra deploy-operator deploy-all k8s-secrets
 
 # Default target
 .DEFAULT_GOAL := help
@@ -13,10 +13,13 @@ MIGRATIONS_DIR := migrations
 DOCKER_REGISTRY ?= ghcr.io
 DOCKER_OWNER ?= $(shell echo '$(shell git config user.name)' | tr '[:upper:]' '[:lower:]')
 IMAGE_NAME ?= agentic-automation-runner
+BASE_IMAGE_NAME ?= agentic-automation-runner-base
 OPERATOR_IMAGE_NAME ?= agentic-automation-operator
 GIT_SHA ?= $(shell git rev-parse --short HEAD)
 FULL_IMAGE_LATEST ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(IMAGE_NAME):latest
 FULL_IMAGE_SHA ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(IMAGE_NAME):sha-$(GIT_SHA)
+BASE_IMAGE_LATEST ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(BASE_IMAGE_NAME):latest
+BASE_IMAGE_SHA ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(BASE_IMAGE_NAME):sha-$(GIT_SHA)
 OPERATOR_IMAGE_LATEST ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(OPERATOR_IMAGE_NAME):latest
 OPERATOR_IMAGE_SHA ?= $(DOCKER_REGISTRY)/$(DOCKER_OWNER)/$(OPERATOR_IMAGE_NAME):sha-$(GIT_SHA)
 
@@ -103,7 +106,8 @@ docker-build: ## Build Docker image for agent-runner
 	@echo "Building Docker image..."
 	@echo "Image: $(FULL_IMAGE_LATEST)"
 	@echo "Image: $(FULL_IMAGE_SHA)"
-	cd agent-runner && docker build --build-arg GIT_SHA=$(GIT_SHA) --build-arg BUILT_AT=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) -t $(FULL_IMAGE_LATEST) -t $(FULL_IMAGE_SHA) .
+	@echo "Base image: $(BASE_IMAGE_LATEST)"
+	cd agent-runner && docker build --build-arg GIT_SHA=$(GIT_SHA) --build-arg BUILT_AT=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) --build-arg BASE_IMAGE=$(BASE_IMAGE_LATEST) -t $(FULL_IMAGE_LATEST) -t $(FULL_IMAGE_SHA) .
 
 docker-push: ## Push Docker image to registry
 	@echo "Pushing Docker images..."
@@ -113,6 +117,21 @@ docker-push: ## Push Docker image to registry
 	docker push $(FULL_IMAGE_SHA)
 
 docker-build-push: docker-build docker-push ## Build and push Docker image
+
+docker-build-base: ## Build Docker image for agent-runner base (runtime environment)
+	@echo "Building base Docker image..."
+	@echo "Image: $(BASE_IMAGE_LATEST)"
+	@echo "Image: $(BASE_IMAGE_SHA)"
+	cd agent-runner && docker build --build-arg BUILT_AT=$(shell date -u +%Y-%m-%dT%H:%M:%SZ) -f Dockerfile.base -t $(BASE_IMAGE_LATEST) -t $(BASE_IMAGE_SHA) .
+
+docker-push-base: ## Push base Docker image to registry
+	@echo "Pushing base Docker images..."
+	@echo "Pushing: $(BASE_IMAGE_LATEST)"
+	docker push $(BASE_IMAGE_LATEST)
+	@echo "Pushing: $(BASE_IMAGE_SHA)"
+	docker push $(BASE_IMAGE_SHA)
+
+docker-build-push-base: docker-build-base docker-push-base ## Build and push base Docker image
 
 docker-build-operator: ## Build Docker image for operator
 	@echo "Building operator Docker image..."

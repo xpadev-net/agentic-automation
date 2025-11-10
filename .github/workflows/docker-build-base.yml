@@ -1,36 +1,22 @@
-name: Docker Build and Push
+name: Docker Build and Push Base Image
 
-# Docker イメージのビルドとプッシュ
-# masterブランチへのpush時に、operator と runner の両方のイメージを並列ビルド
+# ベースイメージ（ランタイム環境）のビルドとプッシュ
+# workflow_dispatchでのみ実行される（手動トリガー）
 
 on:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-base
   cancel-in-progress: true
 
 jobs:
-  build-and-push-images:
-    name: Build and Push ${{ matrix.component.name }}
+  build-and-push-base:
+    name: Build and Push Base Image
     runs-on: arc-runners-agentic-automation
     permissions:
       contents: read
       packages: write
-
-    strategy:
-      matrix:
-        component:
-          - name: runner
-            context: ./agent-runner
-            dockerfile: ./agent-runner/Dockerfile
-            image: agentic-automation-runner
-          - name: operator
-            context: .
-            dockerfile: ./Dockerfile
-            image: agentic-automation-operator
 
     steps:
       - name: Checkout code
@@ -46,13 +32,11 @@ jobs:
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-          IMAGE_NAME="${{ matrix.component.image }}"
+          IMAGE_NAME="agentic-automation-runner-base"
           BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          BASE_IMAGE="ghcr.io/$OWNER/agentic-automation-runner-base:latest"
           echo "OWNER=$OWNER" >> $GITHUB_OUTPUT
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_OUTPUT
           echo "BUILT_AT=$BUILT_AT" >> $GITHUB_OUTPUT
-          echo "BASE_IMAGE=$BASE_IMAGE" >> $GITHUB_OUTPUT
           echo "tags=ghcr.io/$OWNER/$IMAGE_NAME:latest,ghcr.io/$OWNER/$IMAGE_NAME:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
 
       - name: Log in to GitHub Container Registry
@@ -62,16 +46,15 @@ jobs:
           username: ${{ steps.meta.outputs.OWNER }}
           password: ${{ github.token }}
 
-      - name: Build and push ${{ matrix.component.name }} image
+      - name: Build and push base image
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.component.context }}
-          file: ${{ matrix.component.dockerfile }}
+          context: ./agent-runner
+          file: ./agent-runner/Dockerfile.base
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
-            GIT_SHA=${{ github.sha }}
             BUILT_AT=${{ steps.meta.outputs.BUILT_AT }}
-            BASE_IMAGE=${{ steps.meta.outputs.BASE_IMAGE }}
-          # cache-from: type=gha,scope=${{ matrix.component.name }}
-          # cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}
+          # cache-from: type=gha,scope=runner-base
+          # cache-to: type=gha,mode=max,scope=runner-base
+
