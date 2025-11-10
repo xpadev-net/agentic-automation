@@ -30,76 +30,13 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X agent-runner/pkg/version.Commit=${
 # ==============================================================================
 # Stage 2: Runtime Image
 # ==============================================================================
-# Runtime image with Node.js and AI agent CLIs (Claude Code, Cursor)
-FROM node:22-slim
-
-# Add Go toolchain to runtime image (allows running go build/test inside Pod)
-ARG GO_VERSION=1.24.9
-
-# Install system tools required for agent execution
-# - git: Repository clone, commit, and push operations
-# - curl: Required for Cursor CLI installation script download
-# - bash: Required for executing hook scripts from .agent-config.yaml
-RUN apt-get update && apt-get install -y \
-  git \
-  curl \
-  bash \
-  build-essential \
-  pkg-config \
-  ca-certificates && \
-  rm -rf /var/lib/apt/lists/*
-
-# Install Go from official tarball with checksum verification
-RUN curl -fsSL -o /tmp/go${GO_VERSION}.linux-amd64.tar.gz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
-  tar -C /usr/local -xzf /tmp/go${GO_VERSION}.linux-amd64.tar.gz && \
-  rm -f /tmp/go${GO_VERSION}.linux-amd64.tar.gz
-
-# Create non-root user for security
-# --home option creates the home directory for the system user
-RUN addgroup --system agent && adduser --system --home /home/agent --group agent
-
-# Configure Go paths for both root (during build) and agent user (runtime)
-ENV GOPATH=/home/agent/go
-RUN mkdir -p /home/agent/go && chown -R agent:agent /home/agent/go
-
-# Create workspace directory and set ownership
-RUN mkdir -p /workspace && chown -R agent:agent /workspace
-
-# Create npm global directory for agent user and set ownership
-RUN mkdir -p /home/agent/.local/share/npm-global && chown -R agent:agent /home/agent/.local
-
-# Switch to agent user for CLI installations
-# This is done before copying the binary to maximize cache efficiency
-USER agent
-
-# Set HOME environment variable for agent user
-ENV HOME=/home/agent
-
-# Configure npm to use user directory for global packages
-# This avoids permission errors when installing global packages
-ENV NPM_CONFIG_PREFIX=/home/agent/.local/share/npm-global
-
-# Install Claude Code CLI as agent user
-# Command: claude-code --workspace /workspace --task "..." --non-interactive
-# This layer is cached independently of the binary, improving build performance
-RUN curl -fsSL https://claude.ai/install.sh | bash
-
-# Install Cursor CLI as agent user using official installation script
-# Command: cursor-agent -p "..."
-# Flags: -f (fail on HTTP errors), -s (silent), -S (show errors), -L (follow redirects)
-# This layer is cached independently of the binary, improving build performance
-RUN curl https://cursor.com/install -fsS | bash
-
-# Add Cursor CLI and npm global bin to PATH
-# Cursor CLI installs cursor-agent to $HOME/.local/bin
-# According to https://cursor.com/ja/docs/cli/installation, PATH must include $HOME/.local/bin
-# npm global packages are installed to $NPM_CONFIG_PREFIX/bin
-ENV PATH="/usr/local/go/bin:$HOME/.local/bin:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:$PATH"
+# Runtime image using pre-built base image with Node.js, Go, and AI agent CLIs
+# The base image is built separately and cached, reducing build time
+ARG BASE_IMAGE=ghcr.io/xpadev/agentic-automation-runner-base:latest
+FROM ${BASE_IMAGE}
 
 # Copy compiled agent-runner binary from builder stage
-# This is done after CLI installation to maximize cache efficiency
-# Binary changes won't invalidate the CLI installation cache
-# Note: COPY requires root, so we temporarily switch back, but the binary is executable by agent user
+# Note: COPY requires root, so we temporarily switch to root, but the binary is executable by agent user
 USER root
 COPY --from=builder /build/agent-runner /usr/local/bin/agent-runner
 
@@ -108,6 +45,7 @@ USER agent
 
 # Set working directory for agent execution
 # This matches the default WORKSPACE_DIR in main.go
+# Note: WORKDIR is already set in the base image, but we set it again for clarity
 WORKDIR /workspace
 
 # Set entry point

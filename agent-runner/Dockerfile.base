@@ -1,0 +1,76 @@
+# Base runtime image for agent-runner
+# Contains Node.js, Go toolchain, and AI agent CLIs (Claude Code, Cursor)
+# This image is built separately and used as a base for the agent-runner image
+
+FROM node:22-slim
+
+# Add Go toolchain to runtime image (allows running go build/test inside Pod)
+ARG GO_VERSION=1.24.9
+
+# Install system tools required for agent execution
+# - git: Repository clone, commit, and push operations
+# - curl: Required for Cursor CLI installation script download
+# - bash: Required for executing hook scripts from .agent-config.yaml
+RUN apt-get update && apt-get install -y \
+  git \
+  curl \
+  bash \
+  build-essential \
+  pkg-config \
+  ca-certificates && \
+  rm -rf /var/lib/apt/lists/*
+
+# Install Go from official tarball with checksum verification
+RUN curl -fsSL -o /tmp/go${GO_VERSION}.linux-amd64.tar.gz https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
+  tar -C /usr/local -xzf /tmp/go${GO_VERSION}.linux-amd64.tar.gz && \
+  rm -f /tmp/go${GO_VERSION}.linux-amd64.tar.gz
+
+# Create non-root user for security
+# --home option creates the home directory for the system user
+RUN addgroup --system agent && adduser --system --home /home/agent --group agent
+
+# Configure Go paths for both root (during build) and agent user (runtime)
+ENV GOPATH=/home/agent/go
+RUN mkdir -p /home/agent/go && chown -R agent:agent /home/agent/go
+
+# Create workspace directory and set ownership
+RUN mkdir -p /workspace && chown -R agent:agent /workspace
+
+# Create npm global directory for agent user and set ownership
+RUN mkdir -p /home/agent/.local/share/npm-global && chown -R agent:agent /home/agent/.local
+
+# Switch to agent user for CLI installations
+# This is done to maximize cache efficiency
+USER agent
+
+# Set HOME environment variable for agent user
+ENV HOME=/home/agent
+
+# Configure npm to use user directory for global packages
+# This avoids permission errors when installing global packages
+ENV NPM_CONFIG_PREFIX=/home/agent/.local/share/npm-global
+
+# Install Claude Code CLI as agent user
+# Command: claude-code --workspace /workspace --task "..." --non-interactive
+# This layer is cached independently, improving build performance
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# Install Cursor CLI as agent user using official installation script
+# Command: cursor-agent -p "..."
+# Flags: -f (fail on HTTP errors), -s (silent), -S (show errors), -L (follow redirects)
+# This layer is cached independently, improving build performance
+RUN curl https://cursor.com/install -fsS | bash
+
+# Add Cursor CLI and npm global bin to PATH
+# Cursor CLI installs cursor-agent to $HOME/.local/bin
+# According to https://cursor.com/ja/docs/cli/installation, PATH must include $HOME/.local/bin
+# npm global packages are installed to $NPM_CONFIG_PREFIX/bin
+ENV PATH="/usr/local/go/bin:$HOME/.local/bin:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:$PATH"
+
+# Set working directory for agent execution
+# This matches the default WORKSPACE_DIR in main.go
+WORKDIR /workspace
+
+# Note: This base image does not include the agent-runner binary
+# The binary will be copied in the final agent-runner Dockerfile
+
