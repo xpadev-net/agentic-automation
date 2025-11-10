@@ -816,13 +816,23 @@ func MergeBranch(workDir, fromRef string) error {
 	mergeCmd.Dir = workDir
 	output, err := mergeCmd.CombinedOutput()
 	if err != nil {
-		// Check if it's a merge conflict (exit code 1 is normal for conflicts)
+		// Check if it's a merge conflict (exit code 1 can mean conflicts OR other errors)
 		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
-			// This is a merge conflict, which is expected and should be handled by caller
-			// Return nil here, conflicts will be detected by ListConflicts
-			return nil
+			// Verify that a merge actually started by checking for MERGE_HEAD
+			// MERGE_HEAD is only created when a merge conflict occurs
+			// If MERGE_HEAD doesn't exist, the merge failed for other reasons
+			// (e.g., working tree has unstaged changes, merge already in progress)
+			mergeHeadPath := fmt.Sprintf("%s/.git/MERGE_HEAD", workDir)
+			if _, statErr := os.Stat(mergeHeadPath); statErr == nil {
+				// MERGE_HEAD exists, this is a real merge conflict
+				// Return nil here, conflicts will be detected by ListConflicts
+				return nil
+			}
+			// MERGE_HEAD doesn't exist, merge failed for other reasons
+			// Propagate the error to the caller
+			return fmt.Errorf("git merge failed (not a conflict): %w, output: %s", err, string(output))
 		}
-		// Other errors (e.g., merge already in progress) should be returned
+		// Other exit codes are errors
 		return fmt.Errorf("git merge failed: %w, output: %s", err, string(output))
 	}
 
