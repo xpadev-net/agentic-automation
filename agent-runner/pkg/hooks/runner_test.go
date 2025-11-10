@@ -510,8 +510,14 @@ func TestHookError_Error(t *testing.T) {
 		t.Errorf("Expected error message to contain \"Command: test command\", got: %q", errorMsg)
 	}
 
-	if !strings.Contains(errorMsg, "Output: test output") {
-		t.Errorf("Expected error message to contain \"Output: test output\", got: %q", errorMsg)
+	// Output should NOT be included in the error message to avoid exceeding argument string limits
+	if strings.Contains(errorMsg, "Output: test output") {
+		t.Errorf("Expected error message to NOT contain \"Output: test output\", got: %q", errorMsg)
+	}
+
+	// Should contain message prompting AI agent to run the command
+	if !strings.Contains(errorMsg, "Please run this command yourself") {
+		t.Errorf("Expected error message to contain \"Please run this command yourself\", got: %q", errorMsg)
 	}
 }
 

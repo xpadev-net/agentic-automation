@@ -11,9 +11,11 @@ type HookError struct {
 	Err     error  // Original error from exec.CommandContext
 }
 
-// Error returns a formatted error message containing hook name, command, output, and error.
+// Error returns a formatted error message containing hook name and command.
+// Output is excluded to avoid exceeding argument string limits when test logs are included.
+// The AI agent should run the command itself to see the full error output.
 func (e *HookError) Error() string {
-	return fmt.Sprintf("hook '%s' failed: %v\nCommand: %s\nOutput: %s", e.Name, e.Err, e.Command, e.Output)
+	return fmt.Sprintf("hook '%s' failed: %v\nCommand: %s\n\nPlease run this command yourself to see the full error output and fix the issues.", e.Name, e.Err, e.Command)
 }
 
 // Unwrap returns the underlying error, supporting error wrapping and error chains.
