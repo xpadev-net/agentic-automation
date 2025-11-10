@@ -845,18 +845,38 @@ func ListConflicts(workDir string) ([]string, error) {
 	}
 
 	// Get list of unmerged files
+	// git diff returns exit code 1 when there are differences (unmerged files),
+	// and exit code 0 only when there are no differences
+	// We need to parse the output even when exit code is 1
 	diffCmd := exec.Command("git", "diff", "--name-only", "--diff-filter=U")
 	diffCmd.Dir = workDir
-	output, err := diffCmd.Output()
+	output, err := diffCmd.CombinedOutput()
 	if err != nil {
-		// Exit code 1 means no conflicts, which is fine
+		// Exit code 1 means there are differences (conflicts), which is expected
+		// Exit code 0 means no differences (no conflicts)
+		// We need to parse the output in both cases
 		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
-			return []string{}, nil
+			// Exit code 1: there are conflicts, parse the output
+			trimmed := strings.TrimSpace(string(output))
+			if trimmed == "" {
+				// No output means no conflicts (shouldn't happen with exit code 1, but handle it)
+				return []string{}, nil
+			}
+			lines := strings.Split(trimmed, "\n")
+			var conflicts []string
+			for _, line := range lines {
+				if strings.TrimSpace(line) != "" {
+					conflicts = append(conflicts, strings.TrimSpace(line))
+				}
+			}
+			return conflicts, nil
 		}
+		// Other exit codes are errors
 		return nil, fmt.Errorf("failed to list conflicts: %w", err)
 	}
 
-	// Parse output
+	// Exit code 0: no differences (no conflicts)
+	// Parse output to be safe, but should be empty
 	trimmed := strings.TrimSpace(string(output))
 	if trimmed == "" {
 		return []string{}, nil
