@@ -150,6 +150,17 @@ func runCommand(cmd config.Command, workDir string) error {
 		// Kill the process to prevent deadlock from pipe filling up
 		killErr := killAndWait()
 
+		// Wait for stderr reading to complete before accessing stderrBuf
+		// This prevents data race where stderr goroutine may still be writing
+		select {
+		case stderrErr := <-stderrErrCh:
+			// stderr goroutine completed (ignore error for now, we're handling stdout error)
+			_ = stderrErr
+		case <-time.After(5 * time.Second):
+			// Timeout: stderr goroutine didn't complete, but process is killed
+			// Continue anyway to avoid deadlock
+		}
+
 		// Get any output that was successfully read before the error
 		outputMu.Lock()
 		outputStr := outputBuf.String()
