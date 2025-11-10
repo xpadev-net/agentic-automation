@@ -65,12 +65,19 @@ RUN mkdir -p /home/agent/go && chown -R agent:agent /home/agent/go
 # Create workspace directory and set ownership
 RUN mkdir -p /workspace && chown -R agent:agent /workspace
 
+# Create npm global directory for agent user and set ownership
+RUN mkdir -p /home/agent/.local/share/npm-global && chown -R agent:agent /home/agent/.local
+
 # Switch to agent user for CLI installations
 # This is done before copying the binary to maximize cache efficiency
 USER agent
 
 # Set HOME environment variable for agent user
 ENV HOME=/home/agent
+
+# Configure npm to use user directory for global packages
+# This avoids permission errors when installing global packages
+ENV NPM_CONFIG_PREFIX=/home/agent/.local/share/npm-global
 
 # Install Claude Code CLI as agent user
 # Command: claude-code --workspace /workspace --task "..." --non-interactive
@@ -83,10 +90,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # This layer is cached independently of the binary, improving build performance
 RUN curl https://cursor.com/install -fsS | bash
 
-# Add Cursor CLI to PATH
+# Add Cursor CLI and npm global bin to PATH
 # Cursor CLI installs cursor-agent to $HOME/.local/bin
 # According to https://cursor.com/ja/docs/cli/installation, PATH must include $HOME/.local/bin
-ENV PATH="/usr/local/go/bin:$HOME/.local/bin:${GOPATH}/bin:$PATH"
+# npm global packages are installed to $NPM_CONFIG_PREFIX/bin
+ENV PATH="/usr/local/go/bin:$HOME/.local/bin:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:$PATH"
 
 # Copy compiled agent-runner binary from builder stage
 # This is done after CLI installation to maximize cache efficiency

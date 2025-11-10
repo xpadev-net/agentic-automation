@@ -191,6 +191,11 @@ claude --prompt "{issue_context}"
 
 **Installation** (in Dockerfile):
 ```dockerfile
+# Configure npm to use user directory for global packages
+# This avoids permission errors when installing global packages
+ENV NPM_CONFIG_PREFIX=${XDG_DATA_HOME:-$HOME/.local/share}/npm-global
+ENV PATH=$NPM_CONFIG_PREFIX/bin:$PATH
+
 RUN npm install -g @anthropic/claude-code
 ```
 
