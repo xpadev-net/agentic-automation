@@ -138,7 +138,7 @@ func TestCreateBranch_InvalidInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CreateBranch(tt.workDir, tt.branchName, tt.retryCount, "")
+			err := CreateBranch(tt.workDir, tt.branchName, tt.retryCount, "", "master")
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error but got nil")
@@ -177,7 +177,7 @@ func TestCreateBranch_NewBranch(t *testing.T) {
 
 	// Test creating new branch
 	branchName := "feature/test-branch"
-	err := CreateBranch(repoDir, branchName, 0, "")
+	err := CreateBranch(repoDir, branchName, 0, "", "master")
 	if err != nil {
 		t.Fatalf("CreateBranch failed: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestCreateBranch_ExistingLocalBranch(t *testing.T) {
 	}
 
 	// Test checking out existing branch (retryCount > 0)
-	err := CreateBranch(repoDir, branchName, 1, "")
+	err := CreateBranch(repoDir, branchName, 1, "", "master")
 	if err != nil {
 		t.Fatalf("CreateBranch failed: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestCreateBranch_ExistingRemoteBranch(t *testing.T) {
 	t.Skip("Skipping remote branch test - requires remote repository setup")
 }
 
-// TestCreateBranch_NonExistentBranch tests error when branch doesn't exist (retryCount > 0).
+// TestCreateBranch_NonExistentBranch tests that branch is created from baseBranch when it doesn't exist (retryCount > 0).
 func TestCreateBranch_NonExistentBranch(t *testing.T) {
 	repoDir, cleanup := setupTestRepo(t)
 	defer cleanup()
@@ -250,15 +250,67 @@ func TestCreateBranch_NonExistentBranch(t *testing.T) {
 	checkoutMasterCmd.Dir = repoDir
 	_ = checkoutMasterCmd.Run()
 
-	// Try to checkout non-existent branch (retryCount > 0)
-	branchName := "feature/non-existent"
-	err := CreateBranch(repoDir, branchName, 1, "")
-	if err == nil {
-		t.Errorf("expected error for non-existent branch, got nil")
-		return
+	// Add a commit to master
+	createTestFile(t, repoDir, "test.txt", "test content")
+	stageFile(t, repoDir, "test.txt")
+	commitCmd := exec.Command("git", "commit", "-m", "test commit")
+	commitCmd.Dir = repoDir
+	if err := commitCmd.Run(); err != nil {
+		t.Fatalf("Failed to commit: %v", err)
 	}
-	if !strings.Contains(err.Error(), "does not exist") {
-		t.Errorf("error message %q does not contain 'does not exist'", err.Error())
+
+	// Try to checkout non-existent branch (retryCount > 0)
+	// Should create it from master
+	branchName := "feature/non-existent"
+	err := CreateBranch(repoDir, branchName, 1, "", "master")
+	if err != nil {
+		t.Fatalf("CreateBranch should create branch from master when it doesn't exist, got error: %v", err)
+	}
+
+	// Verify branch was created and checked out
+	currentBranch, err := GetCurrentBranch(repoDir)
+	if err != nil {
+		t.Fatalf("Failed to get current branch: %v", err)
+	}
+	if currentBranch != branchName {
+		t.Errorf("expected current branch %q, got %q", branchName, currentBranch)
+	}
+}
+
+// TestCreateBranch_ExistingBranchName_NonExistent tests that existingBranchName is created from baseBranch when it doesn't exist.
+func TestCreateBranch_ExistingBranchName_NonExistent(t *testing.T) {
+	repoDir, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	// Create master branch
+	checkoutMasterCmd := exec.Command("git", "checkout", "-b", "master")
+	checkoutMasterCmd.Dir = repoDir
+	_ = checkoutMasterCmd.Run()
+
+	// Add a commit to master
+	createTestFile(t, repoDir, "test.txt", "test content")
+	stageFile(t, repoDir, "test.txt")
+	commitCmd := exec.Command("git", "commit", "-m", "test commit")
+	commitCmd.Dir = repoDir
+	if err := commitCmd.Run(); err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+
+	// Try to checkout non-existent branch via existingBranchName
+	// Should create it from master
+	existingBranchName := "feature/existing-branch-name"
+	err := CreateBranch(repoDir, "feature/other-branch", 0, existingBranchName, "master")
+	if err != nil {
+		t.Fatalf("CreateBranch should create branch from master when existingBranchName doesn't exist, got error: %v", err)
+	}
+
+	// Verify branch was created and checked out
+	currentBranch, err := GetCurrentBranch(repoDir)
+	if err != nil {
+		t.Fatalf("Failed to get current branch: %v", err)
+	}
+	if currentBranch != existingBranchName {
+		t.Errorf("expected current branch %q, got %q", existingBranchName, currentBranch)
 	}
 }
 

@@ -429,7 +429,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	} else {
 		fmt.Fprintf(os.Stderr, "Creating/checking out branch: %s\n", branchName)
 	}
-	if err := git.CreateBranch(envCfg.WorkDir, branchName, envCfg.RetryCount, existingBranchName); err != nil {
+	if err := git.CreateBranch(envCfg.WorkDir, branchName, envCfg.RetryCount, existingBranchName, baseBranch); err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Branch creation failed: %v", err),
 			"",

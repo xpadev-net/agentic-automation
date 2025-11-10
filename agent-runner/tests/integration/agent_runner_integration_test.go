@@ -393,7 +393,7 @@ func checkGitFunctionsImplemented(t *testing.T) bool {
 	}
 
 	// Check CreateBranch
-	err = git.CreateBranch("", "", 0, "")
+	err = git.CreateBranch("", "", 0, "", "master")
 	if err != nil && strings.Contains(err.Error(), "not implemented") {
 		t.Skip("git.CreateBranch not implemented yet")
 		return false
