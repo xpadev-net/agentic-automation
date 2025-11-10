@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -15,15 +16,27 @@ func CommitChanges(workDir, message string) (string, error) {
 	// Step 1: Stage all changes
 	addCmd := exec.Command("git", "add", ".")
 	addCmd.Dir = workDir
+	var addStderr bytes.Buffer
+	addCmd.Stderr = &addStderr
 	if err := addCmd.Run(); err != nil {
-		return "", fmt.Errorf("git add failed: %w", err)
+		errMsg := "git add failed"
+		if stderrStr := addStderr.String(); stderrStr != "" {
+			errMsg += ": " + strings.TrimSpace(stderrStr)
+		}
+		return "", fmt.Errorf("%s: %w", errMsg, err)
 	}
 
 	// Step 2: Commit
 	commitCmd := exec.Command("git", "commit", "-m", message)
 	commitCmd.Dir = workDir
+	var commitStderr bytes.Buffer
+	commitCmd.Stderr = &commitStderr
 	if err := commitCmd.Run(); err != nil {
-		return "", fmt.Errorf("git commit failed: %w", err)
+		errMsg := "git commit failed"
+		if stderrStr := commitStderr.String(); stderrStr != "" {
+			errMsg += ": " + strings.TrimSpace(stderrStr)
+		}
+		return "", fmt.Errorf("%s: %w", errMsg, err)
 	}
 
 	// Step 3: Get commit SHA
