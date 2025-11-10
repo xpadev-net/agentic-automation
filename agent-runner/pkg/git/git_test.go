@@ -411,3 +411,268 @@ func TestCreatePR_Integration(t *testing.T) {
 	// 	t.Errorf("invalid PR number: %d", prNumber)
 	// }
 }
+
+// TestIsBehind_InvalidInputs tests IsBehind with invalid inputs.
+func TestIsBehind_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		workDir   string
+		baseRef   string
+		headRef   string
+		expectErr bool
+		errorMsg  string
+	}{
+		{
+			name:      "empty workDir",
+			workDir:   "",
+			baseRef:   "origin/master",
+			headRef:   "feature/test",
+			expectErr: true,
+			errorMsg:  "work directory is required",
+		},
+		{
+			name:      "empty baseRef",
+			workDir:   "/tmp/test",
+			baseRef:   "",
+			headRef:   "feature/test",
+			expectErr: true,
+			errorMsg:  "base reference is required",
+		},
+		{
+			name:      "empty headRef",
+			workDir:   "/tmp/test",
+			baseRef:   "origin/master",
+			headRef:   "",
+			expectErr: true,
+			errorMsg:  "head reference is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			behind, err := IsBehind(tt.workDir, tt.baseRef, tt.headRef)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				_ = behind // Use the result to avoid unused variable warning
+			}
+		})
+	}
+}
+
+// TestMergeBase_InvalidInputs tests MergeBase with invalid inputs.
+func TestMergeBase_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		workDir   string
+		baseRef   string
+		headRef   string
+		expectErr bool
+		errorMsg  string
+	}{
+		{
+			name:      "empty workDir",
+			workDir:   "",
+			baseRef:   "origin/master",
+			headRef:   "feature/test",
+			expectErr: true,
+			errorMsg:  "work directory is required",
+		},
+		{
+			name:      "empty baseRef",
+			workDir:   "/tmp/test",
+			baseRef:   "",
+			headRef:   "feature/test",
+			expectErr: true,
+			errorMsg:  "base reference is required",
+		},
+		{
+			name:      "empty headRef",
+			workDir:   "/tmp/test",
+			baseRef:   "origin/master",
+			headRef:   "",
+			expectErr: true,
+			errorMsg:  "head reference is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mergeBase, err := MergeBase(tt.workDir, tt.baseRef, tt.headRef)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				_ = mergeBase // Use the result to avoid unused variable warning
+			}
+		})
+	}
+}
+
+// TestMergeBranch_InvalidInputs tests MergeBranch with invalid inputs.
+func TestMergeBranch_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		workDir   string
+		fromRef   string
+		expectErr bool
+		errorMsg  string
+	}{
+		{
+			name:      "empty workDir",
+			workDir:   "",
+			fromRef:   "origin/master",
+			expectErr: true,
+			errorMsg:  "work directory is required",
+		},
+		{
+			name:      "empty fromRef",
+			workDir:   "/tmp/test",
+			fromRef:   "",
+			expectErr: true,
+			errorMsg:  "from reference is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := MergeBranch(tt.workDir, tt.fromRef)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestListConflicts_InvalidInputs tests ListConflicts with invalid inputs.
+func TestListConflicts_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		workDir   string
+		expectErr bool
+		errorMsg  string
+	}{
+		{
+			name:      "empty workDir",
+			workDir:   "",
+			expectErr: true,
+			errorMsg:  "work directory is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conflicts, err := ListConflicts(tt.workDir)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				_ = conflicts // Use the result to avoid unused variable warning
+			}
+		})
+	}
+}
+
+// TestResolveConflictsWithAI_InvalidInputs tests ResolveConflictsWithAI with invalid inputs.
+func TestResolveConflictsWithAI_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		workDir   string
+		repo      string
+		issueID   int
+		agentType string
+		expectErr bool
+		errorMsg  string
+	}{
+		{
+			name:      "empty workDir",
+			workDir:   "",
+			repo:      "owner/repo",
+			issueID:   1,
+			agentType: "cursor-agent",
+			expectErr: true,
+			errorMsg:  "work directory is required",
+		},
+		{
+			name:      "empty repo",
+			workDir:   "/tmp/test",
+			repo:      "",
+			issueID:   1,
+			agentType: "cursor-agent",
+			expectErr: true,
+			errorMsg:  "repository is required",
+		},
+		{
+			name:      "invalid issueID",
+			workDir:   "/tmp/test",
+			repo:      "owner/repo",
+			issueID:   0,
+			agentType: "cursor-agent",
+			expectErr: true,
+			errorMsg:  "issue ID must be positive",
+		},
+		{
+			name:      "unsupported agent type",
+			workDir:   "/tmp/test",
+			repo:      "owner/repo",
+			issueID:   1,
+			agentType: "claude-code",
+			expectErr: true,
+			errorMsg:  "conflict resolution is only supported for cursor-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ResolveConflictsWithAI(tt.workDir, tt.repo, tt.issueID, tt.agentType)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}

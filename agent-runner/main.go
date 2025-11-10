@@ -281,6 +281,62 @@ type envConfig struct {
 	CursorAllowWrite bool
 }
 
+// syncBranchWithBase synchronizes the working branch with the base branch.
+// It checks if the branch is behind, merges if needed, and resolves conflicts with AI if any.
+// After resolving conflicts, it pushes the resolution commit.
+func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID int, agentType string, reporterClient *reporter.Client) error {
+	fmt.Fprintf(os.Stderr, "Syncing branch %s with base branch %s\n", branchName, baseBranch)
+
+	// Check if branch is behind base branch
+	baseRef := fmt.Sprintf("origin/%s", baseBranch)
+	headRef := branchName
+	behind, err := git.IsBehind(workDir, baseRef, headRef)
+	if err != nil {
+		return fmt.Errorf("failed to check if branch is behind: %w", err)
+	}
+
+	if !behind {
+		fmt.Fprintf(os.Stderr, "Branch %s is up-to-date with %s\n", branchName, baseBranch)
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "Branch %s is behind %s, merging...\n", branchName, baseBranch)
+
+	// Merge base branch into working branch
+	if err := git.MergeBranch(workDir, baseBranch); err != nil {
+		return fmt.Errorf("failed to merge %s into %s: %w", baseBranch, branchName, err)
+	}
+
+	// Check for conflicts
+	conflicts, err := git.ListConflicts(workDir)
+	if err != nil {
+		return fmt.Errorf("failed to list conflicts: %w", err)
+	}
+
+	if len(conflicts) > 0 {
+		fmt.Fprintf(os.Stderr, "Merge conflicts detected in %d files, resolving with AI...\n", len(conflicts))
+		// Resolve conflicts with AI (cursor-agent only)
+		if agentType != "cursor-agent" {
+			return fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s", agentType)
+		}
+		if err := git.ResolveConflictsWithAI(workDir, repo, issueID, agentType); err != nil {
+			return fmt.Errorf("failed to resolve conflicts with AI: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Conflicts resolved successfully\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "Merge completed without conflicts\n")
+	}
+
+	// Push merge/resolution commit
+	fmt.Fprintf(os.Stderr, "Pushing merge/resolution commit to remote\n")
+	if err := git.PushBranch(workDir, branchName, ""); err != nil {
+		return fmt.Errorf("failed to push merge/resolution commit: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Pushed merge/resolution commit successfully\n")
+
+	return nil
+}
+
 // Run executes the agent-runner workflow.
 // This function is exported for testing purposes.
 
@@ -579,6 +635,21 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		return fmt.Errorf("git commit failed: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
+
+	// 11.5. Post-Commit Sync: コミット後にデフォルトブランチとの同期を確認
+	fmt.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
+	if err := syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType, reporterClient); err != nil {
+		reportErr := reporterClient.ReportFailure(
+			fmt.Sprintf("Post-Commit Sync failed: %v", err),
+			"",
+			envCfg.AgentType,
+		)
+		if reportErr != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+		}
+		return fmt.Errorf("post-commit sync failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Post-Commit Sync completed successfully\n")
 
 	// 12. Push branch
 	fmt.Fprintf(os.Stderr, "Pushing branch %s to remote\n", branchName)
