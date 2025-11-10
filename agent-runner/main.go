@@ -553,7 +553,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	fmt.Fprintf(os.Stderr, "Built prompt (length: %d characters)\n", len(fullPrompt))
 
 	// 9. Run pre-hooks
-	if manifest != nil && len(manifest.Hooks.Pre) > 0 {
+	if executionMode == "plan_creation" {
+		fmt.Fprintf(os.Stderr, "Skipping pre-hooks in plan_creation mode\n")
+	} else if manifest != nil && len(manifest.Hooks.Pre) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d pre-hooks\n", len(manifest.Hooks.Pre))
 		if err := hooks.RunPreHooks(manifest.Hooks.Pre, envCfg.WorkDir); err != nil {
 			// Extract hook output if it's a HookError
@@ -665,7 +667,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		}
 
 		// Run validations
-		if manifest != nil && len(manifest.Validation) > 0 {
+		if executionMode == "plan_creation" {
+			fmt.Fprintf(os.Stderr, "Skipping validations in plan_creation mode\n")
+		} else if manifest != nil && len(manifest.Validation) > 0 {
 			fmt.Fprintf(os.Stderr, "Executing %d validations\n", len(manifest.Validation))
 			validationErr = hooks.RunValidations(manifest.Validation, envCfg.WorkDir)
 			if validationErr != nil {
@@ -726,120 +730,131 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 
 	// 11.5. Post-Commit Sync: コミット後にデフォルトブランチとの同期を確認
-	fmt.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
-	changed, err := syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType)
-	if err != nil {
-		reportErr := reporterClient.ReportFailure(
-			fmt.Sprintf("Post-Commit Sync failed: %v", err),
-			"",
-			envCfg.AgentType,
-		)
-		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+	var changed bool
+	if executionMode == "plan_creation" {
+		fmt.Fprintf(os.Stderr, "Skipping post-commit sync in plan_creation mode (no write operations)\n")
+		changed = false
+	} else {
+		fmt.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
+		var err error
+		changed, err = syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType)
+		if err != nil {
+			reportErr := reporterClient.ReportFailure(
+				fmt.Sprintf("Post-Commit Sync failed: %v", err),
+				"",
+				envCfg.AgentType,
+			)
+			if reportErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			}
+			return fmt.Errorf("post-commit sync failed: %w", err)
 		}
-		return fmt.Errorf("post-commit sync failed: %w", err)
+		fmt.Fprintf(os.Stderr, "Post-Commit Sync completed successfully\n")
 	}
-	fmt.Fprintf(os.Stderr, "Post-Commit Sync completed successfully\n")
 
 	// 11.6. Re-run validations if merge or conflict resolution was performed
 	// This ensures that any changes introduced by the merge or AI conflict resolution
 	// are validated before pushing to prevent breaking changes from being pushed.
 	if changed {
-		fmt.Fprintf(os.Stderr, "Merge or conflict resolution was performed, re-running validations\n")
-		if manifest != nil && len(manifest.Validation) > 0 {
-			// Retry loop for post-commit sync validation
-			var postSyncValidationErr error
-			for postSyncRetryCount := 0; postSyncRetryCount <= maxValidationRetries; postSyncRetryCount++ {
-				if postSyncRetryCount > 0 {
-					fmt.Fprintf(os.Stderr, "Post-commit sync validation retry attempt #%d/%d\n", postSyncRetryCount, maxValidationRetries)
-					// Build prompt with validation error for retry
-					validationErrMsg := postSyncValidationErr.Error()
-					switch executionMode {
-					case "plan_creation":
-						// Plan creation mode doesn't support validation retry
-						return fmt.Errorf("validation failed after post-commit sync in plan_creation mode: %w", postSyncValidationErr)
-					case "plan_execution":
-						fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
-					default:
-						fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
-					}
-					fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
-
-					// Execute agent again
-					if envCfg.AgentType == "cursor-agent" {
-						agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
-					} else {
-						agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
-					}
-					if err != nil {
-						reportErr := reporterClient.ReportFailure(
-							fmt.Sprintf("Agent execution failed during post-commit sync retry: %v", err),
-							agentOutput,
-							envCfg.AgentType,
-						)
-						if reportErr != nil {
-							fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
-						}
-						return fmt.Errorf("agent execution failed during post-commit sync retry: %w", err)
-					}
-					fmt.Fprintf(os.Stderr, "Agent execution completed during post-commit sync retry (output length: %d)\n", len(agentOutput))
-
-					// Commit changes after retry
-					retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
-					retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg)
-					if commitErr != nil {
-						reportErr := reporterClient.ReportFailure(
-							fmt.Sprintf("Failed to commit after post-commit sync retry: %v", commitErr),
-							"",
-							envCfg.AgentType,
-						)
-						if reportErr != nil {
-							fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
-						}
-						return fmt.Errorf("failed to commit after post-commit sync retry: %w", commitErr)
-					}
-					if retryCommitSHA != "" {
-						fmt.Fprintf(os.Stderr, "Committed changes after post-commit sync retry (SHA: %s)\n", retryCommitSHA)
-						commitSHA = retryCommitSHA
-						lastCommitMsg = retryCommitMsgValue
-					}
-				}
-
-				fmt.Fprintf(os.Stderr, "Executing %d validations after post-commit sync\n", len(manifest.Validation))
-				postSyncValidationErr = hooks.RunValidations(manifest.Validation, envCfg.WorkDir)
-				if postSyncValidationErr != nil {
-					fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
-					// Commit changes as checkpoint before retry
-					checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
-					checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
-					if commitErr != nil {
-						reportErr := reporterClient.ReportFailure(
-							fmt.Sprintf("Failed to commit checkpoint after post-commit sync: %v", commitErr),
-							"",
-							envCfg.AgentType,
-						)
-						if reportErr != nil {
-							fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
-						}
-						return fmt.Errorf("failed to commit checkpoint after post-commit sync: %w", commitErr)
-					}
-					if checkpointSHA != "" {
-						fmt.Fprintf(os.Stderr, "Committed checkpoint after post-commit sync (SHA: %s) before validation retry\n", checkpointSHA)
-					}
-
-					// Check if we've reached max retries
-					if postSyncRetryCount >= maxValidationRetries {
-						return fmt.Errorf("validation failed after post-commit sync after %d retries: %w", maxValidationRetries, postSyncValidationErr)
-					}
-					// Continue to next retry
-					continue
-				}
-				fmt.Fprintf(os.Stderr, "Executed %d validations after post-commit sync successfully\n", len(manifest.Validation))
-				// Validation passed, break out of retry loop
-				break
-			}
+		if executionMode == "plan_creation" {
+			fmt.Fprintf(os.Stderr, "Skipping post-commit sync validations in plan_creation mode\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "No validations to execute after post-commit sync\n")
+			fmt.Fprintf(os.Stderr, "Merge or conflict resolution was performed, re-running validations\n")
+			if manifest != nil && len(manifest.Validation) > 0 {
+				// Retry loop for post-commit sync validation
+				var postSyncValidationErr error
+				for postSyncRetryCount := 0; postSyncRetryCount <= maxValidationRetries; postSyncRetryCount++ {
+					if postSyncRetryCount > 0 {
+						fmt.Fprintf(os.Stderr, "Post-commit sync validation retry attempt #%d/%d\n", postSyncRetryCount, maxValidationRetries)
+						// Build prompt with validation error for retry
+						validationErrMsg := postSyncValidationErr.Error()
+						switch executionMode {
+						case "plan_creation":
+							// Plan creation mode doesn't support validation retry
+							return fmt.Errorf("validation failed after post-commit sync in plan_creation mode: %w", postSyncValidationErr)
+						case "plan_execution":
+							fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
+						default:
+							fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
+						}
+						fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
+
+						// Execute agent again
+						if envCfg.AgentType == "cursor-agent" {
+							agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+						} else {
+							agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
+						}
+						if err != nil {
+							reportErr := reporterClient.ReportFailure(
+								fmt.Sprintf("Agent execution failed during post-commit sync retry: %v", err),
+								agentOutput,
+								envCfg.AgentType,
+							)
+							if reportErr != nil {
+								fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+							}
+							return fmt.Errorf("agent execution failed during post-commit sync retry: %w", err)
+						}
+						fmt.Fprintf(os.Stderr, "Agent execution completed during post-commit sync retry (output length: %d)\n", len(agentOutput))
+
+						// Commit changes after retry
+						retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
+						retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg)
+						if commitErr != nil {
+							reportErr := reporterClient.ReportFailure(
+								fmt.Sprintf("Failed to commit after post-commit sync retry: %v", commitErr),
+								"",
+								envCfg.AgentType,
+							)
+							if reportErr != nil {
+								fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+							}
+							return fmt.Errorf("failed to commit after post-commit sync retry: %w", commitErr)
+						}
+						if retryCommitSHA != "" {
+							fmt.Fprintf(os.Stderr, "Committed changes after post-commit sync retry (SHA: %s)\n", retryCommitSHA)
+							commitSHA = retryCommitSHA
+							lastCommitMsg = retryCommitMsgValue
+						}
+					}
+
+					fmt.Fprintf(os.Stderr, "Executing %d validations after post-commit sync\n", len(manifest.Validation))
+					postSyncValidationErr = hooks.RunValidations(manifest.Validation, envCfg.WorkDir)
+					if postSyncValidationErr != nil {
+						fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
+						// Commit changes as checkpoint before retry
+						checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
+						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
+						if commitErr != nil {
+							reportErr := reporterClient.ReportFailure(
+								fmt.Sprintf("Failed to commit checkpoint after post-commit sync: %v", commitErr),
+								"",
+								envCfg.AgentType,
+							)
+							if reportErr != nil {
+								fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+							}
+							return fmt.Errorf("failed to commit checkpoint after post-commit sync: %w", commitErr)
+						}
+						if checkpointSHA != "" {
+							fmt.Fprintf(os.Stderr, "Committed checkpoint after post-commit sync (SHA: %s) before validation retry\n", checkpointSHA)
+						}
+
+						// Check if we've reached max retries
+						if postSyncRetryCount >= maxValidationRetries {
+							return fmt.Errorf("validation failed after post-commit sync after %d retries: %w", maxValidationRetries, postSyncValidationErr)
+						}
+						// Continue to next retry
+						continue
+					}
+					fmt.Fprintf(os.Stderr, "Executed %d validations after post-commit sync successfully\n", len(manifest.Validation))
+					// Validation passed, break out of retry loop
+					break
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "No validations to execute after post-commit sync\n")
+			}
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "No merge or conflict resolution was performed, skipping re-validation\n")
@@ -941,7 +956,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	fmt.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
 
 	// 16. Run post-hooks
-	if manifest != nil && len(manifest.Hooks.Post) > 0 {
+	if executionMode == "plan_creation" {
+		fmt.Fprintf(os.Stderr, "Skipping post-hooks in plan_creation mode\n")
+	} else if manifest != nil && len(manifest.Hooks.Post) > 0 {
 		fmt.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
 		if err := hooks.RunPostHooks(manifest.Hooks.Post, envCfg.WorkDir); err != nil {
 			// Post-hook failures are logged as warnings and do not abort execution (PR already created)
