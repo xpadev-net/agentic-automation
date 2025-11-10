@@ -281,6 +281,40 @@ type envConfig struct {
 	CursorAllowWrite bool
 }
 
+// commitChangesIfNeeded commits changes if there are any file changes.
+// Returns the commit SHA, commit message if a commit was made, empty strings if no changes, and error if commit failed.
+func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string) (string, string, error) {
+	// Check for file changes
+	hasChanges, err := git.HasChanges(workDir)
+	if err != nil {
+		return "", "", fmt.Errorf("file change check failed: %w", err)
+	}
+	if !hasChanges {
+		fmt.Fprintf(os.Stderr, "No file changes to commit\n")
+		return "", "", nil
+	}
+
+	// Ensure git commit identity
+	if err := git.EnsureCommitIdentity(workDir, repo, issueID); err != nil {
+		return "", "", fmt.Errorf("git identity setup failed: %w", err)
+	}
+
+	// Build commit message
+	commitMsg := commitMsgPrefix
+	if commitMsg == "" {
+		commitMsg = fmt.Sprintf("feat: implement issue #%d", issueID)
+	}
+
+	// Commit changes
+	fmt.Fprintf(os.Stderr, "Committing changes: %s\n", commitMsg)
+	commitSHA, err := git.CommitChanges(workDir, commitMsg)
+	if err != nil {
+		return "", "", fmt.Errorf("git commit failed: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
+	return commitSHA, commitMsg, nil
+}
+
 // syncBranchWithBase synchronizes the working branch with the base branch.
 // It checks if the branch is behind, merges if needed, and resolves conflicts with AI if any.
 // Note: This function does NOT push changes. The caller is responsible for pushing after validations succeed.
@@ -543,104 +577,153 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		fmt.Fprintf(os.Stderr, "No pre-hooks to execute\n")
 	}
 
-	// 10. Execute agent
-	fmt.Fprintf(os.Stderr, "Agent execution started\n")
+	// 10. Execute agent with validation retry loop
+	const maxValidationRetries = 10
 	executor := agent.NewExecutor(envCfg.AgentType)
 	var agentOutput string
-	if envCfg.AgentType == "cursor-agent" {
-		agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
-	} else {
-		agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
-	}
-	if err != nil {
-		reportErr := reporterClient.ReportFailure(
-			fmt.Sprintf("Agent execution failed: %v", err),
-			agentOutput,
-			envCfg.AgentType,
-		)
-		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
-		}
-		return fmt.Errorf("agent execution failed: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+	var commitSHA string
+	var lastCommitMsg string
+	var validationErr error
 
-	// 11. Plan creationモードではここで終了処理に移行する
-	if executionMode == "plan_creation" {
-		if err := handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput); err != nil {
-			return err
+	for retryCount := 0; retryCount <= maxValidationRetries; retryCount++ {
+		if retryCount > 0 {
+			fmt.Fprintf(os.Stderr, "Validation retry attempt #%d/%d\n", retryCount, maxValidationRetries)
+			// Build prompt with validation error for retry
+			validationErrMsg := validationErr.Error()
+			switch executionMode {
+			case "plan_creation":
+				// Plan creation mode doesn't support validation retry
+				return fmt.Errorf("validation failed in plan_creation mode: %w", validationErr)
+			case "plan_execution":
+				fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
+			default:
+				fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
+			}
+			fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
+		} else {
+			fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 		}
-		return nil
-	}
 
-	// 11. Check for file changes
-	fmt.Fprintf(os.Stderr, "Checking for file changes\n")
-	hasChanges, err := git.HasChanges(envCfg.WorkDir)
-	if err != nil {
-		reportErr := reporterClient.ReportFailure(
-			fmt.Sprintf("Git diff check failed: %v", err),
-			"",
-			envCfg.AgentType,
-		)
-		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+		// Execute agent
+		if envCfg.AgentType == "cursor-agent" {
+			agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+		} else {
+			agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
 		}
-		return fmt.Errorf("file change check failed: %w", err)
-	}
-	if !hasChanges {
-		reportErr := reporterClient.ReportFailure(
-			"No file changes detected after agent execution",
-			agentOutput,
-			envCfg.AgentType,
-		)
-		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+		if err != nil {
+			reportErr := reporterClient.ReportFailure(
+				fmt.Sprintf("Agent execution failed: %v", err),
+				agentOutput,
+				envCfg.AgentType,
+			)
+			if reportErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			}
+			return fmt.Errorf("agent execution failed: %w", err)
 		}
-		return fmt.Errorf("no file changes detected after agent execution")
-	}
-	fmt.Fprintf(os.Stderr, "File changes detected\n")
+		fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
 
-	// 12. Run validations
-	if manifest != nil && len(manifest.Validation) > 0 {
-		fmt.Fprintf(os.Stderr, "Executing %d validations\n", len(manifest.Validation))
-		if err := hooks.RunValidations(manifest.Validation, envCfg.WorkDir); err != nil {
-			// Validation failures should NOT report to Operator API
-			// The retry orchestrator will handle retries based on Pod exit code
-			return fmt.Errorf("validation failed: %w", err)
+		// Plan creationモードではここで終了処理に移行する
+		if executionMode == "plan_creation" {
+			if err := handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput); err != nil {
+				return err
+			}
+			return nil
 		}
-		fmt.Fprintf(os.Stderr, "Executed %d validations\n", len(manifest.Validation))
-	} else {
-		fmt.Fprintf(os.Stderr, "No validations to execute\n")
-	}
 
-	// 11. Commit changes
-	// 10.5 Ensure git commit identity (user.name/email)
-	if err := git.EnsureCommitIdentity(envCfg.WorkDir, repo, issueID); err != nil {
-		reportErr := reporterClient.ReportFailure(
-			fmt.Sprintf("Git identity setup failed: %v", err),
-			"",
-			envCfg.AgentType,
-		)
-		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+		// Check for file changes
+		fmt.Fprintf(os.Stderr, "Checking for file changes\n")
+		hasChanges, err := git.HasChanges(envCfg.WorkDir)
+		if err != nil {
+			reportErr := reporterClient.ReportFailure(
+				fmt.Sprintf("Git diff check failed: %v", err),
+				"",
+				envCfg.AgentType,
+			)
+			if reportErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			}
+			return fmt.Errorf("file change check failed: %w", err)
 		}
-		return fmt.Errorf("git identity setup failed: %w", err)
-	}
-	commitMsg := fmt.Sprintf("feat: implement issue #%d", issueID)
-	fmt.Fprintf(os.Stderr, "Committing changes\n")
-	commitSHA, err := git.CommitChanges(envCfg.WorkDir, commitMsg)
-	if err != nil {
-		reportErr := reporterClient.ReportFailure(
-			fmt.Sprintf("Git commit failed: %v", err),
-			"",
-			envCfg.AgentType,
-		)
-		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+		if !hasChanges {
+			if retryCount == 0 {
+				// Only report failure on initial attempt
+				reportErr := reporterClient.ReportFailure(
+					"No file changes detected after agent execution",
+					agentOutput,
+					envCfg.AgentType,
+				)
+				if reportErr != nil {
+					fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				}
+				return fmt.Errorf("no file changes detected after agent execution")
+			}
+			// On retry, if no changes, continue to validation check
+			fmt.Fprintf(os.Stderr, "No file changes detected after retry, checking validation\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "File changes detected\n")
 		}
-		return fmt.Errorf("git commit failed: %w", err)
+
+		// Run validations
+		if manifest != nil && len(manifest.Validation) > 0 {
+			fmt.Fprintf(os.Stderr, "Executing %d validations\n", len(manifest.Validation))
+			validationErr = hooks.RunValidations(manifest.Validation, envCfg.WorkDir)
+			if validationErr != nil {
+				fmt.Fprintf(os.Stderr, "Validation failed: %v\n", validationErr)
+				// Commit changes as checkpoint before retry
+				checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (validation retry checkpoint #%d)", issueID, retryCount)
+				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
+				if commitErr != nil {
+					reportErr := reporterClient.ReportFailure(
+						fmt.Sprintf("Failed to commit checkpoint: %v", commitErr),
+						"",
+						envCfg.AgentType,
+					)
+					if reportErr != nil {
+						fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+					}
+					return fmt.Errorf("failed to commit checkpoint: %w", commitErr)
+				}
+				if checkpointSHA != "" {
+					fmt.Fprintf(os.Stderr, "Committed checkpoint (SHA: %s) before validation retry\n", checkpointSHA)
+				}
+
+				// Check if we've reached max retries
+				if retryCount >= maxValidationRetries {
+					return fmt.Errorf("validation failed after %d retries: %w", maxValidationRetries, validationErr)
+				}
+				// Continue to next retry
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "Executed %d validations successfully\n", len(manifest.Validation))
+		} else {
+			fmt.Fprintf(os.Stderr, "No validations to execute\n")
+		}
+
+		// Validation passed, commit changes
+		commitMsgPrefix := ""
+		if retryCount > 0 {
+			commitMsgPrefix = fmt.Sprintf("feat: implement issue #%d (validation retry #%d)", issueID, retryCount)
+		}
+		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix)
+		if err != nil {
+			reportErr := reporterClient.ReportFailure(
+				fmt.Sprintf("Git commit failed: %v", err),
+				"",
+				envCfg.AgentType,
+			)
+			if reportErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			}
+			return fmt.Errorf("git commit failed: %w", err)
+		}
+		if commitSHA != "" {
+			fmt.Fprintf(os.Stderr, "Committed changes after validation success (SHA: %s)\n", commitSHA)
+		}
+
+		// Validation passed, break out of retry loop
+		break
 	}
-	fmt.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
 
 	// 11.5. Post-Commit Sync: コミット後にデフォルトブランチとの同期を確認
 	fmt.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
@@ -664,13 +747,97 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	if changed {
 		fmt.Fprintf(os.Stderr, "Merge or conflict resolution was performed, re-running validations\n")
 		if manifest != nil && len(manifest.Validation) > 0 {
-			fmt.Fprintf(os.Stderr, "Executing %d validations after post-commit sync\n", len(manifest.Validation))
-			if err := hooks.RunValidations(manifest.Validation, envCfg.WorkDir); err != nil {
-				// Validation failures should NOT report to Operator API
-				// The retry orchestrator will handle retries based on Pod exit code
-				return fmt.Errorf("validation failed after post-commit sync: %w", err)
+			// Retry loop for post-commit sync validation
+			var postSyncValidationErr error
+			for postSyncRetryCount := 0; postSyncRetryCount <= maxValidationRetries; postSyncRetryCount++ {
+				if postSyncRetryCount > 0 {
+					fmt.Fprintf(os.Stderr, "Post-commit sync validation retry attempt #%d/%d\n", postSyncRetryCount, maxValidationRetries)
+					// Build prompt with validation error for retry
+					validationErrMsg := postSyncValidationErr.Error()
+					switch executionMode {
+					case "plan_creation":
+						// Plan creation mode doesn't support validation retry
+						return fmt.Errorf("validation failed after post-commit sync in plan_creation mode: %w", postSyncValidationErr)
+					case "plan_execution":
+						fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
+					default:
+						fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
+					}
+					fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
+
+					// Execute agent again
+					if envCfg.AgentType == "cursor-agent" {
+						agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+					} else {
+						agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
+					}
+					if err != nil {
+						reportErr := reporterClient.ReportFailure(
+							fmt.Sprintf("Agent execution failed during post-commit sync retry: %v", err),
+							agentOutput,
+							envCfg.AgentType,
+						)
+						if reportErr != nil {
+							fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+						}
+						return fmt.Errorf("agent execution failed during post-commit sync retry: %w", err)
+					}
+					fmt.Fprintf(os.Stderr, "Agent execution completed during post-commit sync retry (output length: %d)\n", len(agentOutput))
+
+					// Commit changes after retry
+					retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
+					retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg)
+					if commitErr != nil {
+						reportErr := reporterClient.ReportFailure(
+							fmt.Sprintf("Failed to commit after post-commit sync retry: %v", commitErr),
+							"",
+							envCfg.AgentType,
+						)
+						if reportErr != nil {
+							fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+						}
+						return fmt.Errorf("failed to commit after post-commit sync retry: %w", commitErr)
+					}
+					if retryCommitSHA != "" {
+						fmt.Fprintf(os.Stderr, "Committed changes after post-commit sync retry (SHA: %s)\n", retryCommitSHA)
+						commitSHA = retryCommitSHA
+						lastCommitMsg = retryCommitMsgValue
+					}
+				}
+
+				fmt.Fprintf(os.Stderr, "Executing %d validations after post-commit sync\n", len(manifest.Validation))
+				postSyncValidationErr = hooks.RunValidations(manifest.Validation, envCfg.WorkDir)
+				if postSyncValidationErr != nil {
+					fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
+					// Commit changes as checkpoint before retry
+					checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
+					checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
+					if commitErr != nil {
+						reportErr := reporterClient.ReportFailure(
+							fmt.Sprintf("Failed to commit checkpoint after post-commit sync: %v", commitErr),
+							"",
+							envCfg.AgentType,
+						)
+						if reportErr != nil {
+							fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+						}
+						return fmt.Errorf("failed to commit checkpoint after post-commit sync: %w", commitErr)
+					}
+					if checkpointSHA != "" {
+						fmt.Fprintf(os.Stderr, "Committed checkpoint after post-commit sync (SHA: %s) before validation retry\n", checkpointSHA)
+					}
+
+					// Check if we've reached max retries
+					if postSyncRetryCount >= maxValidationRetries {
+						return fmt.Errorf("validation failed after post-commit sync after %d retries: %w", maxValidationRetries, postSyncValidationErr)
+					}
+					// Continue to next retry
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "Executed %d validations after post-commit sync successfully\n", len(manifest.Validation))
+				// Validation passed, break out of retry loop
+				break
 			}
-			fmt.Fprintf(os.Stderr, "Executed %d validations after post-commit sync\n", len(manifest.Validation))
 		} else {
 			fmt.Fprintf(os.Stderr, "No validations to execute after post-commit sync\n")
 		}
@@ -712,7 +879,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	var prTitle, prBody string
 	if envCfg.AgentType == "cursor-agent" {
 		fmt.Fprintf(os.Stderr, "Generating PR title and body\n")
-		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsg, envCfg.AgentType, envCfg.CursorModel, baseBranch)
+		// Use lastCommitMsg if available, otherwise use default commit message
+		commitMsgForPR := lastCommitMsg
+		if commitMsgForPR == "" {
+			commitMsgForPR = fmt.Sprintf("feat: implement issue #%d", issueID)
+		}
+		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsgForPR, envCfg.AgentType, envCfg.CursorModel, baseBranch)
 		if err != nil {
 			// Log warning but continue with default title/body
 			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
