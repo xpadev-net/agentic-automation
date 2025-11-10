@@ -283,7 +283,7 @@ type envConfig struct {
 
 // syncBranchWithBase synchronizes the working branch with the base branch.
 // It checks if the branch is behind, merges if needed, and resolves conflicts with AI if any.
-// After resolving conflicts, it pushes the resolution commit.
+// Note: This function does NOT push changes. The caller is responsible for pushing after validations succeed.
 // Returns (changed, error) where changed indicates if any merge or conflict resolution was performed.
 func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID int, agentType string, reporterClient *reporter.Client) (bool, error) {
 	fmt.Fprintf(os.Stderr, "Syncing branch %s with base branch %s\n", branchName, baseBranch)
@@ -338,14 +338,8 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 		fmt.Fprintf(os.Stderr, "Merge completed without conflicts\n")
 	}
 
-	// Push merge/resolution commit
-	fmt.Fprintf(os.Stderr, "Pushing merge/resolution commit to remote\n")
-	if err := git.PushBranch(workDir, branchName, ""); err != nil {
-		return false, fmt.Errorf("failed to push merge/resolution commit: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Pushed merge/resolution commit successfully\n")
-
 	// Return true to indicate that merge or conflict resolution was performed
+	// Note: Push is handled by the caller after validations succeed
 	return true, nil
 }
 
