@@ -1085,11 +1085,27 @@ MERGE_HEAD (マージ元ブランチ): %s
 
 	// Stage only conflict files to avoid staging untracked files
 	// (e.g., coverage reports, build outputs from validations)
+	// Handle both file modifications and deletions (delete/modify or delete/delete conflicts)
 	for _, file := range conflictFiles {
-		addCmd := exec.Command("git", "add", file)
-		addCmd.Dir = workDir
-		if err := addCmd.Run(); err != nil {
-			return fmt.Errorf("git add failed for file %s: %w", file, err)
+		filePath := fmt.Sprintf("%s/%s", workDir, file)
+		_, err := os.Stat(filePath)
+		if err == nil {
+			// File exists, stage it with git add
+			addCmd := exec.Command("git", "add", file)
+			addCmd.Dir = workDir
+			if err := addCmd.Run(); err != nil {
+				return fmt.Errorf("git add failed for file %s: %w", file, err)
+			}
+		} else if os.IsNotExist(err) {
+			// File was deleted, stage the deletion with git rm
+			rmCmd := exec.Command("git", "rm", file)
+			rmCmd.Dir = workDir
+			if err := rmCmd.Run(); err != nil {
+				return fmt.Errorf("git rm failed for file %s: %w", file, err)
+			}
+		} else {
+			// Other error (e.g., permission denied)
+			return fmt.Errorf("failed to check file status for %s: %w", file, err)
 		}
 	}
 
