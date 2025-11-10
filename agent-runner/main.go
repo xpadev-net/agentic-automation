@@ -317,9 +317,19 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 		fmt.Fprintf(os.Stderr, "Merge conflicts detected in %d files, resolving with AI...\n", len(conflicts))
 		// Resolve conflicts with AI (cursor-agent only)
 		if agentType != "cursor-agent" {
+			// Abort merge before returning error to clean up workspace
+			fmt.Fprintf(os.Stderr, "Conflict resolution requires cursor-agent, but agent type is %s. Aborting merge...\n", agentType)
+			if abortErr := git.AbortMerge(workDir); abortErr != nil {
+				return fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s; failed to abort merge: %w", agentType, abortErr)
+			}
 			return fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s", agentType)
 		}
 		if err := git.ResolveConflictsWithAI(workDir, repo, issueID, agentType); err != nil {
+			// If conflict resolution fails, abort merge to clean up workspace
+			fmt.Fprintf(os.Stderr, "Failed to resolve conflicts with AI. Aborting merge...\n")
+			if abortErr := git.AbortMerge(workDir); abortErr != nil {
+				return fmt.Errorf("failed to resolve conflicts with AI: %w; failed to abort merge: %w", err, abortErr)
+			}
 			return fmt.Errorf("failed to resolve conflicts with AI: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Conflicts resolved successfully\n")

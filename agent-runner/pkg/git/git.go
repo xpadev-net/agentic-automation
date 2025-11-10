@@ -873,6 +873,33 @@ func ListConflicts(workDir string) ([]string, error) {
 	return conflicts, nil
 }
 
+// AbortMerge aborts an ongoing merge operation.
+// It runs `git merge --abort` to clean up the merge state.
+// If not in a merge state, it returns nil (idempotent).
+func AbortMerge(workDir string) error {
+	// Validate inputs
+	if workDir == "" {
+		return fmt.Errorf("work directory is required")
+	}
+
+	// Check if we're in a merge state
+	mergeHeadPath := fmt.Sprintf("%s/.git/MERGE_HEAD", workDir)
+	if _, err := os.Stat(mergeHeadPath); os.IsNotExist(err) {
+		// Not in merge state, nothing to abort
+		return nil
+	}
+
+	// Execute git merge --abort
+	abortCmd := exec.Command("git", "merge", "--abort")
+	abortCmd.Dir = workDir
+	output, err := abortCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git merge --abort failed: %w, output: %s", err, string(output))
+	}
+
+	return nil
+}
+
 // ResolveConflictsWithAI resolves merge conflicts using AI agent (cursor-agent).
 // It gets conflict files, builds a prompt with HEAD and MERGE_HEAD content,
 // executes cursor-agent to resolve conflicts, and commits the resolution.

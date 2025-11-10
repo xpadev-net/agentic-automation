@@ -608,6 +608,42 @@ func TestListConflicts_InvalidInputs(t *testing.T) {
 	}
 }
 
+// TestAbortMerge_InvalidInputs tests AbortMerge with invalid inputs.
+func TestAbortMerge_InvalidInputs(t *testing.T) {
+	tests := []struct {
+		name      string
+		workDir   string
+		expectErr bool
+		errorMsg  string
+	}{
+		{
+			name:      "empty workDir",
+			workDir:   "",
+			expectErr: true,
+			errorMsg:  "work directory is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := AbortMerge(tt.workDir)
+			if tt.expectErr {
+				if err == nil {
+					t.Errorf("expected error but got nil")
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("expected error message to contain %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
 // TestResolveConflictsWithAI_InvalidInputs tests ResolveConflictsWithAI with invalid inputs.
 func TestResolveConflictsWithAI_InvalidInputs(t *testing.T) {
 	tests := []struct {
