@@ -1007,20 +1007,22 @@ MERGE_HEAD (マージ元ブランチ): %s
 		return fmt.Errorf("cursor-agent execution failed: %w\nOutput: %s", err, output)
 	}
 
-	// Verify conflicts are resolved
+	// Stage all changes before verifying conflicts
+	// git diff --diff-filter=U only reports conflicts in unstaged files,
+	// so we need to stage files first to get accurate conflict detection
+	addCmd := exec.Command("git", "add", "-A")
+	addCmd.Dir = workDir
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// Verify conflicts are resolved (after staging)
 	remainingConflicts, err := ListConflicts(workDir)
 	if err != nil {
 		return fmt.Errorf("failed to verify conflict resolution: %w", err)
 	}
 	if len(remainingConflicts) > 0 {
 		return fmt.Errorf("conflicts not fully resolved, remaining files: %v\nAgent output: %s", remainingConflicts, output)
-	}
-
-	// Stage all changes
-	addCmd := exec.Command("git", "add", "-A")
-	addCmd.Dir = workDir
-	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add failed: %w", err)
 	}
 
 	// Commit the resolution
