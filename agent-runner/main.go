@@ -16,6 +16,7 @@ import (
 	"agent-runner/pkg/git"
 	"agent-runner/pkg/hooks"
 	"agent-runner/pkg/parser"
+	"agent-runner/pkg/prompts"
 	"agent-runner/pkg/reporter"
 	"agent-runner/pkg/storage"
 	"agent-runner/pkg/version"
@@ -552,12 +553,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	var fullPrompt string
 	switch executionMode {
 	case "plan_creation":
-		fullPrompt = context.BuildPlanCreationPrompt(reviewContent)
+		fullPrompt = prompts.BuildPlanCreationPrompt(reviewContent)
 	case "plan_execution":
 		fmt.Fprintf(os.Stderr, "  Plan content length for prompt: %d characters\n", len(planContent))
-		fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent)
+		fullPrompt = prompts.BuildPlanExecutionPrompt(prompt, planContent)
 	default:
-		fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs)
+		fullPrompt = prompts.BuildTaskPrompt(prompt, previousAttempts, ciLogs)
 	}
 	fmt.Fprintf(os.Stderr, "Built prompt (length: %d characters)\n", len(fullPrompt))
 
@@ -664,9 +665,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			validationErrMsg := validationErr.Error()
 			switch executionMode {
 			case "plan_execution":
-				fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
+				fullPrompt = prompts.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
 			default:
-				fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
+				fullPrompt = prompts.BuildTaskPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
 			}
 			fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 		} else {
@@ -832,9 +833,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 							// Plan creation mode doesn't support validation retry
 							return fmt.Errorf("validation failed after post-commit sync in plan_creation mode: %w", postSyncValidationErr)
 						case "plan_execution":
-							fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
+							fullPrompt = prompts.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
 						default:
-							fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
+							fullPrompt = prompts.BuildTaskPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
 						}
 						fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 
