@@ -186,13 +186,13 @@ func ParseIssueContext(issueID int, repo, prompt, previousAttemptsJSON, ciLogs s
 // If rejectionReason is provided (non-empty), it adds a section about the previous rejection.
 func BuildPlanCreationPrompt(reviewFeedback string, rejectionReason ...string) string {
 	var result strings.Builder
-	
+
 	result.WriteString(`以下のレビューフィードバックを分析し、対応プランを作成してください。
 
 レビューフィードバック:
 `)
 	result.WriteString(reviewFeedback)
-	
+
 	// Add rejection reason section if provided
 	if len(rejectionReason) > 0 && strings.TrimSpace(rejectionReason[0]) != "" {
 		result.WriteString(`
@@ -204,7 +204,7 @@ func BuildPlanCreationPrompt(reviewFeedback string, rejectionReason ...string) s
 
 上記の理由を踏まえて、改善されたプランを作成してください。`)
 	}
-	
+
 	result.WriteString(`
 
 ## 必須要件 (MUST)
@@ -227,7 +227,7 @@ func BuildPlanCreationPrompt(reviewFeedback string, rejectionReason ...string) s
 
 - タグの外側に説明文やその他の文章が含まれていても構いません。タグ内の内容が抽出されます。
 - このモードではプランの作成のみを行い、実装は行いません。`)
-	
+
 	return result.String()
 }
 
