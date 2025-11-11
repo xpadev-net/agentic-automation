@@ -14,33 +14,40 @@ func BuildTaskPrompt(prompt, previousAttempts, ciLogs string, validationError ..
 	var result strings.Builder
 
 	// Original prompt
+	result.WriteString("<task>\n")
 	result.WriteString(prompt)
+	result.WriteString("\n</task>")
 
 	// Previous attempts
 	if previousAttempts != "" {
 		var attempts []context.PreviousAttempt
 		if err := json.Unmarshal([]byte(previousAttempts), &attempts); err == nil && len(attempts) > 0 {
-			result.WriteString("\n\nPrevious attempts:\n")
+			result.WriteString("\n\n<previous_attempts>\n")
 			for _, attempt := range attempts {
 				result.WriteString(fmt.Sprintf("- Retry #%d: %s\n", attempt.RetryCount, attempt.Error))
 				if attempt.CILogs != "" {
 					result.WriteString(fmt.Sprintf("  CI Logs: %s\n", attempt.CILogs))
 				}
 			}
+			result.WriteString("</previous_attempts>")
 		}
 	}
 
 	// CI logs (if not already included in previous attempts)
 	if ciLogs != "" {
-		result.WriteString("\nCI failures:\n")
+		result.WriteString("\n\n<ci_logs>\n")
 		result.WriteString(ciLogs)
+		result.WriteString("\n</ci_logs>")
 	}
 
 	// Validation errors
 	if len(validationError) > 0 && validationError[0] != "" {
-		result.WriteString("\n\nValidation failures:\n")
+		result.WriteString("\n\n<validation_errors>\n")
 		result.WriteString(validationError[0])
-		result.WriteString("\n\nPlease fix the validation errors above and ensure all validations pass.")
+		result.WriteString("\n</validation_errors>")
+		result.WriteString("\n\n上記の情報を基に、タスクを実行してください。バリデーションエラーがある場合は、それらを修正してから続行してください。")
+	} else {
+		result.WriteString("\n\n上記の情報を基に、タスクを実行してください。")
 	}
 
 	return result.String()
@@ -50,8 +57,9 @@ func BuildTaskPrompt(prompt, previousAttempts, ciLogs string, validationError ..
 func BuildPlanCreationPrompt(reviewFeedback string) string {
 	return fmt.Sprintf(`以下のレビューフィードバックを分析し、対応プランを作成してください。
 
-レビューフィードバック:
+<review_feedback>
 %s
+</review_feedback>
 
 ## 必須要件 (MUST)
 
@@ -80,23 +88,27 @@ func BuildPlanExecutionPrompt(originalPrompt, planContent string, validationErro
 	var result strings.Builder
 	result.WriteString(`以下のプランに従って実装を行ってください。
 
-元のタスク:
+<original_task>
 `)
 	result.WriteString(originalPrompt)
 	result.WriteString(`
+</original_task>
 
-実行すべきプラン:
+<plan>
 `)
 	result.WriteString(planContent)
+	result.WriteString(`
+</plan>`)
 
 	// Validation errors
 	if len(validationError) > 0 && validationError[0] != "" {
 		result.WriteString(`
 
-Validation failures:
+<validation_errors>
 `)
 		result.WriteString(validationError[0])
 		result.WriteString(`
+</validation_errors>
 
 上記のvalidationエラーを修正し、プランに従って実装を完了してください。`)
 	} else {
@@ -117,21 +129,28 @@ func BuildPRTitleGenerationPrompt(issueNumber int, issuePrompt, changedFilesList
 func BuildConflictResolutionPrompt(issueID int, conflictFilesList, headSHA, mergeHeadSHA, conflictDiffs string) string {
 	return fmt.Sprintf(`マージコンフリクトを解消してください。
 
-Issue #%d の作業中にマージコンフリクトが発生しました。
+<issue>
+<number>%d</number>
+</issue>
 
-コンフリクトファイル:
+<conflict_files>
 %s
+</conflict_files>
 
-HEAD (現在のブランチ): %s
-MERGE_HEAD (マージ元ブランチ): %s
+<git_info>
+<head>%s</head>
+<merge_head>%s</merge_head>
+</git_info>
+
+<conflict_diffs>
+%s
+</conflict_diffs>
 
 各ファイルについて、HEAD（現在のブランチ）とMERGE_HEAD（マージ元ブランチ）の変更を統合し、適切に解消してください。
 - ビルドを壊さない修正を心がけてください
 - テストが通過するようにしてください
 - 両方の変更を可能な限り保持してください
 - コンフリクトマーカー（<<<<<<<, =======, >>>>>>>）を削除し、解消済みのコードに置き換えてください
-
-%s
 
 すべてのコンフリクトファイルを解消し、コンフリクトマーカーを完全に削除してください。`, issueID, conflictFilesList, headSHA, mergeHeadSHA, conflictDiffs)
 }
