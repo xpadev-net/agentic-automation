@@ -148,22 +148,18 @@ func readContentFromEnvOrFile(envKey, fileKey string) (string, error) {
 	return "", nil
 }
 
-// handlePlanCreationResult processes the plan creation result.
-// Returns (error, rejected bool, reason string).
-// If rejected is true, the reason contains the rejection reason.
-// If rejected is false, the plan was created successfully.
-// If error is non-nil, it indicates a fatal error (e.g., reporting failure).
-func handlePlanCreationResult(client *reporter.Client, agentType, output string) (error, bool, string) {
+func handlePlanCreationResult(client *reporter.Client, agentType, output string) error {
 	planContent, rejected, reason := parser.ParsePlanResult(output)
 	if rejected {
-		// Don't report rejection here - let the caller handle it
-		// This allows the caller to track retry attempts
-		return nil, true, reason
+		if err := client.ReportPlanRejection(reason, agentType, output); err != nil {
+			return fmt.Errorf("failed to report plan rejection: %w", err)
+		}
+		return fmt.Errorf("plan was rejected: %s", reason)
 	}
 	if err := client.ReportPlanCreation(planContent, agentType, output); err != nil {
-		return fmt.Errorf("failed to report plan creation: %w", err), false, ""
+		return fmt.Errorf("failed to report plan creation: %w", err)
 	}
-	return nil, false, ""
+	return nil
 }
 
 // constructOperatorURL constructs the Operator API URL from Kubernetes service components
@@ -590,26 +586,22 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	var commitSHA string
 	var lastCommitMsg string
 	var validationErr error
-	var rejectionReason string // For plan creation mode retry
 
 	for retryCount := 0; retryCount <= maxValidationRetries; retryCount++ {
 		if retryCount > 0 {
-			fmt.Fprintf(os.Stderr, "Retry attempt #%d/%d\n", retryCount, maxValidationRetries)
-			// Build prompt with error for retry
+			fmt.Fprintf(os.Stderr, "Validation retry attempt #%d/%d\n", retryCount, maxValidationRetries)
+			// Build prompt with validation error for retry
+			validationErrMsg := validationErr.Error()
 			switch executionMode {
 			case "plan_creation":
-				// Build prompt with rejection reason for retry
-				fullPrompt = context.BuildPlanCreationPrompt(reviewContent, rejectionReason)
-				fmt.Fprintf(os.Stderr, "Built retry prompt with rejection reason (length: %d characters)\n", len(fullPrompt))
+				// Plan creation mode doesn't support validation retry
+				return fmt.Errorf("validation failed in plan_creation mode: %w", validationErr)
 			case "plan_execution":
-				validationErrMsg := validationErr.Error()
 				fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
-				fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 			default:
-				validationErrMsg := validationErr.Error()
 				fullPrompt = context.BuildPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
-				fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 			}
+			fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 		} else {
 			fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 		}
@@ -633,30 +625,11 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		}
 		fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
 
-		// Handle plan creation mode result
+		// Plan creationモードではここで終了処理に移行する
 		if executionMode == "plan_creation" {
-			handleErr, rejected, reason := handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput)
-			if handleErr != nil {
-				// Fatal error (e.g., reporting failure)
-				return handleErr
+			if err := handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput); err != nil {
+				return err
 			}
-			if rejected {
-				// Report rejection for this attempt
-				if err := reporterClient.ReportPlanRejection(reason, envCfg.AgentType, agentOutput); err != nil {
-					return fmt.Errorf("failed to report plan rejection: %w", err)
-				}
-				fmt.Fprintf(os.Stderr, "Plan was rejected (attempt #%d/%d): %s\n", retryCount+1, maxValidationRetries+1, reason)
-				// Check if we've reached max retries
-				if retryCount >= maxValidationRetries {
-					return fmt.Errorf("plan was rejected after %d attempts. Last rejection reason: %s", maxValidationRetries+1, reason)
-				}
-				// Store rejection reason for next retry
-				rejectionReason = reason
-				// Continue to next retry
-				continue
-			}
-			// Plan creation succeeded
-			fmt.Fprintf(os.Stderr, "Plan creation succeeded\n")
 			return nil
 		}
 
