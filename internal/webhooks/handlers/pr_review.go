@@ -220,7 +220,21 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		githubClient = clients.NewFromGitHub(rawClient, logger)
 	}
 
-	// Step 8: Review comments 取得
+	// Step 8: PR本文の取得（先頭に付与するため）
+	prBody := ""
+	if githubClient != nil {
+		if prDetail, err := githubClient.GetPullRequest(ctx, owner, repo, payload.PullRequest.Number); err != nil {
+			logger.Warn("Failed to fetch pull request body, continuing without it",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+			)
+		} else if prDetail != nil && prDetail.Body != nil {
+			prBody = strings.TrimSpace(*prDetail.Body)
+		}
+	}
+
+	// Step 9: Review comments 取得
 	reviewID := payload.Review.ID
 	reviewComments, err := githubClient.ListPullRequestCommentsForReview(ctx, owner, repo, payload.PullRequest.Number, reviewID)
 	if err != nil {
@@ -234,16 +248,22 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		reviewComments = []*github.PullRequestComment{}
 	}
 
-	// Step 9: コンテキスト構築（レビュー本文 + 関連コメント）
+	// Step 10: コンテキスト構築（PR本文 + レビュー本文 + 関連コメント）
 	reviewBody := strings.TrimSpace(payload.Review.Body)
 	contextParts := []string{}
+	reviewContextParts := []string{}
+	if prBody != "" {
+		contextParts = append(contextParts, "--- Pull Request Body ---\n\n"+prBody)
+	}
 	if reviewBody != "" {
 		contextParts = append(contextParts, reviewBody)
+		reviewContextParts = append(reviewContextParts, reviewBody)
 	}
 
 	for _, comment := range reviewComments {
 		if comment != nil && comment.Body != nil && strings.TrimSpace(*comment.Body) != "" {
 			contextParts = append(contextParts, *comment.Body)
+			reviewContextParts = append(reviewContextParts, *comment.Body)
 		}
 	}
 
@@ -252,22 +272,28 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		fullContext = reviewBody // Fallback to review body only
 	}
 
+	reviewOnlyContext := strings.Join(reviewContextParts, "\n\n--- Review Comment ---\n\n")
+	if reviewOnlyContext == "" {
+		reviewOnlyContext = reviewBody // Fallback to review body only
+	}
+
 	logger.Info("Review context built",
 		zap.String("delivery_id", deliveryID),
 		zap.Int64("review_id", reviewID),
 		zap.Int("pr_number", payload.PullRequest.Number),
 		zap.Int("review_comments_count", len(reviewComments)),
 		zap.Int("context_length", len(fullContext)),
+		zap.Int("pr_body_len", len(prBody)),
 	)
 
-	// Step 10: Codex approval 検出
+	// Step 11: Codex approval 検出
 	approvalDetector := deps.CodexApprovalDetector
 	if approvalDetector == nil {
 		approvalDetector = services.NewCodexApprovalDetector(logger)
 	}
 
 	approvalDetected := approvalDetector.DetectApproval(
-		fullContext, // Use full context including review comments
+		reviewOnlyContext, // Exclude PR body to avoid false approvals
 		payload.Review.User.Login,
 		payload.Review.User.ID,
 	)
