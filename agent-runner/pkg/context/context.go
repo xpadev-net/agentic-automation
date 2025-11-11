@@ -1,11 +1,5 @@
 package context
 
-import (
-	"encoding/json"
-	"fmt"
-	"strings"
-)
-
 // Config holds the agent-runner configuration from environment variables.
 // Note: This type is kept for backward compatibility with reporter.Config alias.
 type Config struct {
@@ -16,42 +10,4 @@ type Config struct {
 	GitHubToken      string
 	RetryCount       int
 	WorkDir          string
-}
-
-// BuildPrompt builds the full prompt for the agent.
-// It combines the original prompt with previous attempts, CI logs, and validation errors.
-func BuildPrompt(prompt, previousAttempts, ciLogs string, validationError ...string) string {
-	var result strings.Builder
-
-	// Original prompt
-	result.WriteString(prompt)
-
-	// Previous attempts
-	if previousAttempts != "" {
-		var attempts []PreviousAttempt
-		if err := json.Unmarshal([]byte(previousAttempts), &attempts); err == nil && len(attempts) > 0 {
-			result.WriteString("\n\nPrevious attempts:\n")
-			for _, attempt := range attempts {
-				result.WriteString(fmt.Sprintf("- Retry #%d: %s\n", attempt.RetryCount, attempt.Error))
-				if attempt.CILogs != "" {
-					result.WriteString(fmt.Sprintf("  CI Logs: %s\n", attempt.CILogs))
-				}
-			}
-		}
-	}
-
-	// CI logs (if not already included in previous attempts)
-	if ciLogs != "" {
-		result.WriteString("\nCI failures:\n")
-		result.WriteString(ciLogs)
-	}
-
-	// Validation errors
-	if len(validationError) > 0 && validationError[0] != "" {
-		result.WriteString("\n\nValidation failures:\n")
-		result.WriteString(validationError[0])
-		result.WriteString("\n\nPlease fix the validation errors above and ensure all validations pass.")
-	}
-
-	return result.String()
 }
