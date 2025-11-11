@@ -54,6 +54,8 @@ type PullRequestReviewDeps struct {
 	// Optional DI for US4 merge re-evaluation
 	MergeConditionChecker services.MergeConditionChecker
 	AutoMergeService      services.AutoMergeService
+	// Optional DI for plan creation
+	KubernetesJobService services.KubernetesJobService
 }
 
 // HandlePullRequestReview handles GitHub pull_request_review webhook events
@@ -494,6 +496,56 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		}
 	}
 
+	// Step 12.5: プラン構築処理（レビュー本文がある場合）
+	var planResult *planCreationResult
+	if !approvalDetected && reviewBody != "" && feedback != nil {
+		// PullRequestReviewDepsからPullRequestReviewCommentDepsへの変換
+		commentDeps := PullRequestReviewCommentDeps{
+			Logger:                   deps.Logger,
+			GitHubClient:             githubClient,
+			PullRequestRepository:    deps.PullRequestRepository,
+			ReviewFeedbackRepository: deps.ReviewFeedbackRepository,
+			MergeConditionChecker:    deps.MergeConditionChecker,
+			AutoMergeService:         deps.AutoMergeService,
+			KubernetesJobService:     deps.KubernetesJobService,
+			// AuthorizationServiceとCodexReviewServiceはnilで問題なし（startPlanCreationIfNeeded内で使用されない）
+			AuthorizationService: nil,
+			CodexReviewService:   nil,
+		}
+
+		var planErr error
+		planResult, planErr = startPlanCreationIfNeeded(
+			ctx,
+			commentDeps,
+			logger,
+			pr,
+			reviewBody,
+			reviewID,
+			payload.Review.User.Login,
+			payload.Review.User.ID,
+			deliveryID,
+		)
+		if planErr != nil {
+			logger.Error("Failed to start plan creation from review body",
+				zap.Error(planErr),
+				zap.String("delivery_id", deliveryID),
+				zap.Int64("review_id", reviewID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+			)
+			c.Error(planErr)
+			return
+		}
+
+		if planResult != nil {
+			logger.Info("Plan creation processing completed",
+				zap.String("status", planResult.Status),
+				zap.String("delivery_id", deliveryID),
+				zap.Int64("review_id", reviewID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+			)
+		}
+	}
+
 	// Step 13: 成功レスポンス返却
 	response := gin.H{
 		"status":                "processed",
@@ -504,6 +556,18 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	}
 	if feedback != nil {
 		response["review_feedback_id"] = feedback.ID
+	}
+	if planResult != nil {
+		response["plan_creation_status"] = planResult.Status
+		if planResult.ReviewFeedbackID != 0 {
+			response["review_feedback_id"] = planResult.ReviewFeedbackID
+		}
+		if planResult.PlanAgentRunID != 0 {
+			response["plan_agent_run_id"] = planResult.PlanAgentRunID
+		}
+		if planResult.PlanCreationState != "" {
+			response["plan_creation_state"] = planResult.PlanCreationState
+		}
 	}
 
 	c.JSON(http.StatusOK, response)
