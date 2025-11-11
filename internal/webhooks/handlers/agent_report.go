@@ -789,6 +789,15 @@ func HandleAgentReport(c *gin.Context) {
 					zap.String("job_name", jobName),
 					zap.String("execution_mode", agentRun.ExecutionMode),
 				)
+				// Wait for job deletion to complete
+				if err := kubernetesClient.WaitForJobDeletion(c.Request.Context(), jobName); err != nil {
+					logger.Warn("Failed to wait for Kubernetes Job deletion",
+						zap.Error(err),
+						zap.Int("agent_run_id", agentRunID),
+						zap.String("job_name", jobName),
+						zap.String("execution_mode", agentRun.ExecutionMode),
+					)
+				}
 			}
 		}
 	}
@@ -1341,6 +1350,18 @@ func handlePlanCreated(
 					logFields = append(logFields, zap.Int("review_feedback_id", reviewFeedback.ID))
 				}
 				logger.Info("Successfully deleted plan creation Kubernetes Job", logFields...)
+				// Wait for job deletion to complete
+				if err := kubernetesClient.WaitForJobDeletion(ctx, planCreationJobName); err != nil {
+					logFields := []zap.Field{
+						zap.Error(err),
+						zap.Int("plan_agent_run_id", agentRunID),
+						zap.String("job_name", planCreationJobName),
+					}
+					if reviewFeedback != nil {
+						logFields = append(logFields, zap.Int("review_feedback_id", reviewFeedback.ID))
+					}
+					logger.Warn("Failed to wait for plan creation Kubernetes Job deletion", logFields...)
+				}
 			}
 		}
 	}()
