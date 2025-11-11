@@ -183,11 +183,29 @@ func ParseIssueContext(issueID int, repo, prompt, previousAttemptsJSON, ciLogs s
 }
 
 // BuildPlanCreationPrompt constructs the prompt for plan creation mode.
-func BuildPlanCreationPrompt(reviewFeedback string) string {
-	return fmt.Sprintf(`以下のレビューフィードバックを分析し、対応プランを作成してください。
+// If rejectionReason is provided (non-empty), it adds a section about the previous rejection.
+func BuildPlanCreationPrompt(reviewFeedback string, rejectionReason ...string) string {
+	var result strings.Builder
+	
+	result.WriteString(`以下のレビューフィードバックを分析し、対応プランを作成してください。
 
 レビューフィードバック:
-%s
+`)
+	result.WriteString(reviewFeedback)
+	
+	// Add rejection reason section if provided
+	if len(rejectionReason) > 0 && strings.TrimSpace(rejectionReason[0]) != "" {
+		result.WriteString(`
+
+前回のプラン作成試行で以下の理由で却下されました:
+`)
+		result.WriteString(rejectionReason[0])
+		result.WriteString(`
+
+上記の理由を踏まえて、改善されたプランを作成してください。`)
+	}
+	
+	result.WriteString(`
 
 ## 必須要件 (MUST)
 
@@ -208,7 +226,9 @@ func BuildPlanCreationPrompt(reviewFeedback string) string {
 ## 補足
 
 - タグの外側に説明文やその他の文章が含まれていても構いません。タグ内の内容が抽出されます。
-- このモードではプランの作成のみを行い、実装は行いません。`, reviewFeedback)
+- このモードではプランの作成のみを行い、実装は行いません。`)
+	
+	return result.String()
 }
 
 // BuildPlanExecutionPrompt constructs the prompt for plan execution mode.
