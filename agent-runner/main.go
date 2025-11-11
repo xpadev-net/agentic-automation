@@ -283,7 +283,8 @@ type envConfig struct {
 
 // commitChangesIfNeeded commits changes if there are any file changes.
 // Returns the commit SHA, commit message if a commit was made, empty strings if no changes, and error if commit failed.
-func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string) (string, string, error) {
+// If skipHooks is true, the --no-verify flag is added to skip pre-commit hooks.
+func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string, skipHooks bool) (string, string, error) {
 	// Check for file changes
 	hasChanges, err := git.HasChanges(workDir)
 	if err != nil {
@@ -307,7 +308,7 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 
 	// Commit changes
 	fmt.Fprintf(os.Stderr, "Committing changes: %s\n", commitMsg)
-	commitSHA, err := git.CommitChanges(workDir, commitMsg)
+	commitSHA, err := git.CommitChanges(workDir, commitMsg, skipHooks)
 	if err != nil {
 		return "", "", fmt.Errorf("git commit failed: %w", err)
 	}
@@ -676,7 +677,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				fmt.Fprintf(os.Stderr, "Validation failed: %v\n", validationErr)
 				// Commit changes as checkpoint before retry
 				checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (validation retry checkpoint #%d)", issueID, retryCount)
-				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
+				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true)
 				if commitErr != nil {
 					reportErr := reporterClient.ReportFailure(
 						fmt.Sprintf("Failed to commit checkpoint: %v", commitErr),
@@ -709,7 +710,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		if retryCount > 0 {
 			commitMsgPrefix = fmt.Sprintf("feat: implement issue #%d (validation retry #%d)", issueID, retryCount)
 		}
-		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix)
+		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix, false)
 		if err != nil {
 			reportErr := reporterClient.ReportFailure(
 				fmt.Sprintf("Git commit failed: %v", err),
@@ -800,7 +801,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 						// Commit changes after retry
 						retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
-						retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg)
+						retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg, false)
 						if commitErr != nil {
 							reportErr := reporterClient.ReportFailure(
 								fmt.Sprintf("Failed to commit after post-commit sync retry: %v", commitErr),
@@ -825,7 +826,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
 						// Commit changes as checkpoint before retry
 						checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
-						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg)
+						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true)
 						if commitErr != nil {
 							reportErr := reporterClient.ReportFailure(
 								fmt.Sprintf("Failed to commit checkpoint after post-commit sync: %v", commitErr),
