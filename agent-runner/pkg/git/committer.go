@@ -12,7 +12,8 @@ import (
 )
 
 // CommitChanges commits all changes with the given message and returns the commit SHA.
-func CommitChanges(workDir, message string) (string, error) {
+// If skipHooks is true, the --no-verify flag is added to skip pre-commit hooks.
+func CommitChanges(workDir, message string, skipHooks bool) (string, error) {
 	// Step 1: Stage all changes
 	addCmd := exec.Command("git", "add", ".")
 	addCmd.Dir = workDir
@@ -27,7 +28,11 @@ func CommitChanges(workDir, message string) (string, error) {
 	}
 
 	// Step 2: Commit
-	commitCmd := exec.Command("git", "commit", "-m", message)
+	commitArgs := []string{"commit", "-m", message}
+	if skipHooks {
+		commitArgs = append(commitArgs, "--no-verify")
+	}
+	commitCmd := exec.Command("git", commitArgs...)
 	commitCmd.Dir = workDir
 	var commitStderr bytes.Buffer
 	commitCmd.Stderr = &commitStderr
