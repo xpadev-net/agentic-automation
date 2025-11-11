@@ -220,21 +220,21 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		githubClient = clients.NewFromGitHub(rawClient, logger)
 	}
 
-    // Step 8: PR本文の取得（先頭に付与するため）
-    prBody := ""
-    if githubClient != nil {
-        if prDetail, err := githubClient.GetPullRequest(ctx, owner, repo, payload.PullRequest.Number); err != nil {
-            logger.Warn("Failed to fetch pull request body, continuing without it",
-                zap.Error(err),
-                zap.String("delivery_id", deliveryID),
-                zap.Int("pr_number", payload.PullRequest.Number),
-            )
-        } else if prDetail != nil && prDetail.Body != nil {
-            prBody = strings.TrimSpace(*prDetail.Body)
-        }
-    }
+	// Step 8: PR本文の取得（先頭に付与するため）
+	prBody := ""
+	if githubClient != nil {
+		if prDetail, err := githubClient.GetPullRequest(ctx, owner, repo, payload.PullRequest.Number); err != nil {
+			logger.Warn("Failed to fetch pull request body, continuing without it",
+				zap.Error(err),
+				zap.String("delivery_id", deliveryID),
+				zap.Int("pr_number", payload.PullRequest.Number),
+			)
+		} else if prDetail != nil && prDetail.Body != nil {
+			prBody = strings.TrimSpace(*prDetail.Body)
+		}
+	}
 
-    // Step 9: Review comments 取得
+	// Step 9: Review comments 取得
 	reviewID := payload.Review.ID
 	reviewComments, err := githubClient.ListPullRequestCommentsForReview(ctx, owner, repo, payload.PullRequest.Number, reviewID)
 	if err != nil {
@@ -248,12 +248,12 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		reviewComments = []*github.PullRequestComment{}
 	}
 
-    // Step 10: コンテキスト構築（PR本文 + レビュー本文 + 関連コメント）
+	// Step 10: コンテキスト構築（PR本文 + レビュー本文 + 関連コメント）
 	reviewBody := strings.TrimSpace(payload.Review.Body)
-    contextParts := []string{}
-    if prBody != "" {
-        contextParts = append(contextParts, "--- Pull Request Body ---\n\n"+prBody)
-    }
+	contextParts := []string{}
+	if prBody != "" {
+		contextParts = append(contextParts, "--- Pull Request Body ---\n\n"+prBody)
+	}
 	if reviewBody != "" {
 		contextParts = append(contextParts, reviewBody)
 	}
@@ -264,21 +264,21 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		}
 	}
 
-    fullContext := strings.Join(contextParts, "\n\n--- Review Comment ---\n\n")
+	fullContext := strings.Join(contextParts, "\n\n--- Review Comment ---\n\n")
 	if fullContext == "" {
 		fullContext = reviewBody // Fallback to review body only
 	}
 
-    logger.Info("Review context built",
+	logger.Info("Review context built",
 		zap.String("delivery_id", deliveryID),
 		zap.Int64("review_id", reviewID),
 		zap.Int("pr_number", payload.PullRequest.Number),
 		zap.Int("review_comments_count", len(reviewComments)),
-        zap.Int("context_length", len(fullContext)),
-        zap.Int("pr_body_len", len(prBody)),
+		zap.Int("context_length", len(fullContext)),
+		zap.Int("pr_body_len", len(prBody)),
 	)
 
-    // Step 11: Codex approval 検出
+	// Step 11: Codex approval 検出
 	approvalDetector := deps.CodexApprovalDetector
 	if approvalDetector == nil {
 		approvalDetector = services.NewCodexApprovalDetector(logger)
