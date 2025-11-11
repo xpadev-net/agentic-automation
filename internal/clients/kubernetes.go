@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	appconfig "agentic-automation/internal/config"
 
@@ -973,6 +974,48 @@ func (c *KubernetesClient) DeleteJob(ctx context.Context, jobName string) error 
 	)
 
 	return nil
+}
+
+// WaitForJobDeletion waits for a Kubernetes Job to be fully deleted
+// It polls the Kubernetes API to check if the Job still exists
+// Returns nil when the Job is confirmed deleted, or an error on timeout
+func (c *KubernetesClient) WaitForJobDeletion(ctx context.Context, jobName string) error {
+	timeout := 30 * time.Second
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if time.Now().After(deadline) {
+				c.logger.Warn("Job deletion wait timeout",
+					zap.String("job_name", jobName),
+					zap.Duration("timeout", timeout),
+				)
+				return fmt.Errorf("job deletion wait timeout: %s", jobName)
+			}
+
+			_, err := c.clientset.BatchV1().Jobs(c.namespace).Get(ctx, jobName, metav1.GetOptions{})
+			if err != nil {
+				if errors.IsNotFound(err) {
+					// Job削除完了
+					c.logger.Info("Job deletion confirmed",
+						zap.String("job_name", jobName),
+					)
+					return nil
+				}
+				// その他のエラーは無視して継続（一時的なAPIエラーの可能性）
+				c.logger.Debug("Error checking job existence during deletion wait",
+					zap.String("job_name", jobName),
+					zap.Error(err),
+				)
+			}
+		}
+	}
 }
 
 // GetPod retrieves a Kubernetes Pod by name
