@@ -999,7 +999,7 @@ func (c *KubernetesClient) WaitForJobDeletion(ctx context.Context, jobName strin
 				return fmt.Errorf("job deletion wait timeout: %s", jobName)
 			}
 
-			_, err := c.GetJob(ctx, jobName)
+			_, err := c.clientset.BatchV1().Jobs(c.namespace).Get(ctx, jobName, metav1.GetOptions{})
 			if err != nil {
 				if errors.IsNotFound(err) {
 					// Job削除完了
