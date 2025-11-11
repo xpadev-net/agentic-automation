@@ -12,7 +12,6 @@ import (
 
 	"agent-runner/pkg/agent"
 	"agent-runner/pkg/config"
-	"agent-runner/pkg/context"
 	"agent-runner/pkg/git"
 	"agent-runner/pkg/hooks"
 	"agent-runner/pkg/parser"
