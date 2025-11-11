@@ -10,6 +10,7 @@ import (
 
 	"agent-runner/pkg/agent"
 	githubutil "agent-runner/pkg/github"
+	"agent-runner/pkg/prompts"
 	"agent-runner/pkg/utils"
 
 	"github.com/google/go-github/v57/github"
@@ -366,7 +367,7 @@ func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commit
 	if baseBranch != "" {
 		diffCommand = fmt.Sprintf("git diff %s..HEAD", baseBranch)
 	}
-	prompt := fmt.Sprintf("以下の情報を基に、Pull Requestのタイトルと概要を生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<commit_message>\n%s\n</commit_message>\n\n作業ディレクトリで `%s` を実行して変更内容を確認し、それを基にPRタイトルと概要を生成してください。\n\n出力形式:\n以下のXML形式で出力してください。\n<title>PRタイトル</title>\n<body>PR概要（Markdown形式可）</body>", issueNumber, issuePrompt, changedFilesList, commitMsg, diffCommand)
+	prompt := prompts.BuildPRTitleGenerationPrompt(issueNumber, issuePrompt, changedFilesList, commitMsg, diffCommand)
 
 	// Execute cursor-agent in read-only mode
 	executor := agent.NewExecutor(agentType)
@@ -1045,25 +1046,7 @@ func ResolveConflictsWithAI(workDir, repo string, issueID int, agentType string)
 	}
 
 	// Build prompt
-	prompt := fmt.Sprintf(`マージコンフリクトを解消してください。
-
-Issue #%d の作業中にマージコンフリクトが発生しました。
-
-コンフリクトファイル:
-%s
-
-HEAD (現在のブランチ): %s
-MERGE_HEAD (マージ元ブランチ): %s
-
-各ファイルについて、HEAD（現在のブランチ）とMERGE_HEAD（マージ元ブランチ）の変更を統合し、適切に解消してください。
-- ビルドを壊さない修正を心がけてください
-- テストが通過するようにしてください
-- 両方の変更を可能な限り保持してください
-- コンフリクトマーカー（<<<<<<<, =======, >>>>>>>）を削除し、解消済みのコードに置き換えてください
-
-%s
-
-すべてのコンフリクトファイルを解消し、コンフリクトマーカーを完全に削除してください。`, issueID, conflictFilesList, headSHA, mergeHeadSHA, conflictDiffs.String())
+	prompt := prompts.BuildConflictResolutionPrompt(issueID, conflictFilesList, headSHA, mergeHeadSHA, conflictDiffs.String())
 
 	// Execute cursor-agent to resolve conflicts
 	executor := agent.NewExecutor(agentType)
