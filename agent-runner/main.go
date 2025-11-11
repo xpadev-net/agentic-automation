@@ -21,6 +21,9 @@ import (
 	"agent-runner/pkg/version"
 )
 
+// ErrGenerationFailure indicates that plan generation failed (reason matches example text)
+var ErrGenerationFailure = errors.New("generation failure detected: reason matches example text")
+
 func main() {
 	var (
 		issueID          int
@@ -151,11 +154,17 @@ func readContentFromEnvOrFile(envKey, fileKey string) (string, error) {
 func handlePlanCreationResult(client *reporter.Client, agentType, output string) error {
 	planContent, rejected, reason := parser.ParsePlanResult(output)
 	if rejected {
+		// 生成失敗判定: reasonが"[却下理由]"と完全一致する場合
+		if reason == "[却下理由]" {
+			return fmt.Errorf("%w: %s", ErrGenerationFailure, reason)
+		}
+		// 通常の却下処理
 		if err := client.ReportPlanRejection(reason, agentType, output); err != nil {
 			return fmt.Errorf("failed to report plan rejection: %w", err)
 		}
 		return fmt.Errorf("plan was rejected: %s", reason)
 	}
+	// プラン作成成功
 	if err := client.ReportPlanCreation(planContent, agentType, output); err != nil {
 		return fmt.Errorf("failed to report plan creation: %w", err)
 	}
@@ -581,21 +590,79 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 	// 10. Execute agent with validation retry loop
 	const maxValidationRetries = 10
+	const maxGenerationRetries = 3 // プラン作成モード用のリトライ上限
 	executor := agent.NewExecutor(envCfg.AgentType)
 	var agentOutput string
 	var commitSHA string
 	var lastCommitMsg string
 	var validationErr error
 
+	// プラン作成モード用のリトライループ
+	if executionMode == "plan_creation" {
+		for generationRetry := 0; generationRetry <= maxGenerationRetries; generationRetry++ {
+			if generationRetry > 0 {
+				fmt.Fprintf(os.Stderr, "Generation retry attempt #%d/%d\n", generationRetry, maxGenerationRetries)
+			} else {
+				fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
+			}
+
+			// Execute agent
+			if envCfg.AgentType == "cursor-agent" {
+				agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+			} else {
+				agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
+			}
+			if err != nil {
+				reportErr := reporterClient.ReportFailure(
+					fmt.Sprintf("Agent execution failed: %v", err),
+					agentOutput,
+					envCfg.AgentType,
+				)
+				if reportErr != nil {
+					fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				}
+				return fmt.Errorf("agent execution failed: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+
+			// Handle plan creation result
+			err = handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput)
+			if err != nil {
+				// 生成失敗エラーの場合、リトライ可能かチェック
+				if errors.Is(err, ErrGenerationFailure) {
+					if generationRetry >= maxGenerationRetries {
+						// リトライ上限に達した場合、通常の却下として扱う
+						fmt.Fprintf(os.Stderr, "Generation retry limit reached, reporting as plan rejection\n")
+						if reportErr := reporterClient.ReportPlanRejection(
+							"プラン生成に失敗しました（リトライ上限に達しました）",
+							envCfg.AgentType,
+							agentOutput,
+						); reportErr != nil {
+							return fmt.Errorf("failed to report plan rejection after retry limit: %w", reportErr)
+						}
+						return fmt.Errorf("plan generation failed after %d retries", maxGenerationRetries)
+					}
+					// リトライ可能な場合、ループを継続
+					fmt.Fprintf(os.Stderr, "Generation failure detected, retrying...\n")
+					continue
+				}
+				// 生成失敗以外のエラー（通常の却下など）は即座に返す
+				return err
+			}
+			// プラン作成成功
+			return nil
+		}
+		// このコードには到達しないはずだが、念のため
+		return fmt.Errorf("unexpected end of generation retry loop")
+	}
+
+	// 既存のvalidation retry loop（plan_creation以外のモード用）
 	for retryCount := 0; retryCount <= maxValidationRetries; retryCount++ {
 		if retryCount > 0 {
 			fmt.Fprintf(os.Stderr, "Validation retry attempt #%d/%d\n", retryCount, maxValidationRetries)
 			// Build prompt with validation error for retry
 			validationErrMsg := validationErr.Error()
 			switch executionMode {
-			case "plan_creation":
-				// Plan creation mode doesn't support validation retry
-				return fmt.Errorf("validation failed in plan_creation mode: %w", validationErr)
 			case "plan_execution":
 				fullPrompt = context.BuildPlanExecutionPrompt(prompt, planContent, validationErrMsg)
 			default:
@@ -624,14 +691,6 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			return fmt.Errorf("agent execution failed: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
-
-		// Plan creationモードではここで終了処理に移行する
-		if executionMode == "plan_creation" {
-			if err := handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput); err != nil {
-				return err
-			}
-			return nil
-		}
 
 		// Check for file changes
 		fmt.Fprintf(os.Stderr, "Checking for file changes\n")
