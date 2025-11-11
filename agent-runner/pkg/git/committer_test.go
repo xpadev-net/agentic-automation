@@ -185,7 +185,7 @@ func TestCommitChanges_MultipleFiles(t *testing.T) {
 	createTestFile(t, repoDir, "file3.txt", "content3\n")
 
 	// Commit changes
-	sha, err := CommitChanges(repoDir, "Add multiple files")
+	sha, err := CommitChanges(repoDir, "Add multiple files", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -428,7 +428,7 @@ func TestPushBranch_RemoteURLAlreadyHasToken(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -460,7 +460,7 @@ func TestPushBranch_RemoteURLWithDifferentToken(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -494,7 +494,7 @@ func TestPushBranch_RemoteURLWithUsername(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -531,7 +531,7 @@ func TestPushBranch_NoTokenProvided(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -563,7 +563,7 @@ func TestPushBranch_NoRemoteConfigured(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -590,7 +590,7 @@ func TestPushBranch_InvalidRemoteURL(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -632,7 +632,7 @@ func TestPushBranch_SSHRemoteURL(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -666,7 +666,7 @@ func TestPushBranch_RemoteURLWithDots(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -700,7 +700,7 @@ func TestPushBranch_RemoteURLWithPort(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -737,7 +737,7 @@ func TestPushBranch_RemoteURLWithEnterpriseHost(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
@@ -775,7 +775,7 @@ func TestPushBranch_RemoteURLWithPortDifferentToken(t *testing.T) {
 	createBranch(t, repoDir, "test-branch")
 	createTestFile(t, repoDir, "test.txt", "content\n")
 
-	_, err := CommitChanges(repoDir, "Test commit")
+	_, err := CommitChanges(repoDir, "Test commit", false)
 	if err != nil {
 		t.Fatalf("CommitChanges() error = %v", err)
 	}
