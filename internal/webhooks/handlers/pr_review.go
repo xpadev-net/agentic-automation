@@ -251,22 +251,30 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	// Step 10: コンテキスト構築（PR本文 + レビュー本文 + 関連コメント）
 	reviewBody := strings.TrimSpace(payload.Review.Body)
 	contextParts := []string{}
+	reviewContextParts := []string{}
 	if prBody != "" {
 		contextParts = append(contextParts, "--- Pull Request Body ---\n\n"+prBody)
 	}
 	if reviewBody != "" {
 		contextParts = append(contextParts, reviewBody)
+		reviewContextParts = append(reviewContextParts, reviewBody)
 	}
 
 	for _, comment := range reviewComments {
 		if comment != nil && comment.Body != nil && strings.TrimSpace(*comment.Body) != "" {
 			contextParts = append(contextParts, *comment.Body)
+			reviewContextParts = append(reviewContextParts, *comment.Body)
 		}
 	}
 
 	fullContext := strings.Join(contextParts, "\n\n--- Review Comment ---\n\n")
 	if fullContext == "" {
 		fullContext = reviewBody // Fallback to review body only
+	}
+
+	reviewOnlyContext := strings.Join(reviewContextParts, "\n\n--- Review Comment ---\n\n")
+	if reviewOnlyContext == "" {
+		reviewOnlyContext = reviewBody // Fallback to review body only
 	}
 
 	logger.Info("Review context built",
@@ -285,7 +293,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	}
 
 	approvalDetected := approvalDetector.DetectApproval(
-		fullContext, // Use full context including review comments
+		reviewOnlyContext, // Exclude PR body to avoid false approvals
 		payload.Review.User.Login,
 		payload.Review.User.ID,
 	)
