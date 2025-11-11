@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"agent-runner/pkg/agent"
@@ -320,13 +321,158 @@ func GetDefaultBranch(repo string) (string, error) {
 	return base, nil
 }
 
+// extractIssueInfoFromPrompt extracts Issue title and description from XML-formatted prompt.
+// It looks for <issue_context> or <issue> tags and extracts <title> and <description> content.
+// Returns the combined issue info (title + description) and a boolean indicating if extraction was successful.
+func extractIssueInfoFromPrompt(prompt string) (string, bool) {
+	// Check if prompt contains issue context tags
+	if !strings.Contains(prompt, "<issue_context>") && !strings.Contains(prompt, "<issue>") {
+		return "", false
+	}
+
+	// Try to extract from <issue_context><issue>...</issue></issue_context> structure
+	var title, description string
+
+	// Pattern 1: <issue_context><issue><title>...</title><description>...</description></issue></issue_context>
+	issueContextPattern := regexp.MustCompile(`(?s)<issue_context>.*?<issue[^>]*>.*?<title>(.*?)</title>.*?<description>(.*?)</description>.*?</issue>.*?</issue_context>`)
+	matches := issueContextPattern.FindStringSubmatch(prompt)
+	if len(matches) == 3 {
+		title = strings.TrimSpace(matches[1])
+		description = strings.TrimSpace(matches[2])
+		if title != "" || description != "" {
+			return combineIssueInfo(title, description), true
+		}
+	}
+
+	// Pattern 2: <issue><title>...</title><description>...</description></issue>
+	issuePattern := regexp.MustCompile(`(?s)<issue[^>]*>.*?<title>(.*?)</title>.*?<description>(.*?)</description>.*?</issue>`)
+	matches = issuePattern.FindStringSubmatch(prompt)
+	if len(matches) == 3 {
+		title = strings.TrimSpace(matches[1])
+		description = strings.TrimSpace(matches[2])
+		if title != "" || description != "" {
+			return combineIssueInfo(title, description), true
+		}
+	}
+
+	// Pattern 3: <issue_context><title>...</title><description>...</description></issue_context>
+	issueContextDirectPattern := regexp.MustCompile(`(?s)<issue_context>.*?<title>(.*?)</title>.*?<description>(.*?)</description>.*?</issue_context>`)
+	matches = issueContextDirectPattern.FindStringSubmatch(prompt)
+	if len(matches) == 3 {
+		title = strings.TrimSpace(matches[1])
+		description = strings.TrimSpace(matches[2])
+		if title != "" || description != "" {
+			return combineIssueInfo(title, description), true
+		}
+	}
+
+	return "", false
+}
+
+// combineIssueInfo combines title and description into a single string.
+func combineIssueInfo(title, description string) string {
+	if title == "" && description == "" {
+		return ""
+	}
+	if title == "" {
+		return description
+	}
+	if description == "" {
+		return title
+	}
+	return title + "\n\n" + description
+}
+
+// fetchIssueInfoFromGitHub fetches Issue information from GitHub API.
+// repo: Repository in format owner/repo (e.g., "octocat/Hello-World")
+// issueNumber: Issue number to fetch
+// Returns the combined issue info (title + description) or an error.
+func fetchIssueInfoFromGitHub(repo string, issueNumber int) (string, error) {
+	// Validate repo format
+	repoParts := strings.Split(repo, "/")
+	if len(repoParts) != 2 {
+		return "", fmt.Errorf("repository must be in format owner/repo, got: %q", repo)
+	}
+	owner := repoParts[0]
+	repoName := repoParts[1]
+
+	// Acquire token via GitHub App
+	ctx := context.Background()
+	token, err := githubutil.GetGitHubToken(ctx, owner, repoName)
+	if err != nil {
+		return "", fmt.Errorf("failed to obtain GitHub App installation token: %w", err)
+	}
+
+	// Create GitHub API client
+	ts := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: token},
+	)
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
+
+	// Get Issue information
+	issue, resp, err := client.Issues.Get(ctx, owner, repoName, issueNumber)
+	if err != nil {
+		// 401/403 retry once with refreshed token
+		if resp != nil && (resp.StatusCode == 401 || resp.StatusCode == 403) {
+			if t, terr := githubutil.GetGitHubToken(ctx, owner, repoName); terr == nil && t != "" && t != token {
+				token = t
+				ts = oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+				tc = oauth2.NewClient(ctx, ts)
+				client = github.NewClient(tc)
+				issue, resp, err = client.Issues.Get(ctx, owner, repoName, issueNumber)
+				if err == nil {
+					// retry success → continue normal flow
+					goto GET_SUCCESS
+				}
+			}
+		}
+		// Check if it's a rate limit error
+		if resp != nil && resp.StatusCode == 403 {
+			return "", fmt.Errorf("GitHub API rate limit exceeded")
+		}
+		return "", fmt.Errorf("failed to get issue #%d: %w", issueNumber, err)
+	}
+GET_SUCCESS:
+
+	if issue == nil {
+		return "", fmt.Errorf("issue #%d not found", issueNumber)
+	}
+
+	title := ""
+	if issue.Title != nil {
+		title = *issue.Title
+	}
+
+	description := ""
+	if issue.Body != nil {
+		description = *issue.Body
+	}
+
+	return combineIssueInfo(title, description), nil
+}
+
 // GeneratePRTitleAndBody generates PR title and body using cursor-agent in read-only mode.
 // It uses Issue information, changed files, commit message, and git diff to generate the PR content.
 // Returns title and body, or an error if generation fails.
-func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commitMsg, agentType, cursorModel, baseBranch string) (string, string, error) {
+func GeneratePRTitleAndBody(workDir string, repo string, issueNumber int, issuePrompt, commitMsg, agentType, cursorModel, baseBranch string) (string, string, error) {
 	// Only cursor-agent is supported for PR generation
 	if agentType != "cursor-agent" {
 		return "", "", fmt.Errorf("PR generation is only supported for cursor-agent, got: %s", agentType)
+	}
+
+	// Extract Issue information from prompt or fetch from GitHub API
+	issueInfo := ""
+	if extracted, found := extractIssueInfoFromPrompt(issuePrompt); found {
+		issueInfo = extracted
+	} else {
+		// Try to fetch from GitHub API
+		if fetched, err := fetchIssueInfoFromGitHub(repo, issueNumber); err == nil {
+			issueInfo = fetched
+		} else {
+			// Fallback: use issuePrompt as is (existing behavior)
+			issueInfo = issuePrompt
+		}
 	}
 
 	// Get changed files
@@ -367,7 +513,7 @@ func GeneratePRTitleAndBody(workDir string, issueNumber int, issuePrompt, commit
 	if baseBranch != "" {
 		diffCommand = fmt.Sprintf("git diff %s..HEAD", baseBranch)
 	}
-	prompt := prompts.BuildPRTitleGenerationPrompt(issueNumber, issuePrompt, changedFilesList, commitMsg, diffCommand)
+	prompt := prompts.BuildPRTitleGenerationPrompt(issueNumber, issueInfo, changedFilesList, commitMsg, diffCommand)
 
 	// Execute cursor-agent in read-only mode
 	executor := agent.NewExecutor(agentType)

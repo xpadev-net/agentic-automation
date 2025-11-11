@@ -958,7 +958,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		if commitMsgForPR == "" {
 			commitMsgForPR = fmt.Sprintf("feat: implement issue #%d", issueID)
 		}
-		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, issueID, prompt, commitMsgForPR, envCfg.AgentType, envCfg.CursorModel, baseBranch)
+		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, repo, issueID, prompt, commitMsgForPR, envCfg.AgentType, envCfg.CursorModel, baseBranch)
 		if err != nil {
 			// Log warning but continue with default title/body
 			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
