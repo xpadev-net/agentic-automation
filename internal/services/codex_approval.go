@@ -3,16 +3,11 @@ package services
 
 import (
 	"agentic-automation/internal/config"
-	"regexp"
 	"strconv"
 	"strings"
 
 	"go.uber.org/zap"
 )
-
-// codexApprovalPattern is a compiled regex pattern to detect Codex approval messages.
-// Pattern matches "didn't find.*major issues" (case-insensitive).
-var codexApprovalPattern = regexp.MustCompile(`(?i)didn't find.*major issues`)
 
 // codexApprovalExactMatch is the exact approval message from Codex bot.
 const codexApprovalExactMatch = "Codex Review: Didn't find any major issues."
@@ -71,13 +66,8 @@ func (s *CodexApprovalDetector) DetectApproval(reviewBody string, reviewerUserna
 		return false
 	}
 
-	// 3. Detect approval patterns
-	// Pattern 1: Regex match
-	regexMatch := codexApprovalPattern.MatchString(reviewBody)
-	// Pattern 2: Exact match (case-insensitive)
-	exactMatch := strings.EqualFold(strings.TrimSpace(reviewBody), codexApprovalExactMatch)
-
-	detected := regexMatch || exactMatch
+	// 3. Detect approval pattern (case sensitive, prefix match)
+	detected := strings.HasPrefix(reviewBody, codexApprovalExactMatch)
 
 	// 4. Log the detection result
 	// Create preview of review body (first 100 characters for security)
