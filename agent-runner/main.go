@@ -330,7 +330,22 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 				fmt.Fprintf(os.Stderr, "WARNING: Failed to generate commit message with AI: %v (using default message)\n", err)
 				commitMsg = fmt.Sprintf("feat: implement issue #%d", issueID)
 			} else {
-				commitMsg = generatedMsg
+				// Issue番号が含まれているか検証
+				issueRef := fmt.Sprintf("#%d", issueID)
+				if !strings.Contains(generatedMsg, issueRef) {
+					// Issue番号が含まれていない場合は付加
+					// メッセージの先頭または末尾に付加（既存の形式に合わせる）
+					if strings.HasPrefix(generatedMsg, "feat:") || strings.HasPrefix(generatedMsg, "fix:") {
+						// 既存の形式: "feat: implement issue #%d" に合わせる
+						commitMsg = fmt.Sprintf("%s (issue #%d)", generatedMsg, issueID)
+					} else {
+						// その他の場合は末尾に付加
+						commitMsg = fmt.Sprintf("%s (#%d)", generatedMsg, issueID)
+					}
+					fmt.Fprintf(os.Stderr, "WARNING: Generated commit message did not include issue reference, appended: %s\n", commitMsg)
+				} else {
+					commitMsg = generatedMsg
+				}
 				fmt.Fprintf(os.Stderr, "Generated commit message with AI: %s\n", commitMsg)
 			}
 		} else {
