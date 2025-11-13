@@ -577,9 +577,9 @@ func GenerateCommitMessage(workDir string, repo string, issueNumber int, issuePr
 	// Build prompt with structured information
 	prompt := prompts.BuildCommitMessageGenerationPrompt(issueNumber, issueInfo, changedFilesList, stagedDiff)
 
-	// Execute cursor-agent in read-only mode
+	// Execute cursor-agent with allowWrite=true to enable --force flag for dirty tree
 	executor := agent.NewExecutor(agentType)
-	output, err := executor.ExecuteWithOptions(workDir, prompt, cursorModel, false)
+	output, err := executor.ExecuteWithOptions(workDir, prompt, cursorModel, true)
 	if err != nil {
 		return "", fmt.Errorf("cursor-agent execution failed: %w", err)
 	}

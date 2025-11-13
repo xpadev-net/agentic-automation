@@ -127,7 +127,7 @@ func BuildPRTitleGenerationPrompt(issueNumber int, issuePrompt, changedFilesList
 
 // BuildCommitMessageGenerationPrompt builds the prompt for commit message generation.
 func BuildCommitMessageGenerationPrompt(issueNumber int, issueInfo, changedFilesList, stagedDiff string) string {
-	return fmt.Sprintf("以下の情報を基に、コミットメッセージを生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<staged_diff>\n%s\n</staged_diff>\n\n上記の変更内容を基に、適切なコミットメッセージを生成してください。\n\n出力形式:\n以下のXML形式で出力してください。\n<commit_message>コミットメッセージ</commit_message>", issueNumber, issueInfo, changedFilesList, stagedDiff)
+	return fmt.Sprintf("以下の情報を基に、コミットメッセージを生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<staged_diff>\n%s\n</staged_diff>\n\n上記の変更内容を基に、適切なコミットメッセージを生成してください。\n\n重要: このタスクはコミットメッセージの生成のみを行います。ファイルを変更したり、コードを編集したりしないでください。ステージされた変更内容を確認し、適切なコミットメッセージを生成するだけです。\n\n出力形式:\n以下のXML形式で出力してください。\n<commit_message>コミットメッセージ</commit_message>", issueNumber, issueInfo, changedFilesList, stagedDiff)
 }
 
 // BuildConflictResolutionPrompt builds the prompt for merge conflict resolution.
