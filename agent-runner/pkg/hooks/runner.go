@@ -342,7 +342,12 @@ func RunValidations(commands []config.Command, workDir string) error {
 	for _, cmd := range commands {
 		if err := runCommand(cmd, workDir); err != nil {
 			if cmd.Required {
-				failedValidations = append(failedValidations, err.Error())
+				errorMsg := err.Error()
+				// HookErrorの場合はOutputも含める
+				if hookErr, ok := err.(*HookError); ok && hookErr.Output != "" {
+					errorMsg += "\n\nOutput:\n" + hookErr.Output
+				}
+				failedValidations = append(failedValidations, errorMsg)
 			} else {
 				fmt.Fprintf(os.Stderr, "WARNING: Optional validation '%s' failed: %v\n", cmd.Name, err)
 			}
