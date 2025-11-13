@@ -95,3 +95,51 @@ func parseXMLTitleAndBody(text string) (string, string, error) {
 
 	return title, body, nil
 }
+
+// ParseCommitMessage parses the commit message from cursor-agent's output.
+// It extracts assistant entries from the JSON stream output and parses XML format.
+// Returns commit message, or an error if parsing fails.
+func ParseCommitMessage(output string) (string, error) {
+	// Extract all assistant entries from the output
+	assistantText, err := extractAssistantText(output)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract assistant text: %w", err)
+	}
+
+	if assistantText == "" {
+		return "", fmt.Errorf("no assistant text found in output")
+	}
+
+	// Parse XML format: <commit_message>...</commit_message>
+	commitMsg, err := parseXMLCommitMessage(assistantText)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse XML: %w", err)
+	}
+
+	// Validate that commit message is not empty
+	commitMsg = strings.TrimSpace(commitMsg)
+	if commitMsg == "" {
+		return "", fmt.Errorf("commit message is empty after parsing")
+	}
+
+	return commitMsg, nil
+}
+
+// parseXMLCommitMessage parses XML format to extract commit message.
+// Expected format: <commit_message>...</commit_message>
+// The XML tags may be on separate lines or on the same line.
+func parseXMLCommitMessage(text string) (string, error) {
+	// Use regex to extract commit message
+	// Pattern matches <commit_message>...</commit_message> with any content (including newlines)
+	commitMsgPattern := regexp.MustCompile(`(?s)<commit_message>(.*?)</commit_message>`)
+
+	commitMsgMatch := commitMsgPattern.FindStringSubmatch(text)
+
+	if len(commitMsgMatch) < 2 {
+		return "", fmt.Errorf("commit_message tag not found in output")
+	}
+
+	commitMsg := strings.TrimSpace(commitMsgMatch[1])
+
+	return commitMsg, nil
+}
