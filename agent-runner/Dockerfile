@@ -5,7 +5,7 @@
 # Stage 1: Go Build
 # ==============================================================================
 # Builds the agent-runner Go binary from source
-FROM golang:1.24-alpine AS builder
+FROM harbor-osk-k8s-pve.xpa.dev/docker/golang:1.24-alpine AS builder
 
 # Build arguments for embedding build metadata
 ARG GIT_SHA="unknown"
