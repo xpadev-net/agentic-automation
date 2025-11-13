@@ -125,6 +125,11 @@ func BuildPRTitleGenerationPrompt(issueNumber int, issuePrompt, changedFilesList
 	return fmt.Sprintf("以下の情報を基に、Pull Requestのタイトルと概要を生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<commit_message>\n%s\n</commit_message>\n\n作業ディレクトリで `%s` を実行して変更内容を確認し、それを基にPRタイトルと概要を生成してください。\n\n出力形式:\n以下のXML形式で出力してください。\n<title>PRタイトル</title>\n<body>PR概要（Markdown形式可）</body>", issueNumber, issuePrompt, changedFilesList, commitMsg, diffCommand)
 }
 
+// BuildCommitMessageGenerationPrompt builds the prompt for commit message generation.
+func BuildCommitMessageGenerationPrompt(issueNumber int, issueInfo, changedFilesList, stagedDiff string) string {
+	return fmt.Sprintf("以下の情報を基に、コミットメッセージを生成してください。\n\n<issue>\n<number>%d</number>\n<description>%s</description>\n</issue>\n\n<changed_files>\n%s\n</changed_files>\n\n<staged_diff>\n%s\n</staged_diff>\n\n上記の変更内容を基に、適切なコミットメッセージを生成してください。\n\n出力形式:\n以下のXML形式で出力してください。\n<commit_message>コミットメッセージ</commit_message>", issueNumber, issueInfo, changedFilesList, stagedDiff)
+}
+
 // BuildConflictResolutionPrompt builds the prompt for merge conflict resolution.
 func BuildConflictResolutionPrompt(issueID int, conflictFilesList, headSHA, mergeHeadSHA, conflictDiffs string) string {
 	return fmt.Sprintf(`マージコンフリクトを解消してください。

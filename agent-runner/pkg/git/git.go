@@ -531,6 +531,68 @@ func GeneratePRTitleAndBody(workDir string, repo string, issueNumber int, issueP
 	return title, body, nil
 }
 
+// GenerateCommitMessage generates commit message using cursor-agent in read-only mode.
+// It uses Issue information, changed files, and staged diff to generate the commit message.
+// Returns commit message, or an error if generation fails.
+func GenerateCommitMessage(workDir string, repo string, issueNumber int, issuePrompt, agentType, cursorModel string) (string, error) {
+	// Only cursor-agent is supported for commit message generation
+	if agentType != "cursor-agent" {
+		return "", fmt.Errorf("commit message generation is only supported for cursor-agent, got: %s", agentType)
+	}
+
+	// Extract Issue information from prompt or fetch from GitHub API
+	issueInfo := ""
+	if extracted, found := extractIssueInfoFromPrompt(issuePrompt); found {
+		issueInfo = extracted
+	} else {
+		// Try to fetch from GitHub API
+		if fetched, err := fetchIssueInfoFromGitHub(repo, issueNumber); err == nil {
+			issueInfo = fetched
+		} else {
+			// Fallback: use issuePrompt as is (existing behavior)
+			issueInfo = issuePrompt
+		}
+	}
+
+	// Get changed files
+	changedFiles, err := GetChangedFiles(workDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to get changed files: %w", err)
+	}
+
+	// Build changed files list
+	changedFilesList := strings.Join(changedFiles, "\n- ")
+	if changedFilesList != "" {
+		changedFilesList = "- " + changedFilesList
+	} else {
+		changedFilesList = "(no files changed)"
+	}
+
+	// Get staged diff
+	stagedDiff, err := GetStagedDiff(workDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to get staged diff: %w", err)
+	}
+
+	// Build prompt with structured information
+	prompt := prompts.BuildCommitMessageGenerationPrompt(issueNumber, issueInfo, changedFilesList, stagedDiff)
+
+	// Execute cursor-agent in read-only mode
+	executor := agent.NewExecutor(agentType)
+	output, err := executor.ExecuteWithOptions(workDir, prompt, cursorModel, false)
+	if err != nil {
+		return "", fmt.Errorf("cursor-agent execution failed: %w", err)
+	}
+
+	// Parse output to extract commit message
+	commitMsg, err := utils.ParseCommitMessage(output)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse commit message: %w", err)
+	}
+
+	return commitMsg, nil
+}
+
 // CreatePR creates a Pull Request via GitHub API.
 // If PR already exists for this branch, returns existing PR number (idempotent).
 // token: GitHub PAT for authentication

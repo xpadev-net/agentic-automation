@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -293,7 +294,8 @@ type envConfig struct {
 // commitChangesIfNeeded commits changes if there are any file changes.
 // Returns the commit SHA, commit message if a commit was made, empty strings if no changes, and error if commit failed.
 // If skipHooks is true, the --no-verify flag is added to skip pre-commit hooks.
-func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string, skipHooks bool) (string, string, error) {
+// If commitMsgPrefix is empty and agentType is cursor-agent, AI-generated commit message will be used.
+func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string, skipHooks bool, agentType, cursorModel, issuePrompt string) (string, string, error) {
 	// Check for file changes
 	hasChanges, err := git.HasChanges(workDir)
 	if err != nil {
@@ -312,7 +314,29 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 	// Build commit message
 	commitMsg := commitMsgPrefix
 	if commitMsg == "" {
-		commitMsg = fmt.Sprintf("feat: implement issue #%d", issueID)
+		// Try AI generation if cursor-agent is used
+		if agentType == "cursor-agent" {
+			// Stage changes before generating commit message (required for GetStagedDiff)
+			addCmd := exec.Command("git", "add", ".")
+			addCmd.Dir = workDir
+			if err := addCmd.Run(); err != nil {
+				return "", "", fmt.Errorf("git add failed: %w", err)
+			}
+
+			// Generate commit message using AI
+			generatedMsg, err := git.GenerateCommitMessage(workDir, repo, issueID, issuePrompt, agentType, cursorModel)
+			if err != nil {
+				// Log warning and fallback to default message
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to generate commit message with AI: %v (using default message)\n", err)
+				commitMsg = fmt.Sprintf("feat: implement issue #%d", issueID)
+			} else {
+				commitMsg = generatedMsg
+				fmt.Fprintf(os.Stderr, "Generated commit message with AI: %s\n", commitMsg)
+			}
+		} else {
+			// Use default message for non-cursor-agent
+			commitMsg = fmt.Sprintf("feat: implement issue #%d", issueID)
+		}
 	}
 
 	// Commit changes
@@ -736,7 +760,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				fmt.Fprintf(os.Stderr, "Validation failed: %v\n", validationErr)
 				// Commit changes as checkpoint before retry
 				checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (validation retry checkpoint #%d)", issueID, retryCount)
-				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true)
+				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.CursorModel, prompt)
 				if commitErr != nil {
 					reportErr := reporterClient.ReportFailure(
 						fmt.Sprintf("Failed to commit checkpoint: %v", commitErr),
@@ -769,7 +793,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		if retryCount > 0 {
 			commitMsgPrefix = fmt.Sprintf("feat: implement issue #%d (validation retry #%d)", issueID, retryCount)
 		}
-		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix, false)
+		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix, false, envCfg.AgentType, envCfg.CursorModel, prompt)
 		if err != nil {
 			reportErr := reporterClient.ReportFailure(
 				fmt.Sprintf("Git commit failed: %v", err),
@@ -860,7 +884,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 						// Commit changes after retry
 						retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
-						retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg, false)
+						retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg, false, envCfg.AgentType, envCfg.CursorModel, prompt)
 						if commitErr != nil {
 							reportErr := reporterClient.ReportFailure(
 								fmt.Sprintf("Failed to commit after post-commit sync retry: %v", commitErr),
@@ -885,7 +909,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
 						// Commit changes as checkpoint before retry
 						checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
-						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true)
+						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.CursorModel, prompt)
 						if commitErr != nil {
 							reportErr := reporterClient.ReportFailure(
 								fmt.Sprintf("Failed to commit checkpoint after post-commit sync: %v", commitErr),
