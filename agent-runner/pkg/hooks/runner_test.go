@@ -314,6 +314,73 @@ func TestRunValidations_MixedRequiredAndOptional(t *testing.T) {
 	}
 }
 
+// TestRunValidations_OutputIncluded tests that HookError.Output is included in error message.
+func TestRunValidations_OutputIncluded(t *testing.T) {
+	workDir, cleanup := setupTestDir(t)
+	defer cleanup()
+
+	// Use a command that produces output before failing
+	// This ensures HookError.Output is populated
+	commands := []config.Command{
+		createCommand("validation-with-output", "echo 'test output line 1' && echo 'test output line 2' && false", 5*time.Second, true),
+	}
+
+	err := RunValidations(commands, workDir)
+	if err == nil {
+		t.Fatal("RunValidations() = nil, want error")
+	}
+
+	errorMsg := err.Error()
+	if !strings.Contains(errorMsg, "validation failures:") {
+		t.Errorf("Expected error message to contain 'validation failures:', got: %v", errorMsg)
+	}
+
+	// Verify that Output is included in the error message
+	if !strings.Contains(errorMsg, "Output:") {
+		t.Errorf("Expected error message to contain 'Output:', got: %v", errorMsg)
+	}
+
+	// Verify that the actual output content is included
+	if !strings.Contains(errorMsg, "test output line 1") || !strings.Contains(errorMsg, "test output line 2") {
+		t.Errorf("Expected error message to contain output lines, got: %v", errorMsg)
+	}
+}
+
+// TestRunValidations_MultipleFailuresWithOutput tests that multiple validation failures include their outputs.
+func TestRunValidations_MultipleFailuresWithOutput(t *testing.T) {
+	workDir, cleanup := setupTestDir(t)
+	defer cleanup()
+
+	commands := []config.Command{
+		createCommand("validation1", "echo 'output1' && false", 5*time.Second, true),
+		createCommand("validation2", "echo 'output2' && false", 5*time.Second, true),
+	}
+
+	err := RunValidations(commands, workDir)
+	if err == nil {
+		t.Fatal("RunValidations() = nil, want error")
+	}
+
+	errorMsg := err.Error()
+	if !strings.Contains(errorMsg, "validation failures:") {
+		t.Errorf("Expected error message to contain 'validation failures:', got: %v", errorMsg)
+	}
+
+	// Verify both outputs are included
+	if !strings.Contains(errorMsg, "output1") {
+		t.Errorf("Expected error message to contain 'output1', got: %v", errorMsg)
+	}
+	if !strings.Contains(errorMsg, "output2") {
+		t.Errorf("Expected error message to contain 'output2', got: %v", errorMsg)
+	}
+
+	// Verify both have Output: labels
+	outputCount := strings.Count(errorMsg, "Output:")
+	if outputCount < 2 {
+		t.Errorf("Expected error message to contain at least 2 'Output:' labels, got %d", outputCount)
+	}
+}
+
 // TestRunPostHooks_EmptyList tests that empty command list returns nil.
 func TestRunPostHooks_EmptyList(t *testing.T) {
 	workDir, cleanup := setupTestDir(t)
