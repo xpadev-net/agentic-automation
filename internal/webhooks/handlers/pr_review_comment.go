@@ -163,8 +163,6 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		return
 	}
 
-	commentBody := strings.TrimSpace(payload.Comment.Body)
-
 	// Step 5: トリガー検出
 	logger.Info("Checking for trigger in comment",
 		zap.String("delivery_id", deliveryID),
