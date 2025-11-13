@@ -28,6 +28,18 @@ func setupPRReviewDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS issues (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			repo TEXT,
+			number INTEGER,
+			github_issue_id INTEGER,
+			title TEXT,
+			body TEXT,
+			labels TEXT,
+			state TEXT DEFAULT 'open',
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
 		`CREATE TABLE IF NOT EXISTS pull_requests (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			repo TEXT NOT NULL,
@@ -56,6 +68,29 @@ func setupPRReviewDB(t *testing.T) *gorm.DB {
 			created_at DATETIME,
 			updated_at DATETIME
 		)`,
+		`CREATE TABLE IF NOT EXISTS agent_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			idempotency_key TEXT UNIQUE,
+			issue_id INTEGER,
+			pr_id INTEGER,
+			state TEXT DEFAULT 'queued',
+			agent_type TEXT,
+			execution_mode TEXT DEFAULT 'normal',
+			plan_content TEXT,
+			review_feedback_id INTEGER,
+			plan_agent_run_id INTEGER,
+			input TEXT,
+			output TEXT,
+			retry_count INTEGER DEFAULT 0,
+			error_message TEXT,
+			commit_sha TEXT,
+			s3_session_key TEXT,
+			session_saved_at DATETIME,
+			started_at DATETIME,
+			completed_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`,
 	}
 	for _, s := range stmts {
 		require.NoError(t, db.Exec(s).Error)
@@ -67,6 +102,20 @@ func createPRFixture(t *testing.T, db *gorm.DB) *models.PullRequest {
 	pr := &models.PullRequest{Repo: "owner/repo", Number: 10, Branch: "feature/x"}
 	require.NoError(t, db.Create(pr).Error)
 	return pr
+}
+
+func createIssueAndPRFixture(t *testing.T, db *gorm.DB) (*models.Issue, *models.PullRequest) {
+	issue := &models.Issue{Repo: "owner/repo", Number: 10, Title: "Sample issue"}
+	require.NoError(t, db.Create(issue).Error)
+
+	pr := &models.PullRequest{
+		Repo:    issue.Repo,
+		Number:  issue.Number,
+		IssueID: &issue.ID,
+		Branch:  "feature/test",
+	}
+	require.NoError(t, db.Create(pr).Error)
+	return issue, pr
 }
 
 func invokePRReview(t *testing.T, payload *PullRequestReviewPayload, deps PullRequestReviewDeps) *httptest.ResponseRecorder {
@@ -268,4 +317,104 @@ func TestHandlePullRequestReview_DetectsCodexApprovalWithPRBodyContext(t *testin
 	content := *feedback.Content
 	require.True(t, strings.HasPrefix(content, "--- Pull Request Body ---"))
 	require.Contains(t, content, approvalBody)
+}
+
+func TestHandlePullRequestReview_SkipsPlanCreationWhenReviewContextEmpty(t *testing.T) {
+	db := setupPRReviewDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	_, pr := createIssueAndPRFixture(t, db)
+
+	reviewID := int64(9001)
+	gh := newTestGitHubClient(t, nil, reviewID, []string{})
+
+	jobService := &recordingPlanJobService{}
+	deps := PullRequestReviewDeps{
+		Logger:                   zap.NewNop(),
+		GitHubClient:             gh,
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+		KubernetesJobService:     jobService,
+	}
+
+	payload := &PullRequestReviewPayload{
+		Action: models.PullRequestReviewActionSubmitted,
+		Review: PullRequestReviewReview{
+			ID:   reviewID,
+			Body: "   ",
+			User: User{Login: "reviewer"},
+		},
+		PullRequest: PullRequestReviewPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewRepository{FullName: pr.Repo},
+	}
+
+	w := invokePRReview(t, payload, deps)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotContains(t, resp, "plan_creation_status")
+
+	require.False(t, jobService.called, "Plan creation should not start when review context is empty")
+
+	var feedback models.ReviewFeedback
+	require.NoError(t, db.Last(&feedback).Error)
+	require.Equal(t, "pending", feedback.PlanCreationStatus)
+}
+
+func TestHandlePullRequestReview_StartsPlanCreationWithShortReviewCommentContext(t *testing.T) {
+	db := setupPRReviewDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	t.Setenv("PLAN_CREATION_MIN_COMMENT_LENGTH", "20")
+
+	_, pr := createIssueAndPRFixture(t, db)
+
+	reviewID := int64(9101)
+	shortComment := "Fix"
+	gh := newTestGitHubClient(t, nil, reviewID, []string{shortComment})
+
+	jobService := &recordingPlanJobService{}
+	deps := PullRequestReviewDeps{
+		Logger:                   zap.NewNop(),
+		GitHubClient:             gh,
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+		KubernetesJobService:     jobService,
+	}
+
+	payload := &PullRequestReviewPayload{
+		Action: models.PullRequestReviewActionSubmitted,
+		Review: PullRequestReviewReview{
+			ID:   reviewID,
+			Body: "",
+			User: User{Login: "human-reviewer", ID: 12345},
+		},
+		PullRequest: PullRequestReviewPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewRepository{FullName: pr.Repo},
+	}
+
+	w := invokePRReview(t, payload, deps)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "started", resp["plan_creation_status"])
+
+	require.True(t, jobService.called, "Plan creation job should start for short review comment context when review comments exist")
+
+	var feedback models.ReviewFeedback
+	require.NoError(t, db.Last(&feedback).Error)
+	require.Equal(t, "creating", feedback.PlanCreationStatus)
+	require.NotNil(t, feedback.PlanAgentRunID)
 }

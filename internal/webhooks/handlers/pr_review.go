@@ -262,10 +262,12 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		reviewContextParts = append(reviewContextParts, reviewBody)
 	}
 
+	hasReviewCommentContext := false
 	for _, comment := range reviewComments {
 		if comment != nil && comment.Body != nil && strings.TrimSpace(*comment.Body) != "" {
 			contextParts = append(contextParts, *comment.Body)
 			reviewContextParts = append(reviewContextParts, *comment.Body)
+			hasReviewCommentContext = true
 		}
 	}
 
@@ -520,6 +522,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 			logger,
 			pr,
 			reviewOnlyContext,
+			hasReviewCommentContext,
 			reviewID,
 			payload.Review.User.Login,
 			payload.Review.User.ID,

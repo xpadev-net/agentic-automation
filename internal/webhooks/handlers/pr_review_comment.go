@@ -463,14 +463,15 @@ func startPlanCreationIfNeeded(
 	logger *zap.Logger,
 	pr *models.PullRequest,
 	commentBody string,
+	hasReviewCommentContext bool,
 	commentID int64,
 	commentUserLogin string,
 	commentUserID int64,
 	deliveryID string,
 ) (*planCreationResult, error) {
 	commentBody = strings.TrimSpace(commentBody)
-	if commentBody == "" {
-		logger.Info("Skipping plan creation: empty review comment",
+	if commentBody == "" && !hasReviewCommentContext {
+		logger.Info("Skipping plan creation: empty review comment with no additional context",
 			zap.Int("pr_id", pr.ID),
 			zap.String("delivery_id", deliveryID),
 		)
@@ -482,13 +483,22 @@ func startPlanCreationIfNeeded(
 		minCommentLength = 0
 	}
 	if utf8.RuneCountInString(commentBody) < minCommentLength {
-		logger.Info("Skipping plan creation: comment shorter than minimum threshold",
-			zap.Int("pr_id", pr.ID),
-			zap.Int("comment_length", utf8.RuneCountInString(commentBody)),
-			zap.Int("min_length", minCommentLength),
-			zap.String("delivery_id", deliveryID),
-		)
-		return &planCreationResult{Status: "skipped_short_comment"}, nil
+		if hasReviewCommentContext {
+			logger.Info("Proceeding with plan creation despite short comment due to review comment context",
+				zap.Int("pr_id", pr.ID),
+				zap.Int("comment_length", utf8.RuneCountInString(commentBody)),
+				zap.Int("min_length", minCommentLength),
+				zap.String("delivery_id", deliveryID),
+			)
+		} else {
+			logger.Info("Skipping plan creation: comment shorter than minimum threshold",
+				zap.Int("pr_id", pr.ID),
+				zap.Int("comment_length", utf8.RuneCountInString(commentBody)),
+				zap.Int("min_length", minCommentLength),
+				zap.String("delivery_id", deliveryID),
+			)
+			return &planCreationResult{Status: "skipped_short_comment"}, nil
+		}
 	}
 
 	reviewFeedbackRepo := deps.ReviewFeedbackRepository

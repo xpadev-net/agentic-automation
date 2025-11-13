@@ -1491,12 +1491,14 @@ func handlePlanCreated(
 					go func() {
 						// Create a new context for the background goroutine
 						bgCtx := context.Background()
+						hasReviewContext := len(newerReviews) > 0
 						_, planErr := startPlanCreationIfNeeded(
 							bgCtx,
 							planDeps,
 							logger,
 							pr,
 							commentBody,
+							hasReviewContext,
 							commentID,
 							"", // commentUserLogin - not critical for recreation
 							0,  // commentUserID - not critical for recreation
