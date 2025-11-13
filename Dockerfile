@@ -5,7 +5,7 @@
 # Stage 1: Go Build
 # ==============================================================================
 # Builds the operator Go binary from source
-FROM golang:1.24-alpine AS builder
+FROM harbor-osk-k8s-pve.xpa.dev/docker/golang:1.24-alpine AS builder
 
 # Build arguments for embedding build metadata
 ARG GIT_SHA="unknown"
@@ -33,7 +33,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X agentic-automation/internal/versio
 # Stage 2: Runtime Image
 # ==============================================================================
 # Minimal runtime image for the operator service
-FROM alpine:latest
+FROM harbor-osk-k8s-pve.xpa.dev/docker/alpine:latest
 
 # Install CA certificates for HTTPS requests
 # Required for GitHub API, Discord webhooks, and S3 connections

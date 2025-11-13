@@ -2,7 +2,7 @@
 # Contains Node.js, Go toolchain, and AI agent CLIs (Claude Code, Cursor)
 # This image is built separately and used as a base for the agent-runner image
 
-FROM node:22-slim
+FROM harbor-osk-k8s-pve.xpa.dev/docker/node:22-slim
 
 # Add Go toolchain to runtime image (allows running go build/test inside Pod)
 ARG GO_VERSION=1.24.9

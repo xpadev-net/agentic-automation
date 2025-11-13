@@ -5,7 +5,7 @@
 # Stage 1: Go Build
 # ==============================================================================
 # Builds the agent-runner Go binary from source
-FROM golang:1.24-alpine AS builder
+FROM harbor-osk-k8s-pve.xpa.dev/docker/golang:1.24-alpine AS builder
 
 # Build arguments for embedding build metadata
 ARG GIT_SHA="unknown"
@@ -32,7 +32,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X agent-runner/pkg/version.Commit=${
 # ==============================================================================
 # Runtime image using pre-built base image with Node.js, Go, and AI agent CLIs
 # The base image is built separately and cached, reducing build time
-FROM ghcr.io/xpadev-net/agentic-automation-runner-base:latest
+FROM harbor-osk-k8s-pve.xpa.dev/xpadev-net/agentic-automation-runner-base:latest
 
 # Copy compiled agent-runner binary from builder stage
 # Note: COPY requires root, so we temporarily switch to root, but the binary is executable by agent user
