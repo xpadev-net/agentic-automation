@@ -217,7 +217,8 @@ func TestHandlePullRequestReviewComment_PlanCreationSkippedForShortComment(t *te
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Equal(t, "no_trigger", resp["status"])
-	require.Equal(t, "skipped_short_comment", resp["plan_creation_status"])
+	// plan作成はpull_request_review_commentイベントでは実行されない
+	require.NotContains(t, resp, "plan_creation_status")
 	require.False(t, jobService.called)
 
 	var count int64
@@ -227,7 +228,7 @@ func TestHandlePullRequestReviewComment_PlanCreationSkippedForShortComment(t *te
 	require.Zero(t, count)
 }
 
-func TestHandlePullRequestReviewComment_PlanCreationStarted(t *testing.T) {
+func TestHandlePullRequestReviewComment_PlanCreationNotStarted(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(zap.NewNop())
@@ -236,7 +237,7 @@ func TestHandlePullRequestReviewComment_PlanCreationStarted(t *testing.T) {
 		config.ResetLoggerForTesting()
 	})
 
-	issue, pr := setupPlanCreationFixtures(t, db)
+	_, pr := setupPlanCreationFixtures(t, db)
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
@@ -262,30 +263,20 @@ func TestHandlePullRequestReviewComment_PlanCreationStarted(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Equal(t, "plan_creation_started", resp["status"])
-	require.Equal(t, "started", resp["plan_creation_status"])
-	require.True(t, jobService.called)
-	require.NotZero(t, jobService.lastAgentRunID)
-	require.NotZero(t, jobService.lastReviewFeedback)
+	// plan作成はpull_request_review_commentイベントでは実行されない
+	require.Equal(t, "no_trigger", resp["status"])
+	require.NotContains(t, resp, "plan_creation_status")
+	require.False(t, jobService.called, "Plan creation should not be called for pull_request_review_comment event")
 
-	var feedback models.ReviewFeedback
-	require.NoError(t, db.Last(&feedback).Error)
-	require.Equal(t, pr.ID, feedback.PRID)
-	require.Equal(t, "creating", feedback.PlanCreationStatus)
-	require.NotNil(t, feedback.PlanAgentRunID)
-
-	var run models.AgentRun
-	require.NoError(t, db.First(&run, feedback.PlanAgentRunID).Error)
-	require.Equal(t, "plan_creation", run.ExecutionMode)
-	require.Equal(t, issue.ID, run.IssueID)
-	require.NotNil(t, run.ReviewFeedbackID)
-	require.Equal(t, feedback.ID, *run.ReviewFeedbackID)
-
-	require.NotNil(t, resp["plan_agent_run_id"])
-	require.Equal(t, float64(run.ID), resp["plan_agent_run_id"].(float64))
+	// ReviewFeedbackやAgentRunは作成されない
+	var count int64
+	require.NoError(t, db.Model(&models.ReviewFeedback{}).Count(&count).Error)
+	require.Zero(t, count)
+	require.NoError(t, db.Model(&models.AgentRun{}).Count(&count).Error)
+	require.Zero(t, count)
 }
 
-func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *testing.T) {
+func TestHandlePullRequestReviewComment_PlanCreationNotExecutedForCommentID(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(zap.NewNop())
@@ -305,9 +296,9 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *
 	}
 
 	commentID := int64(3003)
-	commentBody := "This is a detailed review comment that should trigger plan creation."
+	commentBody := "This is a detailed review comment that should not trigger plan creation."
 
-	// First invocation: should create a new ReviewFeedback and start plan creation
+	// First invocation: plan creation should not be executed
 	payload1 := &PullRequestReviewCommentPayload{
 		Action: models.PullRequestReviewCommentActionCreated,
 		Comment: PullRequestReviewCommentComment{
@@ -324,22 +315,16 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *
 
 	var resp1 map[string]any
 	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
-	require.Equal(t, "plan_creation_started", resp1["status"])
-	require.True(t, jobService.called)
-	require.NotZero(t, jobService.lastReviewFeedback)
+	require.Equal(t, "no_trigger", resp1["status"])
+	require.NotContains(t, resp1, "plan_creation_status")
+	require.False(t, jobService.called, "Plan creation should not be called for pull_request_review_comment event")
 
-	// Verify that a ReviewFeedback was created
-	var feedback1 models.ReviewFeedback
-	require.NoError(t, db.First(&feedback1, jobService.lastReviewFeedback).Error)
-	require.Equal(t, commentID, *feedback1.GitHubCommentID)
-	require.Equal(t, "creating", feedback1.PlanCreationStatus)
+	// Verify that no ReviewFeedback was created
+	var feedbackCount int64
+	require.NoError(t, db.Model(&models.ReviewFeedback{}).Count(&feedbackCount).Error)
+	require.Zero(t, feedbackCount, "No ReviewFeedback should be created")
 
-	// Reset the job service call counter
-	jobService.called = false
-	jobService.lastAgentRunID = 0
-	jobService.lastReviewFeedback = 0
-
-	// Second invocation with the same comment ID: should reuse existing ReviewFeedback and skip plan creation
+	// Second invocation with the same comment ID: plan creation should still not be executed
 	payload2 := &PullRequestReviewCommentPayload{
 		Action: models.PullRequestReviewCommentActionCreated,
 		Comment: PullRequestReviewCommentComment{
@@ -357,22 +342,15 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *
 	var resp2 map[string]any
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
 	require.Equal(t, "no_trigger", resp2["status"])
-	require.Equal(t, "skipped_plan_already_started", resp2["plan_creation_status"])
-	require.False(t, jobService.called, "Plan creation job should not be called again for the same comment ID")
+	require.NotContains(t, resp2, "plan_creation_status")
+	require.False(t, jobService.called, "Plan creation job should not be called for pull_request_review_comment event")
 
-	// Verify that no new ReviewFeedback was created
-	var feedbackCount int64
+	// Verify that still no ReviewFeedback was created
 	require.NoError(t, db.Model(&models.ReviewFeedback{}).Count(&feedbackCount).Error)
-	require.Equal(t, int64(1), feedbackCount, "Only one ReviewFeedback should exist")
-
-	// Verify that the existing ReviewFeedback is still in "creating" status
-	var feedback2 models.ReviewFeedback
-	require.NoError(t, db.First(&feedback2, feedback1.ID).Error)
-	require.Equal(t, feedback1.ID, feedback2.ID)
-	require.Equal(t, "creating", feedback2.PlanCreationStatus)
+	require.Zero(t, feedbackCount, "No ReviewFeedback should be created")
 }
 
-func TestHandlePullRequestReviewComment_PlanCreationDeduplicationWithCompletedPlan(t *testing.T) {
+func TestHandlePullRequestReviewComment_PlanCreationNotExecutedEvenWithExistingFeedback(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(zap.NewNop())
@@ -404,7 +382,7 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationWithCompletedPl
 		KubernetesJobService:     jobService,
 	}
 
-	// Reprocess the same comment: should skip plan creation since it's already completed
+	// Reprocess the same comment: plan creation should not be executed
 	payload := &PullRequestReviewCommentPayload{
 		Action: models.PullRequestReviewCommentActionCreated,
 		Comment: PullRequestReviewCommentComment{
@@ -422,9 +400,8 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationWithCompletedPl
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Equal(t, "no_trigger", resp["status"])
-	require.Equal(t, "skipped_plan_already_started", resp["plan_creation_status"])
-	require.Equal(t, "created", resp["plan_creation_state"])
-	require.False(t, jobService.called, "Plan creation job should not be called for already completed plan")
+	require.NotContains(t, resp, "plan_creation_status")
+	require.False(t, jobService.called, "Plan creation job should not be called for pull_request_review_comment event")
 
 	// Verify that no new ReviewFeedback was created
 	var feedbackCount int64
@@ -485,7 +462,10 @@ func TestHandlePullRequestReviewComment_HumanCommentDoesNotUpdateCodexRequested(
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Equal(t, "plan_creation_started", resp["status"])
+	// plan作成はpull_request_review_commentイベントでは実行されない
+	require.Equal(t, "no_trigger", resp["status"])
+	require.NotContains(t, resp, "plan_creation_status")
+	require.False(t, jobService.called, "Plan creation should not be called for pull_request_review_comment event")
 
 	// Verify that the Codex requested record is still in "requested" status
 	var codexFeedback models.ReviewFeedback
@@ -493,22 +473,10 @@ func TestHandlePullRequestReviewComment_HumanCommentDoesNotUpdateCodexRequested(
 	require.Equal(t, "requested", codexFeedback.Status, "Codex requested record should remain in requested status")
 	require.Equal(t, codexCommentID, *codexFeedback.GitHubCommentID)
 
-	// Verify that a new received record was created for the human comment
+	// Verify that no new received record was created for the human comment
 	var allFeedbacks []models.ReviewFeedback
 	require.NoError(t, db.Where("pr_id = ?", pr.ID).Find(&allFeedbacks).Error)
-	require.Len(t, allFeedbacks, 2, "Should have 2 feedback records: one requested (Codex) and one received (human)")
-
-	// Find the human comment's feedback record
-	var humanFeedback *models.ReviewFeedback
-	for i := range allFeedbacks {
-		if allFeedbacks[i].ID != codexFeedback.ID {
-			humanFeedback = &allFeedbacks[i]
-			break
-		}
-	}
-	require.NotNil(t, humanFeedback, "Human comment feedback record should exist")
-	require.Equal(t, "received", humanFeedback.Status)
-	require.Equal(t, humanCommentID, *humanFeedback.GitHubCommentID)
+	require.Len(t, allFeedbacks, 1, "Should have only 1 feedback record (the existing Codex requested record)")
 }
 
 func TestHandlePullRequestReviewComment_CodexCommentUpdatesMatchingRequested(t *testing.T) {
@@ -561,20 +529,21 @@ func TestHandlePullRequestReviewComment_CodexCommentUpdatesMatchingRequested(t *
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.Equal(t, "plan_creation_started", resp["status"])
+	// plan作成はpull_request_review_commentイベントでは実行されない
+	require.Equal(t, "no_trigger", resp["status"])
+	require.NotContains(t, resp, "plan_creation_status")
+	require.False(t, jobService.called, "Plan creation should not be called for pull_request_review_comment event")
 
-	// Verify that the Codex requested record was updated to "received"
+	// Verify that the Codex requested record is still in "requested" status (not updated)
 	var updatedFeedback models.ReviewFeedback
 	require.NoError(t, db.First(&updatedFeedback, codexRequestedFeedback.ID).Error)
-	require.Equal(t, "received", updatedFeedback.Status, "Codex requested record should be updated to received")
+	require.Equal(t, "requested", updatedFeedback.Status, "Codex requested record should remain in requested status")
 	require.Equal(t, codexCommentID, *updatedFeedback.GitHubCommentID)
-	require.NotNil(t, updatedFeedback.Content)
-	require.Contains(t, *updatedFeedback.Content, "This is Codex's review response")
 
 	// Verify that no new record was created
 	var feedbackCount int64
 	require.NoError(t, db.Model(&models.ReviewFeedback{}).Where("pr_id = ?", pr.ID).Count(&feedbackCount).Error)
-	require.Equal(t, int64(1), feedbackCount, "Should have only 1 feedback record (updated from requested to received)")
+	require.Equal(t, int64(1), feedbackCount, "Should have only 1 feedback record (the existing Codex requested record)")
 }
 
 func TestHandlePullRequestReviewComment_MissingPRReturns200(t *testing.T) {
@@ -613,5 +582,6 @@ func TestHandlePullRequestReviewComment_MissingPRReturns200(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Equal(t, "no_trigger", resp["status"])
 	require.Equal(t, "pr_not_found", resp["reason"])
+	require.NotContains(t, resp, "plan_creation_status")
 	require.False(t, jobService.called, "Plan creation job should not be called when PR is not found")
 }

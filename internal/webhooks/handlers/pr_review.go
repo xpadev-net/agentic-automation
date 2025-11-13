@@ -496,9 +496,9 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		}
 	}
 
-	// Step 12.5: プラン構築処理（レビュー本文がある場合）
+	// Step 12.5: プラン構築処理（レビュー本文またはreview_commentがある場合）
 	var planResult *planCreationResult
-	if !approvalDetected && reviewBody != "" && feedback != nil {
+	if !approvalDetected && reviewOnlyContext != "" && feedback != nil {
 		// PullRequestReviewDepsからPullRequestReviewCommentDepsへの変換
 		commentDeps := PullRequestReviewCommentDeps{
 			Logger:                   deps.Logger,
@@ -519,7 +519,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 			commentDeps,
 			logger,
 			pr,
-			reviewBody,
+			reviewOnlyContext,
 			reviewID,
 			payload.Review.User.Login,
 			payload.Review.User.ID,

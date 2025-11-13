@@ -254,36 +254,23 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		zap.String("delivery_id", deliveryID),
 	)
 
-	planResult, planErr := startPlanCreationIfNeeded(ctx, deps, logger, pr, commentBody, int64(payload.Comment.ID), payload.Comment.User.Login, payload.Comment.User.ID, deliveryID)
-	if planErr != nil {
-		c.Error(planErr)
-		return
-	}
+	// plan作成処理は削除: pull_request_review_commentイベントではplan作成を実行しない
+	// plan作成はpull_request_reviewイベントでのみ実行される
+	logger.Info("Plan creation skipped for pull_request_review_comment event",
+		zap.String("delivery_id", deliveryID),
+		zap.Int("pr_number", payload.PullRequest.Number),
+		zap.String("repo", payload.Repository.FullName),
+		zap.Bool("trigger_detected", triggerDetected),
+		zap.String("note", "plan creation is handled by pull_request_review event only"),
+	)
 
 	if !triggerDetected {
-		status := "no_trigger"
-		if planResult != nil && planResult.hasStarted() {
-			status = "plan_creation_started"
-		}
-
-		response := gin.H{
-			"status":      status,
+		// トリガーが検出されない場合は、plan作成なしで早期リターン
+		c.JSON(http.StatusOK, gin.H{
+			"status":      "no_trigger",
 			"delivery_id": deliveryID,
-		}
-		if planResult != nil {
-			response["plan_creation_status"] = planResult.Status
-			if planResult.ReviewFeedbackID != 0 {
-				response["review_feedback_id"] = planResult.ReviewFeedbackID
-			}
-			if planResult.PlanAgentRunID != 0 {
-				response["plan_agent_run_id"] = planResult.PlanAgentRunID
-			}
-			if planResult.PlanCreationState != "" {
-				response["plan_creation_state"] = planResult.PlanCreationState
-			}
-		}
-
-		c.JSON(http.StatusOK, response)
+			"note":        "plan creation is handled by pull_request_review event only",
+		})
 		return
 	}
 
@@ -435,25 +422,12 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	)
 
 	// Step 11: 成功レスポンス返却
-	response := gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"status":      "processed",
 		"delivery_id": deliveryID,
 		"pr_number":   payload.PullRequest.Number,
-	}
-	if planResult != nil {
-		response["plan_creation_status"] = planResult.Status
-		if planResult.ReviewFeedbackID != 0 {
-			response["review_feedback_id"] = planResult.ReviewFeedbackID
-		}
-		if planResult.PlanAgentRunID != 0 {
-			response["plan_agent_run_id"] = planResult.PlanAgentRunID
-		}
-		if planResult.PlanCreationState != "" {
-			response["plan_creation_state"] = planResult.PlanCreationState
-		}
-	}
-
-	c.JSON(http.StatusOK, response)
+		"note":        "plan creation is handled by pull_request_review event only",
+	})
 
 	// TODO (T096/T098): Add retry progress notification when review feedback triggers retry
 	// When implementing retry orchestrator for review feedback (T096/T098), add NotifyRetryProgress call here:
