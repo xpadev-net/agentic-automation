@@ -9,12 +9,14 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
@@ -47,6 +49,24 @@ func (m *mockCodexReviewService) RequestReview(ctx context.Context, owner, repo 
 	m.requestReviewArgs.prID = prID
 	m.requestReviewArgs.idempotencyKey = idempotencyKey
 	return m.requestReviewResult, m.requestReviewErr
+}
+
+type stubAuthorizationService struct {
+	allowed      bool
+	err          error
+	lastOwner    string
+	lastRepo     string
+	lastUsername string
+}
+
+func (s *stubAuthorizationService) CheckPermission(ctx context.Context, owner, repo, username string) (bool, error) {
+	s.lastOwner = owner
+	s.lastRepo = repo
+	s.lastUsername = username
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.allowed, nil
 }
 
 type recordingPlanJobService struct {
@@ -179,6 +199,61 @@ func invokeReviewCommentHandler(t *testing.T, payload *PullRequestReviewCommentP
 	HandlePullRequestReviewCommentWithDeps(ctx, deps)
 
 	return w
+}
+
+func TestHandlePullRequestReviewComment_TriggerRequestsCodexReview(t *testing.T) {
+	db := setupPlanCreationDB(t)
+	config.SetDBForTesting(db)
+	config.SetLoggerForTesting(zap.NewNop())
+	t.Cleanup(func() {
+		config.ResetDBForTesting()
+		config.ResetLoggerForTesting()
+	})
+
+	_, pr := setupPlanCreationFixtures(t, db)
+
+	mockReviewService := &mockCodexReviewService{}
+	authStub := &stubAuthorizationService{allowed: true}
+	githubClient := clients.NewFromGitHub(github.NewClient(nil), zap.NewNop())
+
+	deps := PullRequestReviewCommentDeps{
+		Logger:                   zap.NewNop(),
+		GitHubClient:             githubClient,
+		AuthorizationService:     authStub,
+		CodexReviewService:       mockReviewService,
+		PullRequestRepository:    repositories.NewPullRequestRepository(db),
+		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
+	}
+
+	payload := &PullRequestReviewCommentPayload{
+		Action: models.PullRequestReviewCommentActionCreated,
+		Comment: PullRequestReviewCommentComment{
+			ID:   9001,
+			Body: "Please @codex review the latest changes.",
+			User: User{Login: "trusted-reviewer"},
+		},
+		PullRequest: PullRequestReviewCommentPullRequest{Number: pr.Number},
+		Repository:  PullRequestReviewCommentRepository{FullName: pr.Repo},
+	}
+
+	w := invokeReviewCommentHandler(t, payload, deps)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Equal(t, "processed", resp["status"])
+	require.Equal(t, float64(pr.Number), resp["pr_number"])
+
+	require.True(t, mockReviewService.requestReviewCalled, "Codex review should be requested when trigger is present")
+	require.Equal(t, "owner", mockReviewService.requestReviewArgs.owner)
+	require.Equal(t, "repo", mockReviewService.requestReviewArgs.repo)
+	require.Equal(t, pr.Number, mockReviewService.requestReviewArgs.prNumber)
+	require.Equal(t, pr.ID, mockReviewService.requestReviewArgs.prID)
+	require.Contains(t, mockReviewService.requestReviewArgs.idempotencyKey, fmt.Sprintf(":%d", payload.Comment.ID))
+
+	require.Equal(t, "owner", authStub.lastOwner)
+	require.Equal(t, "repo", authStub.lastRepo)
+	require.Equal(t, "trusted-reviewer", authStub.lastUsername)
 }
 
 func TestHandlePullRequestReviewComment_PlanCreationSkippedForShortComment(t *testing.T) {

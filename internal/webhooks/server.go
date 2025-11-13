@@ -145,18 +145,7 @@ func handleGitHubWebhook(c *gin.Context) {
 		handlers.HandlePullRequestReview(c)
 		return
 	case models.EventTypePullRequestReviewComment:
-		// pull_request_review_commentイベントはplan作成を実行しない
-		// plan作成はpull_request_reviewイベントでのみ実行される
-		logger.Info("Received pull_request_review_comment event (plan creation disabled)",
-			zap.String("event_type", eventType),
-			zap.String("delivery_id", deliveryID),
-		)
-		c.JSON(http.StatusOK, gin.H{
-			"status":      "received",
-			"event":       eventType,
-			"delivery_id": deliveryID,
-			"note":        "plan creation is handled by pull_request_review event only",
-		})
+		handlers.HandlePullRequestReviewComment(c)
 		return
 	case models.EventTypeCheckSuite:
 		handlers.HandleCheckSuite(c)
