@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
+
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 )
 
 // DependencyIssue represents a minimal cross-repository issue reference
@@ -31,16 +32,16 @@ type IssueDependencyFetcher interface {
 // IssueDependencyFetcherService implements IssueDependencyFetcher using GitHub REST API.
 type IssueDependencyFetcherService struct {
 	githubClient *clients.Client
-	logger       *zap.Logger
+	logger       *config.AppLogger
 }
 
 // NewIssueDependencyFetcher creates a new fetcher service.
-func NewIssueDependencyFetcher(githubClient *clients.Client, logger *zap.Logger) *IssueDependencyFetcherService {
+func NewIssueDependencyFetcher(githubClient *clients.Client, logger *config.AppLogger) *IssueDependencyFetcherService {
 	if githubClient == nil {
 		panic("githubClient is required for IssueDependencyFetcherService")
 	}
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &IssueDependencyFetcherService{githubClient: githubClient, logger: logger}
 }
@@ -50,10 +51,10 @@ func (s *IssueDependencyFetcherService) ListBlockedBy(ctx context.Context, owner
 	issues, err := s.githubClient.ListIssueDependenciesBlockedBy(ctx, owner, repo, issueNumber)
 	if err != nil {
 		s.logger.Error("Failed to list blocked_by issues",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
-			zap.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
+			config.Error(err),
 		)
 		return nil, err
 	}
@@ -62,11 +63,11 @@ func (s *IssueDependencyFetcherService) ListBlockedBy(ctx context.Context, owner
 		out = append(out, mapIssueToDependency(is))
 	}
 	s.logger.Info("Listed blocked_by issues",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("count", len(out)),
-		zap.Duration("elapsed", time.Since(start)),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("count", len(out)),
+		config.Duration("elapsed", time.Since(start)),
 	)
 	return out, nil
 }
@@ -76,10 +77,10 @@ func (s *IssueDependencyFetcherService) ListBlocking(ctx context.Context, owner,
 	issues, err := s.githubClient.ListIssueDependenciesBlocking(ctx, owner, repo, issueNumber)
 	if err != nil {
 		s.logger.Error("Failed to list blocking issues",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
-			zap.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
+			config.Error(err),
 		)
 		return nil, err
 	}
@@ -88,11 +89,11 @@ func (s *IssueDependencyFetcherService) ListBlocking(ctx context.Context, owner,
 		out = append(out, mapIssueToDependency(is))
 	}
 	s.logger.Info("Listed blocking issues",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("count", len(out)),
-		zap.Duration("elapsed", time.Since(start)),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("count", len(out)),
+		config.Duration("elapsed", time.Since(start)),
 	)
 	return out, nil
 }

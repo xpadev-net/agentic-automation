@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 // Color constants for Discord embeds
@@ -57,7 +55,7 @@ type DiscordPayload struct {
 type DiscordClient struct {
 	webhookURL string
 	httpClient *http.Client
-	logger     *zap.Logger
+	logger     *config.AppLogger
 	lastSent   time.Time  // For future rate limiting
 	mu         sync.Mutex // For future rate limiting
 }
@@ -65,7 +63,7 @@ type DiscordClient struct {
 // NewDiscordClient creates a new Discord webhook client
 // If webhookURL is empty, it attempts to load from DISCORD_WEBHOOK_URL environment variable
 // Returns nil if webhook URL is not available (non-blocking, logs warning)
-func NewDiscordClient(webhookURL string, logger *zap.Logger) *DiscordClient {
+func NewDiscordClient(webhookURL string, logger *config.AppLogger) *DiscordClient {
 	// If webhookURL is not provided, try to get from environment
 	if webhookURL == "" {
 		webhookURL = config.GetEnv("DISCORD_WEBHOOK_URL", "")
@@ -79,9 +77,9 @@ func NewDiscordClient(webhookURL string, logger *zap.Logger) *DiscordClient {
 		return nil
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	return &DiscordClient{
@@ -104,8 +102,8 @@ func (c *DiscordClient) send(ctx context.Context, payload DiscordPayload) error 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		c.logger.Error("Failed to marshal Discord payload",
-			zap.Error(err),
-			zap.String("notification_type", "unknown"))
+			config.Error(err),
+			config.String("notification_type", "unknown"))
 		return nil // Non-blocking
 	}
 
@@ -113,7 +111,7 @@ func (c *DiscordClient) send(ctx context.Context, payload DiscordPayload) error 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.webhookURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		c.logger.Error("Failed to create Discord webhook request",
-			zap.Error(err))
+			config.Error(err))
 		return nil // Non-blocking
 	}
 
@@ -123,8 +121,8 @@ func (c *DiscordClient) send(ctx context.Context, payload DiscordPayload) error 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		c.logger.Error("Failed to send Discord notification",
-			zap.Error(err),
-			zap.String("webhook_url", c.maskWebhookURL()))
+			config.Error(err),
+			config.String("webhook_url", c.maskWebhookURL()))
 		return nil // Non-blocking
 	}
 	defer resp.Body.Close()
@@ -135,16 +133,16 @@ func (c *DiscordClient) send(ctx context.Context, payload DiscordPayload) error 
 	// Check status code
 	if resp.StatusCode >= 400 {
 		c.logger.Error("Discord webhook returned error status",
-			zap.Int("status_code", resp.StatusCode),
-			zap.String("response_body", string(respBody)),
-			zap.String("webhook_url", c.maskWebhookURL()))
+			config.Int("status_code", resp.StatusCode),
+			config.String("response_body", string(respBody)),
+			config.String("webhook_url", c.maskWebhookURL()))
 		return nil // Non-blocking
 	}
 
 	// Success
 	c.logger.Info("Discord notification sent successfully",
-		zap.Int("status_code", resp.StatusCode),
-		zap.String("webhook_url", c.maskWebhookURL()))
+		config.Int("status_code", resp.StatusCode),
+		config.String("webhook_url", c.maskWebhookURL()))
 	return nil
 }
 
@@ -289,8 +287,8 @@ func (c *DiscordClient) SendFailureNotification(ctx context.Context, agentRun *m
 	}
 
 	c.logger.Info("Sending Discord failure notification",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("issue_number", issue.Number))
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("issue_number", issue.Number))
 
 	return c.send(ctx, payload)
 }
@@ -348,8 +346,8 @@ func (c *DiscordClient) SendMaxRetriesNotification(ctx context.Context, agentRun
 	}
 
 	c.logger.Info("Sending Discord max retries notification",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("issue_number", issue.Number))
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("issue_number", issue.Number))
 
 	return c.send(ctx, payload)
 }
@@ -364,7 +362,7 @@ func (c *DiscordClient) SendCIFailureNotification(ctx context.Context, pr *model
 	// Only send if retryCount is a multiple of 10
 	if retryCount%10 != 0 {
 		c.logger.Debug("Skipping CI failure notification (not a multiple of 10)",
-			zap.Int("retry_count", retryCount))
+			config.Int("retry_count", retryCount))
 		return nil
 	}
 
@@ -405,8 +403,8 @@ func (c *DiscordClient) SendCIFailureNotification(ctx context.Context, pr *model
 	}
 
 	c.logger.Info("Sending Discord CI failure notification",
-		zap.Int("pr_number", pr.Number),
-		zap.Int("retry_count", retryCount))
+		config.Int("pr_number", pr.Number),
+		config.Int("retry_count", retryCount))
 
 	return c.send(ctx, payload)
 }
@@ -475,7 +473,7 @@ func (c *DiscordClient) SendPRMergedNotification(ctx context.Context, pr *models
 	}
 
 	c.logger.Info("Sending Discord PR merged notification",
-		zap.Int("pr_number", pr.Number))
+		config.Int("pr_number", pr.Number))
 
 	return c.send(ctx, payload)
 }
@@ -560,8 +558,8 @@ func (c *DiscordClient) SendPRMergeFailureNotification(ctx context.Context, pr *
 	payload := DiscordPayload{Embeds: []DiscordEmbed{embed}}
 
 	c.logger.Info("Sending Discord PR merge failure notification",
-		zap.Int("pr_number", pr.Number),
-		zap.String("error_code", errorCode),
+		config.Int("pr_number", pr.Number),
+		config.String("error_code", errorCode),
 	)
 
 	return c.send(ctx, payload)
@@ -636,7 +634,7 @@ func (c *DiscordClient) SendPRCreatedNotification(ctx context.Context, pr *model
 	}
 
 	c.logger.Info("Sending Discord PR created notification",
-		zap.Int("pr_number", pr.Number))
+		config.Int("pr_number", pr.Number))
 
 	return c.send(ctx, payload)
 }
@@ -695,7 +693,7 @@ func (c *DiscordClient) SendMergeFailureNotification(ctx context.Context, pr *mo
 	payload := DiscordPayload{Embeds: []DiscordEmbed{embed}}
 
 	c.logger.Info("Sending Discord merge failure notification",
-		zap.Int("pr_number", pr.Number))
+		config.Int("pr_number", pr.Number))
 
 	return c.send(ctx, payload)
 }
@@ -743,8 +741,8 @@ func (c *DiscordClient) SendOperatorAPIErrorNotification(ctx context.Context, ag
 	}
 
 	c.logger.Info("Sending Discord operator API error notification",
-		zap.Int("agent_run_id", agentRunID),
-		zap.String("pod_name", podName))
+		config.Int("agent_run_id", agentRunID),
+		config.String("pod_name", podName))
 
 	return c.send(ctx, payload)
 }

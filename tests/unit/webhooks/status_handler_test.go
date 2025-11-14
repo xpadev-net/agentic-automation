@@ -21,8 +21,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -114,7 +112,7 @@ func setupTestRouterForStatus(db *gorm.DB) *gin.Engine {
 	router := gin.New()
 
 	// logger & db
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 
@@ -201,7 +199,7 @@ func (f *fakeMergeChecker) Check(_ context.Context, _, _ string, _ int) (service
 func TestStatus_Success_EvaluatesAndPersists(t *testing.T) {
 	db := setupTestDBForStatus(t)
 	gin.SetMode(gin.TestMode)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
@@ -248,7 +246,7 @@ func TestStatus_Success_EvaluatesAndPersists(t *testing.T) {
 func TestStatus_Idempotency_SameDeliveryProcessedOnce(t *testing.T) {
 	db := setupTestDBForStatus(t)
 	gin.SetMode(gin.TestMode)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
@@ -310,7 +308,7 @@ func (f *fakeAggregator) AddStatusSignal(ctx context.Context, prID int, name str
 func TestStatus_AggregatorCalled_OnAnyState(t *testing.T) {
 	db := setupTestDBForStatus(t)
 	gin.SetMode(gin.TestMode)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
@@ -359,7 +357,7 @@ func (f *fakeMergeCheckerNoCall) Check(_ context.Context, _, _ string, _ int) (s
 func TestStatus_Failure_DoesNotEvaluate(t *testing.T) {
 	db := setupTestDBForStatus(t)
 	gin.SetMode(gin.TestMode)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")

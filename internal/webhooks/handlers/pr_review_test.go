@@ -18,7 +18,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -113,13 +112,13 @@ func newTestGitHubClient(t *testing.T, prBody *string, reviewID int64, comments 
 	require.NoError(t, err)
 	ghc := github.NewClient(srv.Client())
 	ghc.BaseURL = base
-	return clients.NewFromGitHub(ghc, zap.NewNop())
+	return clients.NewFromGitHub(ghc, config.NewNopLogger())
 }
 
 func TestHandlePullRequestReview_PrependsPRBodyWhenPresent(t *testing.T) {
 	db := setupPRReviewDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -132,7 +131,7 @@ func TestHandlePullRequestReview_PrependsPRBodyWhenPresent(t *testing.T) {
 	gh := newTestGitHubClient(t, &body, reviewID, []string{"Inline comment A"})
 
 	deps := PullRequestReviewDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		GitHubClient:             gh,
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
@@ -184,7 +183,7 @@ func TestHandlePullRequestReview_SkipsPRBodyWhenEmptyOrNil(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupPRReviewDB(t)
 			config.SetDBForTesting(db)
-			config.SetLoggerForTesting(zap.NewNop())
+			config.SetLoggerForTesting(config.NewNopLogger())
 			t.Cleanup(func() {
 				config.ResetDBForTesting()
 				config.ResetLoggerForTesting()
@@ -196,7 +195,7 @@ func TestHandlePullRequestReview_SkipsPRBodyWhenEmptyOrNil(t *testing.T) {
 			gh := newTestGitHubClient(t, tc.prBody, reviewID, []string{tc.comment})
 
 			deps := PullRequestReviewDeps{
-				Logger:                   zap.NewNop(),
+				Logger:                   config.NewNopLogger(),
 				GitHubClient:             gh,
 				PullRequestRepository:    repositories.NewPullRequestRepository(db),
 				ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
@@ -225,7 +224,7 @@ func TestHandlePullRequestReview_SkipsPRBodyWhenEmptyOrNil(t *testing.T) {
 func TestHandlePullRequestReview_DetectsCodexApprovalWithPRBodyContext(t *testing.T) {
 	db := setupPRReviewDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -238,11 +237,11 @@ func TestHandlePullRequestReview_DetectsCodexApprovalWithPRBodyContext(t *testin
 	gh := newTestGitHubClient(t, &body, reviewID, []string{})
 
 	deps := PullRequestReviewDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		GitHubClient:             gh,
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
-		CodexApprovalDetector:    services.NewCodexApprovalDetector(zap.NewNop()),
+		CodexApprovalDetector:    services.NewCodexApprovalDetector(config.NewNopLogger()),
 	}
 
 	approvalBody := "Codex Review: Didn't find any major issues."

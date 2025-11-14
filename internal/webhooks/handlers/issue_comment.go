@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -78,7 +77,7 @@ type ciStatusProviderAdapter struct {
 	owner        string
 	repo         string
 	prNumber     int
-	logger       *zap.Logger
+	logger       *config.AppLogger
 }
 
 func (a *ciStatusProviderAdapter) GetAggregatedState(ctx context.Context, owner, repo string, prNumber int) (services.CIState, error) {
@@ -108,10 +107,10 @@ func (a *ciStatusProviderAdapter) GetAggregatedState(ctx context.Context, owner,
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Warn("Failed to get PR for CI status check",
-				zap.Error(err),
-				zap.String("owner", actualOwner),
-				zap.String("repo", actualRepo),
-				zap.Int("pr_number", actualPRNumber),
+				config.Error(err),
+				config.String("owner", actualOwner),
+				config.String("repo", actualRepo),
+				config.Int("pr_number", actualPRNumber),
 			)
 		}
 		return services.CIStateUnknown, err
@@ -120,9 +119,9 @@ func (a *ciStatusProviderAdapter) GetAggregatedState(ctx context.Context, owner,
 	if pr == nil || pr.Head == nil || pr.Head.SHA == nil {
 		if a.logger != nil {
 			a.logger.Warn("PR head SHA not available",
-				zap.String("owner", actualOwner),
-				zap.String("repo", actualRepo),
-				zap.Int("pr_number", actualPRNumber),
+				config.String("owner", actualOwner),
+				config.String("repo", actualRepo),
+				config.Int("pr_number", actualPRNumber),
 			)
 		}
 		return services.CIStateUnknown, nil
@@ -135,10 +134,10 @@ func (a *ciStatusProviderAdapter) GetAggregatedState(ctx context.Context, owner,
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Warn("Failed to get check runs for ref",
-				zap.Error(err),
-				zap.String("owner", actualOwner),
-				zap.String("repo", actualRepo),
-				zap.String("ref", headSHA),
+				config.Error(err),
+				config.String("owner", actualOwner),
+				config.String("repo", actualRepo),
+				config.String("ref", headSHA),
 			)
 		}
 		return services.CIStateUnknown, err
@@ -189,7 +188,7 @@ func HandleIssueComment(c *gin.Context) {
 		ghApp, err := clients.NewGitHubAppClient(logger)
 		if err != nil {
 			// テスト環境などで資格情報が無い場合でもここではエラーにせず後段で処理
-			logger.Warn("GitHub App client not initialized", zap.Error(err))
+			logger.Warn("GitHub App client not initialized", config.Error(err))
 		} else {
 			appGitHubClient = ghApp
 		}
@@ -198,7 +197,7 @@ func HandleIssueComment(c *gin.Context) {
 	// Initialize Kubernetes client
 	k8sClient, err := clients.NewKubernetesClient(logger)
 	if err != nil {
-		logger.Error("Failed to initialize Kubernetes client", zap.Error(err))
+		logger.Error("Failed to initialize Kubernetes client", config.Error(err))
 		c.Error(err)
 		return
 	}
@@ -232,7 +231,7 @@ type GitHubNotification interface {
 }
 
 type IssueCommentDeps struct {
-	Logger                    *zap.Logger
+	Logger                    *config.AppLogger
 	GitHubClient              *clients.Client
 	KubernetesClient          *clients.KubernetesClient
 	TriggerService            *services.TriggerDetectionService
@@ -256,7 +255,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	deliveryID := c.GetHeader(deliveryHeader)
 	if deliveryID == "" {
 		logger.Warn("Missing X-GitHub-Delivery header",
-			zap.String("path", c.Request.URL.Path),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_MISSING_DELIVERY, "missing X-GitHub-Delivery header", nil))
 		return
@@ -269,8 +268,8 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	payloadData, exists := c.Get("webhook_payload")
 	if !exists {
 		logger.Error("Webhook payload not found in context",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_PAYLOAD_NOT_FOUND, "webhook payload not found in context", nil))
 		return
@@ -279,8 +278,8 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	payloadBytes, ok := payloadData.([]byte)
 	if !ok {
 		logger.Error("Invalid webhook payload type",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid webhook payload type", nil))
 		return
@@ -289,9 +288,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	var payload IssueCommentPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		logger.Error("Failed to parse webhook payload",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(err)
 		return
@@ -300,10 +299,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Only process "created" actions (ignore edited/deleted)
 	if payload.Action != models.IssueCommentActionCreated {
 		logger.Info("Ignoring non-created action",
-			zap.String("action", payload.Action),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.String("action", payload.Action),
+			config.String("delivery_id", deliveryID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "ignored",
@@ -316,10 +315,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Step 3: Issue state validation
 	if payload.Issue.State != "open" {
 		logger.Warn("Cannot trigger agent on closed issue",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
-			zap.String("issue_state", payload.Issue.State),
+			config.String("delivery_id", deliveryID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
+			config.String("issue_state", payload.Issue.State),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "rejected",
@@ -361,8 +360,8 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		k8sClient, err := clients.NewKubernetesClient(logger)
 		if err != nil {
 			logger.Error("Failed to initialize Kubernetes client",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
 			)
 			c.Error(err)
 			return
@@ -381,17 +380,17 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		detector := services.NewCodexApprovalDetector(logger)
 		if detector.DetectApproval(payload.Comment.Body, payload.Comment.User.Login, payload.Comment.User.ID) {
 			logger.Info("Codex approval detected in issue comment; re-evaluating merge conditions",
-				zap.String("delivery_id", deliveryID),
-				zap.Int("issue_number", payload.Issue.Number),
-				zap.String("repo", payload.Repository.FullName),
+				config.String("delivery_id", deliveryID),
+				config.Int("issue_number", payload.Issue.Number),
+				config.String("repo", payload.Repository.FullName),
 			)
 
 			// リポジトリ情報抽出
 			repoParts := strings.Split(payload.Repository.FullName, "/")
 			if len(repoParts) != 2 {
 				logger.Error("Invalid repository full name format",
-					zap.String("full_name", payload.Repository.FullName),
-					zap.String("delivery_id", deliveryID),
+					config.String("full_name", payload.Repository.FullName),
+					config.String("delivery_id", deliveryID),
 				)
 				c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 				return
@@ -404,7 +403,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			if githubClient == nil {
 				if appGitHubClient == nil {
 					logger.Error("GitHub App client not available",
-						zap.String("delivery_id", deliveryID),
+						config.String("delivery_id", deliveryID),
 					)
 					c.Error(errors.NewCodedError(errors.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 					return
@@ -412,10 +411,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 				if err != nil {
 					logger.Error("Failed to init per-repo GitHub client",
-						zap.Error(err),
-						zap.String("owner", owner),
-						zap.String("repo", repo),
-						zap.String("delivery_id", deliveryID),
+						config.Error(err),
+						config.String("owner", owner),
+						config.String("repo", repo),
+						config.String("delivery_id", deliveryID),
 					)
 					c.Error(err)
 					return
@@ -433,17 +432,17 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				latest := list[0]
 				if uerr := reviewFeedbackRepo.UpdateToReceived(latest.ID, content, true, &commentID); uerr != nil {
 					logger.Warn("Failed to update ReviewFeedback to received",
-						zap.Error(uerr),
-						zap.String("delivery_id", deliveryID),
-						zap.Int("pr_id", pr.ID),
+						config.Error(uerr),
+						config.String("delivery_id", deliveryID),
+						config.Int("pr_id", pr.ID),
 					)
 				}
 			} else {
 				if _, cerr := reviewFeedbackRepo.CreateReceivedReview(pr.ID, content, true, &commentID); cerr != nil {
 					logger.Warn("Failed to create received ReviewFeedback",
-						zap.Error(cerr),
-						zap.String("delivery_id", deliveryID),
-						zap.Int("pr_id", pr.ID),
+						config.Error(cerr),
+						config.String("delivery_id", deliveryID),
+						config.Int("pr_id", pr.ID),
 					)
 				}
 			}
@@ -462,21 +461,21 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			res, err := checker.Check(ctx, owner, repo, pr.Number)
 			if err != nil {
 				logger.Error("merge condition check failed",
-					zap.Error(err),
-					zap.String("delivery_id", deliveryID),
-					zap.Int("pr_number", pr.Number),
-					zap.String("repo", payload.Repository.FullName),
+					config.Error(err),
+					config.String("delivery_id", deliveryID),
+					config.Int("pr_number", pr.Number),
+					config.String("repo", payload.Repository.FullName),
 				)
 				c.Error(err)
 				return
 			}
 
 			logger.Info("merge condition evaluated",
-				zap.Bool("mergeable", res.Mergeable),
-				zap.String("ci_state", string(res.CIState)),
-				zap.String("conflict", string(res.Conflict)),
-				zap.Int("reasons_count", len(res.Reasons)),
-				zap.String("delivery_id", deliveryID),
+				config.Bool("mergeable", res.Mergeable),
+				config.String("ci_state", string(res.CIState)),
+				config.String("conflict", string(res.Conflict)),
+				config.Int("reasons_count", len(res.Reasons)),
+				config.String("delivery_id", deliveryID),
 			)
 
 			if res.Mergeable {
@@ -490,9 +489,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 				if am == nil {
 					logger.Info("auto-merge skipped (GitHub App client unavailable)",
-						zap.String("delivery_id", deliveryID),
-						zap.Int("pr_number", pr.Number),
-						zap.String("repo", payload.Repository.FullName),
+						config.String("delivery_id", deliveryID),
+						config.Int("pr_number", pr.Number),
+						config.String("repo", payload.Repository.FullName),
 					)
 					c.JSON(http.StatusOK, gin.H{
 						"status":      "mergeable_auto_merge_skipped",
@@ -506,8 +505,8 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				if mergeErr != nil {
 					// 予期しないエラー（通常はAutoMergeResultで返却される）
 					logger.Warn("auto-merge attempt returned error",
-						zap.Error(mergeErr),
-						zap.String("delivery_id", deliveryID),
+						config.Error(mergeErr),
+						config.String("delivery_id", deliveryID),
 					)
 					// Discord: notify merge failure (best-effort)
 					func() {
@@ -537,7 +536,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 						if i, err := repositories.NewIssueRepository().FindByID(*pr.IssueID); err == nil {
 							issue = i
 						} else {
-							logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+							logger.Warn("failed to load issue for merge failure notification", config.Error(err))
 						}
 					}
 
@@ -554,9 +553,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					}()
 
 					logger.Warn("auto-merge failed",
-						zap.String("error_type", mergeRes.ErrorType),
-						zap.String("error_message", mergeRes.ErrorMessage),
-						zap.String("delivery_id", deliveryID),
+						config.String("error_type", mergeRes.ErrorType),
+						config.String("error_message", mergeRes.ErrorMessage),
+						config.String("delivery_id", deliveryID),
 					)
 					// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
 					_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
@@ -568,14 +567,14 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				}
 
 				logger.Info("auto-merge succeeded",
-					zap.Bool("merged", mergeRes != nil && mergeRes.Merged),
-					zap.String("merge_sha", func() string {
+					config.Bool("merged", mergeRes != nil && mergeRes.Merged),
+					config.String("merge_sha", func() string {
 						if mergeRes != nil {
 							return mergeRes.MergeSHA
 						}
 						return ""
 					}()),
-					zap.String("delivery_id", deliveryID),
+					config.String("delivery_id", deliveryID),
 				)
 				// Discord: notify merge success (best-effort)
 				func() {
@@ -611,10 +610,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 	// Step 5: Trigger detection
 	logger.Info("Checking for trigger in comment",
-		zap.String("delivery_id", deliveryID),
-		zap.Int("issue_number", payload.Issue.Number),
-		zap.String("repo", payload.Repository.FullName),
-		zap.String("comment_user", payload.Comment.User.Login),
+		config.String("delivery_id", deliveryID),
+		config.Int("issue_number", payload.Issue.Number),
+		config.String("repo", payload.Repository.FullName),
+		config.String("comment_user", payload.Comment.User.Login),
 	)
 
 	triggerDetected := triggerService.DetectRunAgentTrigger(payload.Comment.Body)
@@ -626,15 +625,15 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		}
 
 		logger.Info("No trigger detected in comment",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
-			zap.Int("comment_id", payload.Comment.ID),
-			zap.String("comment_created_at", payload.Comment.CreatedAt),
-			zap.String("comment_body_preview", commentBodyPreview),
-			zap.String("comment_user", payload.Comment.User.Login),
-			zap.String("trigger_string", utils.RunAgentTrigger),
-			zap.String("detection_reason", "trigger string '/run-agent' not found in comment body"),
+			config.String("delivery_id", deliveryID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
+			config.Int("comment_id", payload.Comment.ID),
+			config.String("comment_created_at", payload.Comment.CreatedAt),
+			config.String("comment_body_preview", commentBodyPreview),
+			config.String("comment_user", payload.Comment.User.Login),
+			config.String("trigger_string", utils.RunAgentTrigger),
+			config.String("detection_reason", "trigger string '/run-agent' not found in comment body"),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "no_trigger",
@@ -644,18 +643,18 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 
 	logger.Info("Trigger detected in comment",
-		zap.Bool("trigger_detected", true),
-		zap.String("delivery_id", deliveryID),
-		zap.Int("issue_number", payload.Issue.Number),
-		zap.String("repo", payload.Repository.FullName),
+		config.Bool("trigger_detected", true),
+		config.String("delivery_id", deliveryID),
+		config.Int("issue_number", payload.Issue.Number),
+		config.String("repo", payload.Repository.FullName),
 	)
 
 	// Step 6: Permission check
 	repoParts := strings.Split(payload.Repository.FullName, "/")
 	if len(repoParts) != 2 {
 		logger.Error("Invalid repository full name format",
-			zap.String("full_name", payload.Repository.FullName),
-			zap.String("delivery_id", deliveryID),
+			config.String("full_name", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 		return
@@ -673,10 +672,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 			if err != nil {
 				logger.Error("Failed to init per-repo GitHub client",
-					zap.Error(err),
-					zap.String("owner", owner),
-					zap.String("repo", repo),
-					zap.String("delivery_id", deliveryID),
+					config.Error(err),
+					config.String("owner", owner),
+					config.String("repo", repo),
+					config.String("delivery_id", deliveryID),
 				)
 				c.Error(err)
 				return
@@ -717,16 +716,16 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 			}
 		}
 
-		logFields := []zap.Field{
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.String("user", payload.Comment.User.Login),
-			zap.String("repo", payload.Repository.FullName),
-			zap.String("api_method", "GetPermissionLevel"),
-			zap.String("error_type", errorType),
+		logFields := []config.Field{
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.String("user", payload.Comment.User.Login),
+			config.String("repo", payload.Repository.FullName),
+			config.String("api_method", "GetPermissionLevel"),
+			config.String("error_type", errorType),
 		}
 		if httpStatusCode > 0 {
-			logFields = append(logFields, zap.Int("http_status_code", httpStatusCode))
+			logFields = append(logFields, config.Int("http_status_code", httpStatusCode))
 		}
 
 		logger.Error("Failed to check user permission",
@@ -738,12 +737,12 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 	if !hasPermission {
 		logger.Warn("User lacks permission to trigger agent",
-			zap.String("delivery_id", deliveryID),
-			zap.String("user", payload.Comment.User.Login),
-			zap.String("repo", payload.Repository.FullName),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("authorization_required_level", "write/maintain/admin"),
-			zap.String("authorization_policy", "FR-018: Collaborator+ permission required"),
+			config.String("delivery_id", deliveryID),
+			config.String("user", payload.Comment.User.Login),
+			config.String("repo", payload.Repository.FullName),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("authorization_required_level", "write/maintain/admin"),
+			config.String("authorization_policy", "FR-018: Collaborator+ permission required"),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "permission_denied",
@@ -753,10 +752,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 
 	logger.Info("User permission verified",
-		zap.Bool("authorized", true),
-		zap.String("user", payload.Comment.User.Login),
-		zap.String("repo", payload.Repository.FullName),
-		zap.String("delivery_id", deliveryID),
+		config.Bool("authorized", true),
+		config.String("user", payload.Comment.User.Login),
+		config.String("repo", payload.Repository.FullName),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Step 7: Get AgentRun (created by idempotency middleware)
@@ -764,34 +763,34 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	if err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error("AgentRun not found for delivery ID (should be created by middleware)",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("issue_number", payload.Issue.Number),
-				zap.String("repo", payload.Repository.FullName),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("issue_number", payload.Issue.Number),
+				config.String("repo", payload.Repository.FullName),
 			)
 			c.Error(errors.NewCodedError(errors.ERR_AGENT_RUN_NOT_FOUND, "agent run not found for delivery ID", nil))
 			return
 		}
 		logger.Error("Failed to get AgentRun by idempotency key",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("AgentRun retrieved",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.String("state", agentRun.State),
-		zap.String("delivery_id", deliveryID),
+		config.Int("agent_run_id", agentRun.ID),
+		config.String("state", agentRun.State),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Check if AgentRun is already processed
 	if agentRun.State != "queued" {
 		logger.Info("AgentRun already processed",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("state", agentRun.State),
-			zap.String("delivery_id", deliveryID),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("state", agentRun.State),
+			config.String("delivery_id", deliveryID),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":       "already_processed",
@@ -807,49 +806,49 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	if err != nil {
 		if stderrors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Error("Issue not found (should be created by middleware)",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("issue_number", payload.Issue.Number),
-				zap.String("repo", payload.Repository.FullName),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("issue_number", payload.Issue.Number),
+				config.String("repo", payload.Repository.FullName),
 			)
 			c.Error(errors.NewCodedError(errors.ERR_DB_RECORD_NOT_FOUND, "issue not found", nil))
 			return
 		}
 		logger.Error("Failed to get Issue",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("Issue retrieved",
-		zap.Int("issue_id", issue.ID),
-		zap.Int("issue_number", issue.Number),
-		zap.String("repo", issue.Repo),
-		zap.String("delivery_id", deliveryID),
+		config.Int("issue_id", issue.ID),
+		config.Int("issue_number", issue.Number),
+		config.String("repo", issue.Repo),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Step 9: Collect Issue context
 	issueContext, err := issueContextService.CollectIssueContext(ctx, owner, repo, payload.Issue.Number)
 	if err != nil {
 		logger.Error("Failed to collect Issue context",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("Issue context collected",
-		zap.Int("comments_count", len(issueContext.Comments)),
-		zap.Int("labels_count", len(issueContext.Labels)),
-		zap.Bool("has_body", issueContext.Body != ""),
-		zap.String("delivery_id", deliveryID),
+		config.Int("comments_count", len(issueContext.Comments)),
+		config.Int("labels_count", len(issueContext.Labels)),
+		config.Bool("has_body", issueContext.Body != ""),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Step 9.5: Check for existing PR and extract user instruction
@@ -863,25 +862,25 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		if prErr == nil && pr != nil && pr.Status == "open" {
 			existingBranchName = pr.Branch
 			logger.Info("Found PR associated with agent run, will checkout existing branch",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("pr_id", *agentRun.PRID),
-				zap.Int("pr_number", pr.Number),
-				zap.String("branch", existingBranchName),
-				zap.String("delivery_id", deliveryID),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("pr_id", *agentRun.PRID),
+				config.Int("pr_number", pr.Number),
+				config.String("branch", existingBranchName),
+				config.String("delivery_id", deliveryID),
 			)
 		} else if prErr != nil {
 			logger.Warn("Failed to find PR associated with agent run, falling back to issue PRs",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("pr_id", *agentRun.PRID),
-				zap.Error(prErr),
-				zap.String("delivery_id", deliveryID),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("pr_id", *agentRun.PRID),
+				config.Error(prErr),
+				config.String("delivery_id", deliveryID),
 			)
 		} else if pr != nil && pr.Status != "open" {
 			logger.Info("PR associated with agent run is not open, falling back to issue PRs",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("pr_id", *agentRun.PRID),
-				zap.String("pr_status", pr.Status),
-				zap.String("delivery_id", deliveryID),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("pr_id", *agentRun.PRID),
+				config.String("pr_status", pr.Status),
+				config.String("delivery_id", deliveryID),
 			)
 		}
 	}
@@ -895,10 +894,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				if pr.Status == "open" {
 					existingBranchName = pr.Branch
 					logger.Info("Found existing PR for issue, will checkout existing branch",
-						zap.Int("issue_id", issue.ID),
-						zap.Int("pr_number", pr.Number),
-						zap.String("branch", existingBranchName),
-						zap.String("delivery_id", deliveryID),
+						config.Int("issue_id", issue.ID),
+						config.Int("pr_number", pr.Number),
+						config.String("branch", existingBranchName),
+						config.String("delivery_id", deliveryID),
 					)
 					break
 				}
@@ -908,8 +907,8 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 	if userInstruction != "" {
 		logger.Info("Extracted user instruction from comment",
-			zap.String("instruction", userInstruction),
-			zap.String("delivery_id", deliveryID),
+			config.String("instruction", userInstruction),
+			config.String("delivery_id", deliveryID),
 		)
 	}
 
@@ -921,23 +920,23 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		labelsJSON, err := json.Marshal(issueContext.Labels)
 		if err != nil {
 			logger.Warn("Failed to marshal issue labels",
-				zap.Error(err),
-				zap.Int("issue_id", issue.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.Int("issue_id", issue.ID),
+				config.String("delivery_id", deliveryID),
 			)
 		} else {
 			issue.Labels = string(labelsJSON)
 			if err := issueRepo.Update(issue); err != nil {
 				logger.Warn("Failed to update issue labels",
-					zap.Error(err),
-					zap.Int("issue_id", issue.ID),
-					zap.String("delivery_id", deliveryID),
+					config.Error(err),
+					config.Int("issue_id", issue.ID),
+					config.String("delivery_id", deliveryID),
 				)
 			} else {
 				logger.Info("Issue labels updated from GitHub",
-					zap.Int("labels_count", len(issueContext.Labels)),
-					zap.Int("issue_id", issue.ID),
-					zap.String("delivery_id", deliveryID),
+					config.Int("labels_count", len(issueContext.Labels)),
+					config.Int("issue_id", issue.ID),
+					config.String("delivery_id", deliveryID),
 				)
 			}
 		}
@@ -947,9 +946,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	agentType := agentTypeDetectorService.DetectAgentType(issue)
 
 	logger.Info("Agent type detected",
-		zap.String("agent_type", agentType),
-		zap.Int("issue_id", issue.ID),
-		zap.String("delivery_id", deliveryID),
+		config.String("agent_type", agentType),
+		config.Int("issue_id", issue.ID),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Step 12: Reuse middleware-created AgentRun for plan creation
@@ -965,18 +964,18 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Update agentRun with plan creation configuration
 	if err := agentRunRepo.Update(planAgentRun); err != nil {
 		logger.Error("Failed to update AgentRun for plan creation",
-			zap.Error(err),
-			zap.Int("agent_run_id", planAgentRun.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("Reusing middleware-created AgentRun for plan creation",
-		zap.Int("plan_agent_run_id", planAgentRun.ID),
-		zap.String("idempotency_key", planAgentRun.IdempotencyKey),
-		zap.String("delivery_id", deliveryID),
+		config.Int("plan_agent_run_id", planAgentRun.ID),
+		config.String("idempotency_key", planAgentRun.IdempotencyKey),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Determine branch name to store in Input
@@ -1002,7 +1001,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 	inputBytes, marshalErr := json.Marshal(inputPayload)
 	if marshalErr != nil {
-		logger.Warn("Failed to marshal structured input payload", zap.Error(marshalErr))
+		logger.Warn("Failed to marshal structured input payload", config.Error(marshalErr))
 		// Fallback to minimal JSON with prompt and branch name
 		inputBytes, _ = json.Marshal(map[string]any{
 			"schema_version": "1",
@@ -1016,9 +1015,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	planAgentRun.Input = datatypes.JSON(inputBytes)
 	if err := agentRunRepo.Update(planAgentRun); err != nil {
 		logger.Error("Failed to update plan creation AgentRun",
-			zap.Error(err),
-			zap.Int("plan_agent_run_id", planAgentRun.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
@@ -1037,11 +1036,11 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		if verr != nil {
 			if stderrors.Is(verr, services.ErrBlockedDependencies) {
 				logger.Info("Execution blocked due to dependencies",
-					zap.Int("agent_run_id", agentRun.ID),
-					zap.Int("issue_number", payload.Issue.Number),
-					zap.String("repo", payload.Repository.FullName),
-					zap.Int("blocked_count", len(vr.BlockedDeps)),
-					zap.Strings("blocked_deps", summarizeIssuesForLog(vr.BlockedDeps)),
+					config.Int("agent_run_id", agentRun.ID),
+					config.Int("issue_number", payload.Issue.Number),
+					config.String("repo", payload.Repository.FullName),
+					config.Int("blocked_count", len(vr.BlockedDeps)),
+					config.Strings("blocked_deps", summarizeIssuesForLog(vr.BlockedDeps)),
 				)
 
 				// Post dependency violation notification (US5 T129)
@@ -1073,9 +1072,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 						idempotencyKey,
 					); notifyErr != nil {
 						logger.Warn("Failed to post dependency violation notification",
-							zap.Error(notifyErr),
-							zap.Int("issue_number", payload.Issue.Number),
-							zap.String("repo", payload.Repository.FullName),
+							config.Error(notifyErr),
+							config.Int("issue_number", payload.Issue.Number),
+							config.String("repo", payload.Repository.FullName),
 						)
 					}
 				}
@@ -1103,9 +1102,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					ctx, owner, repo, payload.Issue.Number, prNumber, vr.BlockedDeps, idempotencyKey,
 				); notifyErr != nil {
 					logger.Warn("Failed to post dependency violation notification (defensive path)",
-						zap.Error(notifyErr),
-						zap.Int("issue_number", payload.Issue.Number),
-						zap.String("repo", payload.Repository.FullName),
+						config.Error(notifyErr),
+						config.Int("issue_number", payload.Issue.Number),
+						config.String("repo", payload.Repository.FullName),
 					)
 				}
 			}
@@ -1114,26 +1113,26 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		}
 	} else {
 		logger.Info("Skipping dependency validation: GitHub client not provided",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 	}
 
 	// Step 13: State transition for plan creation AgentRun (queued -> started)
 	if err := stateMachine.TransitionToStarted(planAgentRun.ID); err != nil {
 		logger.Error("Failed to transition plan creation AgentRun to started state",
-			zap.Error(err),
-			zap.Int("plan_agent_run_id", planAgentRun.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("Plan creation AgentRun state transitioned to started",
-		zap.Int("plan_agent_run_id", planAgentRun.ID),
-		zap.String("delivery_id", deliveryID),
+		config.Int("plan_agent_run_id", planAgentRun.ID),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Step 14: Create Kubernetes Job for plan creation
@@ -1141,21 +1140,21 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	job, err := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, nil, existingBranchName)
 	if err != nil {
 		logger.Error("Failed to create plan creation Kubernetes Job, rolling back state",
-			zap.Error(err),
-			zap.Int("plan_agent_run_id", planAgentRun.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		// Rollback state to queued for retry
 		if rollbackErr := stateMachine.TransitionToQueued(planAgentRun.ID); rollbackErr != nil {
 			logger.Error("Failed to rollback plan creation AgentRun state",
-				zap.Error(rollbackErr),
-				zap.Int("plan_agent_run_id", planAgentRun.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Error(rollbackErr),
+				config.Int("plan_agent_run_id", planAgentRun.ID),
+				config.String("delivery_id", deliveryID),
 			)
 		} else {
 			logger.Info("Plan creation AgentRun state rolled back to queued for retry",
-				zap.Int("plan_agent_run_id", planAgentRun.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Int("plan_agent_run_id", planAgentRun.ID),
+				config.String("delivery_id", deliveryID),
 			)
 		}
 		c.Error(err)
@@ -1163,11 +1162,11 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 
 	logger.Info("Plan creation Kubernetes Job created successfully",
-		zap.Int("plan_agent_run_id", planAgentRun.ID),
-		zap.String("job_name", job.Name),
-		zap.String("job_uid", string(job.UID)),
-		zap.String("namespace", job.Namespace),
-		zap.String("delivery_id", deliveryID),
+		config.Int("plan_agent_run_id", planAgentRun.ID),
+		config.String("job_name", job.Name),
+		config.String("job_uid", string(job.UID)),
+		config.String("namespace", job.Namespace),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Post GitHub status comment for plan creation
@@ -1181,18 +1180,18 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	); err != nil {
 		// Non-blocking: log error but don't fail the webhook processing
 		logger.Warn("Failed to post GitHub plan creation start comment",
-			zap.Error(err),
-			zap.Int("plan_agent_run_id", planAgentRun.ID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
 		)
 	} else {
 		logger.Info("GitHub plan creation start comment posted successfully",
-			zap.Int("plan_agent_run_id", planAgentRun.ID),
-			zap.Int("issue_number", payload.Issue.Number),
-			zap.String("repo", payload.Repository.FullName),
-			zap.String("delivery_id", deliveryID),
+			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.Int("issue_number", payload.Issue.Number),
+			config.String("repo", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
 		)
 	}
 

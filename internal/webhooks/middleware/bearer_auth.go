@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 const authorizationHeader = "Authorization"
@@ -25,7 +24,7 @@ func VerifyBearerToken() gin.HandlerFunc {
 	token, err := config.GetEnvRequired("OPERATOR_API_TOKEN")
 	if err != nil {
 		// This should be caught at server startup, but handle it here as well
-		logger.Fatal("OPERATOR_API_TOKEN environment variable is required", zap.Error(err))
+		logger.Fatal("OPERATOR_API_TOKEN environment variable is required", config.Error(err))
 	}
 
 	return func(c *gin.Context) {
@@ -33,7 +32,7 @@ func VerifyBearerToken() gin.HandlerFunc {
 		authHeader := c.GetHeader(authorizationHeader)
 		if authHeader == "" {
 			logger.Warn("Missing Authorization header",
-				zap.String("path", c.Request.URL.Path),
+				config.String("path", c.Request.URL.Path),
 			)
 			c.AbortWithStatusJSON(401, gin.H{
 				"error":   "INVALID_TOKEN",
@@ -45,7 +44,7 @@ func VerifyBearerToken() gin.HandlerFunc {
 		// Check if it starts with "Bearer "
 		if !strings.HasPrefix(authHeader, bearerPrefix) {
 			logger.Warn("Authorization header does not start with 'Bearer '",
-				zap.String("path", c.Request.URL.Path),
+				config.String("path", c.Request.URL.Path),
 			)
 			c.AbortWithStatusJSON(401, gin.H{
 				"error":   "INVALID_TOKEN",
@@ -58,7 +57,7 @@ func VerifyBearerToken() gin.HandlerFunc {
 		providedToken := strings.TrimPrefix(authHeader, bearerPrefix)
 		if providedToken == "" {
 			logger.Warn("Empty Bearer token",
-				zap.String("path", c.Request.URL.Path),
+				config.String("path", c.Request.URL.Path),
 			)
 			c.AbortWithStatusJSON(401, gin.H{
 				"error":   "INVALID_TOKEN",
@@ -71,7 +70,7 @@ func VerifyBearerToken() gin.HandlerFunc {
 		// Use subtle.ConstantTimeCompare for secure comparison
 		if len(providedToken) != len(token) || subtle.ConstantTimeCompare([]byte(providedToken), []byte(token)) != 1 {
 			logger.Warn("Invalid Bearer token",
-				zap.String("path", c.Request.URL.Path),
+				config.String("path", c.Request.URL.Path),
 			)
 			c.AbortWithStatusJSON(401, gin.H{
 				"error":   "INVALID_TOKEN",

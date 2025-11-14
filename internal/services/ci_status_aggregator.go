@@ -2,6 +2,7 @@ package services
 
 import (
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"context"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 )
 
 // CIStatusAggregator provides CI aggregation per PR at latest head SHA.
@@ -36,21 +36,21 @@ type CIStatusSaver interface {
 type ciStatusAggregator struct {
 	gh     GitHubChecks
 	repo   CIStatusSaver
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
-func NewCIStatusAggregator(gh *clients.Client, repo *repositories.CIStatusRepository, logger *zap.Logger) CIStatusAggregator {
+func NewCIStatusAggregator(gh *clients.Client, repo *repositories.CIStatusRepository, logger *config.AppLogger) CIStatusAggregator {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	// clients.Client and repositories.CIStatusRepository satisfy the interfaces
 	return &ciStatusAggregator{gh: GitHubChecks(gh), repo: CIStatusSaver(repo), logger: logger}
 }
 
 // NewCIStatusAggregatorWithDeps allows injecting interface-based dependencies (for tests).
-func NewCIStatusAggregatorWithDeps(gh GitHubChecks, saver CIStatusSaver, logger *zap.Logger) CIStatusAggregator {
+func NewCIStatusAggregatorWithDeps(gh GitHubChecks, saver CIStatusSaver, logger *config.AppLogger) CIStatusAggregator {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &ciStatusAggregator{gh: gh, repo: saver, logger: logger}
 }
@@ -60,29 +60,29 @@ func (s *ciStatusAggregator) AggregateAndStore(ctx context.Context, owner, repo 
 	pr, err := s.gh.GetPullRequest(ctx, owner, repo, prNumber)
 	if err != nil {
 		s.logger.Warn("Failed to get PR for head SHA validation; skip aggregation",
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("pr_number", prNumber),
+			config.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
 		)
 		return nil, nil
 	}
 	if pr == nil || pr.Head == nil || pr.Head.SHA == nil {
 		s.logger.Warn("PR head SHA not available; skip aggregation",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("pr_number", prNumber),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
 		)
 		return nil, nil
 	}
 	current := *pr.Head.SHA
 	if current != headSHA {
 		s.logger.Info("Stale check_suite ignored due to head SHA mismatch",
-			zap.Int("pr_id", prID),
-			zap.Int("pr_number", prNumber),
-			zap.Int64("check_suite_id", checkSuiteID),
-			zap.String("suite_head_sha", headSHA),
-			zap.String("current_pr_head_sha", current),
+			config.Int("pr_id", prID),
+			config.Int("pr_number", prNumber),
+			config.Int64("check_suite_id", checkSuiteID),
+			config.String("suite_head_sha", headSHA),
+			config.String("current_pr_head_sha", current),
 		)
 		return nil, nil
 	}
@@ -130,13 +130,13 @@ func (s *ciStatusAggregator) AggregateAndStore(ctx context.Context, owner, repo 
 		return nil, err
 	}
 	s.logger.Info("CI aggregated status stored",
-		zap.Int("pr_id", prID),
-		zap.Int64("check_suite_id", checkSuiteID),
-		zap.String("aggregated", agg.Aggregated),
-		zap.Int("total", agg.Total),
-		zap.Int("success", agg.SuccessCount),
-		zap.Int("failed", agg.FailedCount),
-		zap.Int("pending", agg.PendingCount),
+		config.Int("pr_id", prID),
+		config.Int64("check_suite_id", checkSuiteID),
+		config.String("aggregated", agg.Aggregated),
+		config.Int("total", agg.Total),
+		config.Int("success", agg.SuccessCount),
+		config.Int("failed", agg.FailedCount),
+		config.Int("pending", agg.PendingCount),
 	)
 
 	return ci, nil

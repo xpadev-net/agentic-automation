@@ -25,8 +25,6 @@ import (
 	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -328,7 +326,7 @@ func createCodexApproval(t *testing.T, db *gorm.DB, prID int, commentID int64) *
 type dbCIProviderForTest struct {
 	prRepo *repositories.PullRequestRepository
 	ciRepo *repositories.CIStatusRepository
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 func (p *dbCIProviderForTest) GetAggregatedState(ctx context.Context, owner, repo string, prNumber int) (services.CIState, error) {
@@ -393,7 +391,7 @@ func (p *dbCIProviderForTest) GetAggregatedState(ctx context.Context, owner, rep
 type dbCodexCheckerForTest struct {
 	prRepo *repositories.PullRequestRepository
 	rfRepo *repositories.ReviewFeedbackRepository
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 func (c *dbCodexCheckerForTest) IsApproved(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
@@ -556,7 +554,7 @@ func assertMergeConditionResult(t *testing.T, result services.MergeConditionResu
 
 // setupRouterForUS4 constructs a router with webhook handlers for US4 auto-merge tests
 func setupRouterForUS4(
-	logger *zap.Logger,
+	logger *config.AppLogger,
 	prRepo *repositories.PullRequestRepository,
 	ciRepo *repositories.CIStatusRepository,
 	rfRepo *repositories.ReviewFeedbackRepository,
@@ -604,7 +602,7 @@ func setupRouterForUS4(
 	if err != nil {
 		// If GitHubAppClient creation fails, log warning but continue
 		// (some tests may not need it)
-		logger.Warn("Failed to create GitHubAppClient for testing", zap.Error(err))
+		logger.Warn("Failed to create GitHubAppClient for testing", config.Error(err))
 	} else {
 		handlers.SetAppGitHubClient(appGitHubClient)
 	}
@@ -662,7 +660,7 @@ func Test_ApproveAndCISuccess_TriggersAutoMerge(t *testing.T) {
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 	defer os.Unsetenv("GITHUB_WEBHOOK_SECRET")
 
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	db := setupDBForUS4(t)
@@ -824,7 +822,7 @@ func Test_CodexApprovalComment_TriggersAutoMerge(t *testing.T) {
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 	defer os.Unsetenv("GITHUB_WEBHOOK_SECRET")
 
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	db := setupDBForUS4(t)
@@ -910,7 +908,7 @@ func Test_CodexApprovalComment_SkipsAutoMergeWithoutAppClient(t *testing.T) {
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")
 	defer os.Unsetenv("GITHUB_WEBHOOK_SECRET")
 
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	db := setupDBForUS4(t)

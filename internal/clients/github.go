@@ -12,9 +12,9 @@ import (
 
 	ghinstallation "github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/errors"
 )
 
@@ -27,7 +27,7 @@ type RetryConfig struct {
 // Client wraps github.Client with additional functionality
 type Client struct {
 	*github.Client
-	logger      *zap.Logger
+	logger      *config.AppLogger
 	retryConfig *RetryConfig // T022統合用（現時点ではnil）
 }
 
@@ -58,7 +58,7 @@ func (e *GitHubError) GetErrorCode() errors.ErrorCode {
 
 // NewClient creates a new GitHub API client with OAuth2 authentication
 // token should be a GitHub App installation token (retrieved via config.GetEnvRequired("GITHUB_TOKEN"))
-func NewClient(token string, logger *zap.Logger) (*Client, error) {
+func NewClient(token string, logger *config.AppLogger) (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("GitHub token is required")
 	}
@@ -80,9 +80,9 @@ func NewClient(token string, logger *zap.Logger) (*Client, error) {
 
 // NewFromGitHub wraps an existing *github.Client with our Client wrapper.
 // Use this when an authenticated client is prepared elsewhere (e.g., via GitHub App installation token).
-func NewFromGitHub(g *github.Client, logger *zap.Logger) *Client {
+func NewFromGitHub(g *github.Client, logger *config.AppLogger) *Client {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &Client{
 		Client:      g,
@@ -95,14 +95,14 @@ func NewFromGitHub(g *github.Client, logger *zap.Logger) *Client {
 func (c *Client) handleRateLimit(resp *github.Response) {
 	if resp != nil && resp.Rate.Remaining > 0 {
 		c.logger.Debug("GitHub API rate limit",
-			zap.Int("remaining", resp.Rate.Remaining),
-			zap.Int("limit", resp.Rate.Limit),
-			zap.Time("reset", resp.Rate.Reset.Time),
+			config.Int("remaining", resp.Rate.Remaining),
+			config.Int("limit", resp.Rate.Limit),
+			config.Time("reset", resp.Rate.Reset.Time),
 		)
 	} else if resp != nil && resp.Rate.Remaining == 0 {
 		c.logger.Warn("GitHub API rate limit exhausted",
-			zap.Int("limit", resp.Rate.Limit),
-			zap.Time("reset", resp.Rate.Reset.Time),
+			config.Int("limit", resp.Rate.Limit),
+			config.Time("reset", resp.Rate.Reset.Time),
 		)
 	}
 }
@@ -115,8 +115,8 @@ func (c *Client) handleError(err error, resp *github.Response, method string) er
 
 	// Log error details
 	c.logger.Error("GitHub API error",
-		zap.String("method", method),
-		zap.Error(err),
+		config.String("method", method),
+		config.Error(err),
 	)
 
 	if resp != nil {
@@ -149,9 +149,9 @@ func (c *Client) handleError(err error, resp *github.Response, method string) er
 		}
 
 		c.logger.Error("GitHub API error response",
-			zap.Int("status_code", ghErr.Response.StatusCode),
-			zap.String("message", ghErr.Message),
-			zap.Strings("errors", errorStrings),
+			config.Int("status_code", ghErr.Response.StatusCode),
+			config.String("message", ghErr.Message),
+			config.Strings("errors", errorStrings),
 		)
 
 		// Determine error code based on status code
@@ -196,9 +196,9 @@ func (c *Client) handleError(err error, resp *github.Response, method string) er
 // GetIssue retrieves a GitHub issue
 func (c *Client) GetIssue(ctx context.Context, owner, repo string, issueNumber int) (*github.Issue, error) {
 	c.logger.Info("Getting GitHub issue",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
 	)
 
 	issue, resp, err := c.Issues.Get(ctx, owner, repo, issueNumber)
@@ -214,10 +214,10 @@ func (c *Client) GetIssue(ctx context.Context, owner, repo string, issueNumber i
 // kind must be either "blocked_by" or "blocking" per GitHub REST API.
 func (c *Client) listIssueDependencies(ctx context.Context, owner, repo string, issueNumber int, kind string) ([]*github.Issue, error) {
 	c.logger.Info("Listing GitHub issue dependencies",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.String("kind", kind),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.String("kind", kind),
 	)
 
 	// Pagination options
@@ -283,9 +283,9 @@ func (c *Client) ListIssueDependenciesBlocking(ctx context.Context, owner, repo 
 // Handles pagination to return all comments, not just the first page
 func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, issueNumber int) ([]*github.IssueComment, error) {
 	c.logger.Info("Listing GitHub issue comments",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
 	)
 
 	opts := &github.IssueListCommentsOptions{
@@ -321,9 +321,9 @@ func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, issu
 // CreateIssueComment creates a comment on a GitHub issue
 func (c *Client) CreateIssueComment(ctx context.Context, owner, repo string, issueNumber int, body string) (*github.IssueComment, error) {
 	c.logger.Info("Creating GitHub issue comment",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
 	)
 
 	comment := &github.IssueComment{
@@ -342,9 +342,9 @@ func (c *Client) CreateIssueComment(ctx context.Context, owner, repo string, iss
 // UpdateIssueComment updates an existing comment on a GitHub issue
 func (c *Client) UpdateIssueComment(ctx context.Context, owner, repo string, commentID int64, body string) (*github.IssueComment, error) {
 	c.logger.Info("Updating GitHub issue comment",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int64("comment_id", commentID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int64("comment_id", commentID),
 	)
 
 	comment := &github.IssueComment{
@@ -363,9 +363,9 @@ func (c *Client) UpdateIssueComment(ctx context.Context, owner, repo string, com
 // GetPullRequest retrieves a GitHub pull request
 func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, prNumber int) (*github.PullRequest, error) {
 	c.logger.Info("Getting GitHub pull request",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
 	)
 
 	pr, resp, err := c.PullRequests.Get(ctx, owner, repo, prNumber)
@@ -380,11 +380,11 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, prNumbe
 // CreatePullRequest creates a new GitHub pull request
 func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base, head, title, body string, issueNumber *int) (*github.PullRequest, error) {
 	c.logger.Info("Creating GitHub pull request",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("base", base),
-		zap.String("head", head),
-		zap.String("title", title),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.String("base", base),
+		config.String("head", head),
+		config.String("title", title),
 	)
 
 	// If issueNumber is provided, append "close #123" to body
@@ -417,9 +417,9 @@ func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, base
 // Handles pagination to return all reviews, not just the first page
 func (c *Client) ListPullRequestReviews(ctx context.Context, owner, repo string, prNumber int) ([]*github.PullRequestReview, error) {
 	c.logger.Info("Listing GitHub pull request reviews",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
 	)
 
 	opts := &github.ListOptions{
@@ -454,9 +454,9 @@ func (c *Client) ListPullRequestReviews(ctx context.Context, owner, repo string,
 // Handles pagination to return all comments, not just the first page
 func (c *Client) ListPullRequestComments(ctx context.Context, owner, repo string, prNumber int) ([]*github.PullRequestComment, error) {
 	c.logger.Info("Listing GitHub pull request comments",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
 	)
 
 	opts := &github.PullRequestListCommentsOptions{
@@ -493,10 +493,10 @@ func (c *Client) ListPullRequestComments(ctx context.Context, owner, repo string
 // It filters comments by PullRequestReviewID to return only comments associated with the given review
 func (c *Client) ListPullRequestCommentsForReview(ctx context.Context, owner, repo string, prNumber int, reviewID int64) ([]*github.PullRequestComment, error) {
 	c.logger.Info("Listing GitHub pull request comments for review",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
-		zap.Int64("review_id", reviewID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
+		config.Int64("review_id", reviewID),
 	)
 
 	// Get all comments for the PR
@@ -514,9 +514,9 @@ func (c *Client) ListPullRequestCommentsForReview(ctx context.Context, owner, re
 	}
 
 	c.logger.Info("Filtered review comments",
-		zap.Int("total_comments", len(allComments)),
-		zap.Int("review_comments", len(reviewComments)),
-		zap.Int64("review_id", reviewID),
+		config.Int("total_comments", len(allComments)),
+		config.Int("review_comments", len(reviewComments)),
+		config.Int64("review_id", reviewID),
 	)
 
 	return reviewComments, nil
@@ -525,10 +525,10 @@ func (c *Client) ListPullRequestCommentsForReview(ctx context.Context, owner, re
 // MergePullRequest merges a GitHub pull request
 func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, prNumber int, commitMessage string, mergeMethod string) (*github.PullRequestMergeResult, error) {
 	c.logger.Info("Merging GitHub pull request",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
-		zap.String("merge_method", mergeMethod),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
+		config.String("merge_method", mergeMethod),
 	)
 
 	opts := &github.PullRequestOptions{
@@ -549,9 +549,9 @@ func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, prNum
 // Returns true if mergeable, false if not mergeable, error if status is unknown or error occurred
 func (c *Client) GetPullRequestMergeable(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
 	c.logger.Info("Checking GitHub pull request mergeable status",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
 	)
 
 	pr, resp, err := c.PullRequests.Get(ctx, owner, repo, prNumber)
@@ -578,9 +578,9 @@ func (c *Client) GetPullRequestMergeable(ctx context.Context, owner, repo string
 // use CheckWritePermission instead.
 func (c *Client) CheckCollaboratorPermission(ctx context.Context, owner, repo, username string) (bool, error) {
 	c.logger.Info("Checking GitHub collaborator permission",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("username", username),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.String("username", username),
 	)
 
 	isCollaborator, resp, err := c.Repositories.IsCollaborator(ctx, owner, repo, username)
@@ -620,9 +620,9 @@ func (c *Client) CheckCollaboratorPermission(ctx context.Context, owner, repo, u
 //   - error: GitHub API error (network error, rate limit, authentication error, etc.)
 func (c *Client) CheckWritePermission(ctx context.Context, owner, repo, username string) (bool, error) {
 	c.logger.Info("Checking GitHub user write permission",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("username", username),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.String("username", username),
 	)
 
 	permissionLevel, resp, err := c.Repositories.GetPermissionLevel(ctx, owner, repo, username)
@@ -631,9 +631,9 @@ func (c *Client) CheckWritePermission(ctx context.Context, owner, repo, username
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
 			c.handleRateLimit(resp)
 			c.logger.Info("GitHub user has no permission",
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.String("username", username),
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.String("username", username),
 			)
 			return false, nil
 		}
@@ -648,17 +648,17 @@ func (c *Client) CheckWritePermission(ctx context.Context, owner, repo, username
 		permission := *permissionLevel.Permission
 		hasPermission = permission == "admin" || permission == "maintain" || permission == "write"
 		c.logger.Info("GitHub user permission check completed",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.String("username", username),
-			zap.String("permission_level", permission),
-			zap.Bool("has_write_permission", hasPermission),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.String("username", username),
+			config.String("permission_level", permission),
+			config.Bool("has_write_permission", hasPermission),
 		)
 	} else {
 		c.logger.Warn("GitHub API returned nil permission level",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.String("username", username),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.String("username", username),
 		)
 	}
 
@@ -668,9 +668,9 @@ func (c *Client) CheckWritePermission(ctx context.Context, owner, repo, username
 // GetCheckSuite retrieves a GitHub check suite
 func (c *Client) GetCheckSuite(ctx context.Context, owner, repo string, checkSuiteID int64) (*github.CheckSuite, error) {
 	c.logger.Info("Getting GitHub check suite",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int64("check_suite_id", checkSuiteID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int64("check_suite_id", checkSuiteID),
 	)
 
 	checkSuite, resp, err := c.Checks.GetCheckSuite(ctx, owner, repo, checkSuiteID)
@@ -686,9 +686,9 @@ func (c *Client) GetCheckSuite(ctx context.Context, owner, repo string, checkSui
 // Handles pagination to return all check runs, not just the first page
 func (c *Client) ListCheckRunsForCheckSuite(ctx context.Context, owner, repo string, checkSuiteID int64) ([]*github.CheckRun, error) {
 	c.logger.Info("Listing GitHub check runs for check suite",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int64("check_suite_id", checkSuiteID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int64("check_suite_id", checkSuiteID),
 	)
 
 	opts := &github.ListCheckRunsOptions{
@@ -725,9 +725,9 @@ func (c *Client) ListCheckRunsForCheckSuite(ctx context.Context, owner, repo str
 // Handles pagination to return all check runs, not just the first page
 func (c *Client) ListCheckRunsForRef(ctx context.Context, owner, repo, ref string) ([]*github.CheckRun, error) {
 	c.logger.Info("Listing GitHub check runs for ref",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("ref", ref),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.String("ref", ref),
 	)
 
 	opts := &github.ListCheckRunsOptions{
@@ -765,9 +765,9 @@ func (c *Client) ListCheckRunsForRef(ctx context.Context, owner, repo, ref strin
 // The actual logs URL is available in CheckRun.HTMLURL
 func (c *Client) GetCheckRunLogs(ctx context.Context, owner, repo string, checkRunID int64) (string, error) {
 	c.logger.Info("Getting GitHub check run logs",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int64("check_run_id", checkRunID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int64("check_run_id", checkRunID),
 	)
 
 	checkRun, resp, err := c.Checks.GetCheckRun(ctx, owner, repo, checkRunID)
@@ -790,8 +790,8 @@ func (c *Client) GetCheckRunLogs(ctx context.Context, owner, repo string, checkR
 // GetRepository retrieves a GitHub repository
 func (c *Client) GetRepository(ctx context.Context, owner, repo string) (*github.Repository, error) {
 	c.logger.Info("Getting GitHub repository",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
+		config.String("owner", owner),
+		config.String("repo", repo),
 	)
 
 	repository, resp, err := c.Repositories.Get(ctx, owner, repo)
@@ -806,8 +806,8 @@ func (c *Client) GetRepository(ctx context.Context, owner, repo string) (*github
 // GetDefaultBranch retrieves the default branch name for a repository
 func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (string, error) {
 	c.logger.Info("Getting GitHub repository default branch",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
+		config.String("owner", owner),
+		config.String("repo", repo),
 	)
 
 	repository, resp, err := c.Repositories.Get(ctx, owner, repo)
@@ -840,7 +840,7 @@ type TokenEntry struct {
 
 // GitHubClient provides GitHub App based client creation per repository
 type GitHubClient struct {
-	logger     *zap.Logger
+	logger     *config.AppLogger
 	tokenCache *InstallationTokenCache
 	// test hooks
 	baseURL    *url.URL
@@ -849,7 +849,7 @@ type GitHubClient struct {
 }
 
 // NewGitHubAppClient initializes a GitHubClient using env vars GITHUB_APP_ID and GITHUB_PRIVATE_KEY
-func NewGitHubAppClient(logger *zap.Logger) (*GitHubClient, error) {
+func NewGitHubAppClient(logger *config.AppLogger) (*GitHubClient, error) {
 	appIDStr := os.Getenv("GITHUB_APP_ID")
 	privKey := os.Getenv("GITHUB_PRIVATE_KEY")
 	testMode := os.Getenv("GITHUB_APP_TEST_MODE") == "1"

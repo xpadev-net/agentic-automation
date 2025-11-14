@@ -11,7 +11,7 @@ import (
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/utils"
 	"encoding/json"
-	"go.uber.org/zap"
+
 	"gorm.io/gorm"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -81,17 +81,17 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 	}
 	graph := utils.FromEdges(allEdges)
 
-	logger := config.GetLogger().With(zap.String("component", "blocked_task"))
+	logger := config.GetLogger().With(config.String("component", "blocked_task"))
 	const snapshotLimit = 100 * 1024 // 100KB
 	graphJSON, truncated, hash := utils.BuildGraphSnapshot(graph, snapshotLimit)
 	logger.Info("blocked_task.resolution_started",
-		zap.Int64("eventIssueID", eventIssueID),
-		zap.Int("nodeCount", len(graph.Nodes())),
-		zap.Int("edgeCount", len(graph.Edges())),
-		zap.String("graphHash", hash),
-		zap.Bool("snapshotTruncated", truncated),
+		config.Int64("eventIssueID", eventIssueID),
+		config.Int("nodeCount", len(graph.Nodes())),
+		config.Int("edgeCount", len(graph.Edges())),
+		config.String("graphHash", hash),
+		config.Bool("snapshotTruncated", truncated),
 	)
-	logger.Debug("blocked_task.graph_snapshot", zap.String("graphSnapshot", graphJSON))
+	logger.Debug("blocked_task.graph_snapshot", config.String("graphSnapshot", graphJSON))
 
 	// Build the set of closed issues (by DB state)
 	closedIssues, err := r.issues.FindByState("closed")
@@ -108,9 +108,9 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 
 	shownCandidateIDs, candTrunc := truncateIDsForInfo(candidateIDs, 50)
 	logger.Info("blocked_task.candidate_ids",
-		zap.Int("count", len(candidateIDs)),
-		zap.Ints("ids", shownCandidateIDs),
-		zap.Bool("idsTruncated", candTrunc),
+		config.Int("count", len(candidateIDs)),
+		config.Ints("ids", shownCandidateIDs),
+		config.Bool("idsTruncated", candTrunc),
 	)
 
 	// Exclude issues that are themselves still open (must be open to proceed)?
@@ -161,9 +161,9 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 
 		// Debug incoming/outgoing edges for this candidate
 		logger.Debug("blocked_task.candidate_edges",
-			zap.Int("taskId", iss.ID),
-			zap.Ints("incomingEdges", graph.DependenciesOf(iss.ID)),
-			zap.Ints("outgoingEdges", graph.DependentsOf(iss.ID)),
+			config.Int("taskId", iss.ID),
+			config.Ints("incomingEdges", graph.DependenciesOf(iss.ID)),
+			config.Ints("outgoingEdges", graph.DependentsOf(iss.ID)),
 		)
 
 		// Keep the candidate
@@ -176,10 +176,10 @@ func (r *blockedTaskResolver) FindUnblockedTasks(ctx context.Context, eventIssue
 	}
 	shownFinalIDs, finalTrunc := truncateIDsForInfo(finalIDs, 50)
 	logger.Info("blocked_task.unblocked_found",
-		zap.Int("count", len(finalIDs)),
-		zap.Ints("ids", shownFinalIDs),
-		zap.Bool("idsTruncated", finalTrunc),
-		zap.String("reason", "all_dependencies_completed"),
+		config.Int("count", len(finalIDs)),
+		config.Ints("ids", shownFinalIDs),
+		config.Bool("idsTruncated", finalTrunc),
+		config.String("reason", "all_dependencies_completed"),
 	)
 
 	return result, nil
@@ -208,11 +208,11 @@ func TriggerJobsForUnblockedTasks(
 	}
 
 	// Resolve unblocked issues based on the current graph and DB state
-	logger := config.LoggerWithTraceIDs(ctx).With(zap.String("component", "blocked_task"))
+	logger := config.LoggerWithTraceIDs(ctx).With(config.String("component", "blocked_task"))
 	logger.Info("blocked_task.resume_evaluation_started",
-		zap.Int64("eventIssueID", eventIssueDBID),
-		zap.String("owner", owner),
-		zap.String("repo", repo),
+		config.Int64("eventIssueID", eventIssueDBID),
+		config.String("owner", owner),
+		config.String("repo", repo),
 	)
 	candidates, err := resolver.FindUnblockedTasks(ctx, eventIssueDBID)
 	if err != nil {
@@ -232,10 +232,10 @@ func TriggerJobsForUnblockedTasks(
 		// Filter by repository (owner/repo)
 		if is.Repo != owner+"/"+repo {
 			logger.Info("blocked_task.resume_repo_mismatch",
-				zap.Int("taskId", is.ID),
-				zap.String("issueRepo", is.Repo),
-				zap.String("owner", owner),
-				zap.String("repo", repo),
+				config.Int("taskId", is.ID),
+				config.String("issueRepo", is.Repo),
+				config.String("owner", owner),
+				config.String("repo", repo),
 			)
 			continue
 		}
@@ -262,8 +262,8 @@ func TriggerJobsForUnblockedTasks(
 		}
 		if skip {
 			logger.Info("blocked_task.resume_skipped_existing_run",
-				zap.Int("taskId", is.ID),
-				zap.Strings("agentRunStates", skippedStates),
+				config.Int("taskId", is.ID),
+				config.Strings("agentRunStates", skippedStates),
 			)
 			continue
 		}
@@ -272,17 +272,17 @@ func TriggerJobsForUnblockedTasks(
 		issueCtx, ctxErr := issueCtxSvc.CollectIssueContext(ctx, owner, repo, is.Number)
 		if ctxErr != nil {
 			logger.Error("blocked_task.issue_context_failed",
-				zap.Int("taskId", is.ID),
-				zap.Int("issueNumber", is.Number),
-				zap.Error(ctxErr),
+				config.Int("taskId", is.ID),
+				config.Int("issueNumber", is.Number),
+				config.Error(ctxErr),
 			)
 			return fmt.Errorf("failed to collect issue context for #%d: %w", is.Number, ctxErr)
 		}
 		logger.Info("blocked_task.issue_context_collected",
-			zap.Int("taskId", is.ID),
-			zap.Int("issueNumber", is.Number),
-			zap.Int("labelsCount", len(issueCtx.Labels)),
-			zap.Int("commentsCount", len(issueCtx.Comments)),
+			config.Int("taskId", is.ID),
+			config.Int("issueNumber", is.Number),
+			config.Int("labelsCount", len(issueCtx.Labels)),
+			config.Int("commentsCount", len(issueCtx.Comments)),
 		)
 		prompt := issueCtxSvc.FormatPrompt(issueCtx, "") // No user instruction for blocked task resume
 
@@ -324,10 +324,10 @@ func TriggerJobsForUnblockedTasks(
 			return fmt.Errorf("failed to create agent run: %w", createErr)
 		}
 		logger.Info("blocked_task.agent_run_upserted",
-			zap.Int("taskId", is.ID),
-			zap.Int("agentRunId", agentRun.ID),
-			zap.Bool("isNew", isNew),
-			zap.String("agentType", agentType),
+			config.Int("taskId", is.ID),
+			config.Int("agentRunId", agentRun.ID),
+			config.Bool("isNew", isNew),
+			config.String("agentType", agentType),
 		)
 
 		// If an existing run already exists, branch by state to avoid duplicate jobs
@@ -348,14 +348,14 @@ func TriggerJobsForUnblockedTasks(
 
 		// Transition to started before Job creation (align with comment-trigger flow)
 		logger.Info("blocked_task.run_transition_started",
-			zap.Int("agentRunId", agentRun.ID),
-			zap.String("from", "queued"),
-			zap.String("to", "started"),
+			config.Int("agentRunId", agentRun.ID),
+			config.String("from", "queued"),
+			config.String("to", "started"),
 		)
 		if err := stateMachine.TransitionToStarted(agentRun.ID); err != nil {
 			logger.Error("blocked_task.run_transition_failed",
-				zap.Int("agentRunId", agentRun.ID),
-				zap.Error(err),
+				config.Int("agentRunId", agentRun.ID),
+				config.Error(err),
 			)
 			return fmt.Errorf("failed to transition run %d to started: %w", agentRun.ID, err)
 		}
@@ -365,32 +365,32 @@ func TriggerJobsForUnblockedTasks(
 			// If a job with same name already exists, treat as success (another handler created it)
 			if apierrors.IsAlreadyExists(err) {
 				logger.Info("blocked_task.job_already_exists",
-					zap.Int("agentRunId", agentRun.ID),
-					zap.Int("taskId", is.ID),
+					config.Int("agentRunId", agentRun.ID),
+					config.Int("taskId", is.ID),
 				)
 				continue
 			}
 			// Rollback to queued only when Job was not created
 			_ = stateMachine.TransitionToQueued(agentRun.ID)
 			logger.Error("blocked_task.job_creation_failed",
-				zap.Int("agentRunId", agentRun.ID),
-				zap.Int("taskId", is.ID),
-				zap.Error(err),
+				config.Int("agentRunId", agentRun.ID),
+				config.Int("taskId", is.ID),
+				config.Error(err),
 			)
 			return fmt.Errorf("failed to create job for run %d: %w", agentRun.ID, err)
 		} else {
 			jobsTriggered++
 			logger.Info("blocked_task.job_created",
-				zap.Int("agentRunId", agentRun.ID),
-				zap.Int("taskId", is.ID),
-				zap.String("jobName", job.Name),
+				config.Int("agentRunId", agentRun.ID),
+				config.Int("taskId", is.ID),
+				config.String("jobName", job.Name),
 			)
 		}
 	}
 
 	logger.Info("blocked_task.resume_evaluation_completed",
-		zap.Int("evaluatedCount", evaluatedCount),
-		zap.Int("jobsTriggered", jobsTriggered),
+		config.Int("evaluatedCount", evaluatedCount),
+		config.Int("jobsTriggered", jobsTriggered),
 	)
 	return nil
 }
@@ -405,25 +405,25 @@ func truncateIDsForInfo(ids []int, limit int) ([]int, bool) {
 
 // The following helper stubs are placeholders for T128 integration points.
 // They are not used yet but kept to centralize log formats for resume events.
-func logResumeAttempt(logger *zap.Logger, issueID int64, taskID int, agentType string, retryCount int) {
+func logResumeAttempt(logger *config.AppLogger, issueID int64, taskID int, agentType string, retryCount int) {
 	if logger == nil {
 		return
 	}
 	logger.Info("blocked_task.resume_attempt",
-		zap.Int64("issueId", issueID),
-		zap.Int("taskId", taskID),
-		zap.String("agentType", agentType),
-		zap.Int("retryCount", retryCount),
+		config.Int64("issueId", issueID),
+		config.Int("taskId", taskID),
+		config.String("agentType", agentType),
+		config.Int("retryCount", retryCount),
 	)
 }
 
-func logResumeScheduled(logger *zap.Logger, issueID int64, taskID int, jobName string) {
+func logResumeScheduled(logger *config.AppLogger, issueID int64, taskID int, jobName string) {
 	if logger == nil {
 		return
 	}
 	logger.Info("blocked_task.resume_scheduled",
-		zap.Int64("issueId", issueID),
-		zap.Int("taskId", taskID),
-		zap.String("jobName", jobName),
+		config.Int64("issueId", issueID),
+		config.Int("taskId", taskID),
+		config.String("jobName", jobName),
 	)
 }

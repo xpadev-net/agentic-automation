@@ -11,8 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"agentic-automation/internal/config"
+
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 )
 
 // minimal response structs
@@ -25,12 +26,9 @@ type tokenResp struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-func newTestLogger(t *testing.T) *zap.Logger {
-	logger, err := zap.NewDevelopment()
-	if err != nil {
-		t.Fatalf("failed to init logger: %v", err)
-	}
-	return logger
+func newTestLogger(t *testing.T) *config.AppLogger {
+	t.Helper()
+	return config.NewNopLogger()
 }
 
 func TestInstallationTokenCache_ReusesValidToken(t *testing.T) {

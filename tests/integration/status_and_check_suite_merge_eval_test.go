@@ -19,7 +19,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -43,7 +42,7 @@ func Test_CheckSuiteThenStatus_Success_TriggersEvaluationPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "test-secret")

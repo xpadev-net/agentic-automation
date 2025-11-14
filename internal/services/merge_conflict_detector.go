@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"agentic-automation/internal/clients"
-	"go.uber.org/zap"
+	"agentic-automation/internal/config"
 )
 
 // MergeConflictStatus represents merge conflict evaluation result for a PR.
@@ -28,7 +28,7 @@ type MergeConflictDetector interface {
 
 type mergeConflictDetector struct {
 	gh     *clients.Client
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 // NewMergeConflictDetector creates a new detector.
@@ -44,9 +44,9 @@ type mergeConflictDetector struct {
 //	case MergeConflictStatusUnknown:
 //	    // re-evaluate on subsequent webhook events (status/check_suite/synchronize)
 //	}
-func NewMergeConflictDetector(gh *clients.Client, logger *zap.Logger) MergeConflictDetector {
+func NewMergeConflictDetector(gh *clients.Client, logger *config.AppLogger) MergeConflictDetector {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &mergeConflictDetector{gh: gh, logger: logger}
 }
@@ -60,9 +60,9 @@ func NewMergeConflictDetector(gh *clients.Client, logger *zap.Logger) MergeConfl
 //     clean/unstable/blocked/unknown => no_conflict (conflicts are not the reason)
 func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, prNumber int) (MergeConflictStatus, error) {
 	d.logger.Info("merge conflict detection started",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
 	)
 
 	// Local helper to fetch PR
@@ -76,7 +76,7 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 
 	mergeable, state, err := fetch()
 	if err != nil {
-		d.logger.Error("failed to get pull request for conflict detection", zap.Error(err))
+		d.logger.Error("failed to get pull request for conflict detection", config.Error(err))
 		return MergeConflictStatusUnknown, err
 	}
 
@@ -85,18 +85,18 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 		backoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second, 2 * time.Second}
 		for i, b := range backoffs {
 			d.logger.Debug("mergeable is nil; waiting and retrying",
-				zap.Int("attempt", i+1),
-				zap.Duration("sleep", b),
+				config.Int("attempt", i+1),
+				config.Duration("sleep", b),
 			)
 			select {
 			case <-ctx.Done():
-				d.logger.Warn("context cancelled during mergeable computation wait", zap.Error(ctx.Err()))
+				d.logger.Warn("context cancelled during mergeable computation wait", config.Error(ctx.Err()))
 				return MergeConflictStatusUnknown, ctx.Err()
 			case <-time.After(b):
 			}
 			mergeable, state, err = fetch()
 			if err != nil {
-				d.logger.Error("failed to re-fetch pull request for conflict detection", zap.Error(err))
+				d.logger.Error("failed to re-fetch pull request for conflict detection", config.Error(err))
 				return MergeConflictStatusUnknown, err
 			}
 			if mergeable != nil {
@@ -125,7 +125,7 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 			return MergeConflictStatusHasConflict, nil
 		case "blocked", "behind", "unstable", "draft", "has_hooks":
 			d.logger.Info("mergeable=false but non-conflict state",
-				zap.String("mergeable_state", s),
+				config.String("mergeable_state", s),
 			)
 			return MergeConflictStatusNoConflict, nil
 		case "unknown":
@@ -134,7 +134,7 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 		default:
 			// Any other undocumented state -> treat as non-conflict blocker
 			d.logger.Info("mergeable=false with unrecognized state treated as non-conflict",
-				zap.String("mergeable_state", s),
+				config.String("mergeable_state", s),
 			)
 			return MergeConflictStatusNoConflict, nil
 		}
@@ -149,7 +149,7 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 			return MergeConflictStatusHasConflict, nil
 		case "clean", "unstable", "blocked", "behind", "draft", "has_hooks":
 			d.logger.Info("no merge conflict detected",
-				zap.String("mergeable_state", s),
+				config.String("mergeable_state", s),
 			)
 			return MergeConflictStatusNoConflict, nil
 		case "unknown":
@@ -158,7 +158,7 @@ func (d *mergeConflictDetector) Detect(ctx context.Context, owner, repo string, 
 		default:
 			// Any other undocumented state -> treat as no explicit conflict
 			d.logger.Info("no merge conflict detected (unrecognized state treated as non-conflict)",
-				zap.String("mergeable_state", s),
+				config.String("mergeable_state", s),
 			)
 			return MergeConflictStatusNoConflict, nil
 		}

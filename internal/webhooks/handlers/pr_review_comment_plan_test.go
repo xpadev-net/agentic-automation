@@ -16,7 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	batchv1 "k8s.io/api/batch/v1"
@@ -184,7 +183,7 @@ func invokeReviewCommentHandler(t *testing.T, payload *PullRequestReviewCommentP
 func TestHandlePullRequestReviewComment_PlanCreationSkippedForShortComment(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -194,7 +193,7 @@ func TestHandlePullRequestReviewComment_PlanCreationSkippedForShortComment(t *te
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
 		KubernetesJobService:     jobService,
@@ -230,7 +229,7 @@ func TestHandlePullRequestReviewComment_PlanCreationSkippedForShortComment(t *te
 func TestHandlePullRequestReviewComment_PlanCreationStarted(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -240,7 +239,7 @@ func TestHandlePullRequestReviewComment_PlanCreationStarted(t *testing.T) {
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
 		KubernetesJobService:     jobService,
@@ -288,7 +287,7 @@ func TestHandlePullRequestReviewComment_PlanCreationStarted(t *testing.T) {
 func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -298,7 +297,7 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
 		KubernetesJobService:     jobService,
@@ -375,7 +374,7 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationByCommentID(t *
 func TestHandlePullRequestReviewComment_PlanCreationDeduplicationWithCompletedPlan(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -398,7 +397,7 @@ func TestHandlePullRequestReviewComment_PlanCreationDeduplicationWithCompletedPl
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
 		KubernetesJobService:     jobService,
@@ -439,7 +438,7 @@ func stringPtr(s string) *string {
 func TestHandlePullRequestReviewComment_HumanCommentDoesNotUpdateCodexRequested(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -461,7 +460,7 @@ func TestHandlePullRequestReviewComment_HumanCommentDoesNotUpdateCodexRequested(
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
 		KubernetesJobService:     jobService,
@@ -514,7 +513,7 @@ func TestHandlePullRequestReviewComment_HumanCommentDoesNotUpdateCodexRequested(
 func TestHandlePullRequestReviewComment_CodexCommentUpdatesMatchingRequested(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -536,7 +535,7 @@ func TestHandlePullRequestReviewComment_CodexCommentUpdatesMatchingRequested(t *
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
 		KubernetesJobService:     jobService,
@@ -580,7 +579,7 @@ func TestHandlePullRequestReviewComment_CodexCommentUpdatesMatchingRequested(t *
 func TestHandlePullRequestReviewComment_MissingPRReturns200(t *testing.T) {
 	db := setupPlanCreationDB(t)
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -588,7 +587,7 @@ func TestHandlePullRequestReviewComment_MissingPRReturns200(t *testing.T) {
 
 	jobService := &recordingPlanJobService{}
 	deps := PullRequestReviewCommentDeps{
-		Logger:                   zap.NewNop(),
+		Logger:                   config.NewNopLogger(),
 		PullRequestRepository:    repositories.NewPullRequestRepository(db),
 		ReviewFeedbackRepository: repositories.NewReviewFeedbackRepositoryWithDB(db),
 		KubernetesJobService:     jobService,

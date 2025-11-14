@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"agentic-automation/internal/clients"
-	"go.uber.org/zap"
+	"agentic-automation/internal/config"
 )
 
 // Package services provides business logic services for the GitHub Agent Automation system.
@@ -15,7 +15,7 @@ import (
 // for authorization checks required by webhook handlers.
 type AuthorizationService struct {
 	githubClient *clients.Client
-	logger       *zap.Logger
+	logger       *config.AppLogger
 }
 
 // NewAuthorizationService creates a new AuthorizationService instance.
@@ -23,18 +23,18 @@ type AuthorizationService struct {
 //
 // Parameters:
 //   - githubClient: GitHub API client (must not be nil, will panic if nil)
-//   - logger: Structured logger instance (if nil, uses zap.NewNop())
+//   - logger: Structured logger instance (if nil, uses config.NewNopLogger())
 //
 // Returns:
 //   - *AuthorizationService: Initialized service instance
-func NewAuthorizationService(githubClient *clients.Client, logger *zap.Logger) *AuthorizationService {
+func NewAuthorizationService(githubClient *clients.Client, logger *config.AppLogger) *AuthorizationService {
 	if githubClient == nil {
 		panic("githubClient is required for AuthorizationService")
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	return &AuthorizationService{
@@ -75,27 +75,27 @@ func NewAuthorizationService(githubClient *clients.Client, logger *zap.Logger) *
 //   - error: GitHub API error (network error, rate limit, authentication error, etc.)
 func (s *AuthorizationService) CheckPermission(ctx context.Context, owner, repo, username string) (bool, error) {
 	s.logger.Info("Checking GitHub user permission",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("username", username),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.String("username", username),
 	)
 
 	hasPermission, err := s.githubClient.CheckWritePermission(ctx, owner, repo, username)
 	if err != nil {
 		s.logger.Error("GitHub user permission check failed",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.String("username", username),
-			zap.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.String("username", username),
+			config.Error(err),
 		)
 		return false, err
 	}
 
 	s.logger.Info("GitHub user permission check completed",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.String("username", username),
-		zap.Bool("has_permission", hasPermission),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.String("username", username),
+		config.Bool("has_permission", hasPermission),
 	)
 
 	return hasPermission, nil

@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/services"
 	testmocks "agentic-automation/tests/mocks"
 	"context"
@@ -10,14 +11,13 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 // buildTestGitHubClient constructs a clients.Client whose BaseURL points to the
 // provided test server. It reuses oauth2-backed http.Client created by NewClient.
 func buildTestGitHubClient(t *testing.T, baseURL string) *clients.Client {
 	t.Helper()
-	cli, err := clients.NewClient("test-token", zap.NewNop())
+	cli, err := clients.NewClient("test-token", config.NewNopLogger())
 	require.NoError(t, err)
 
 	// Point go-github client to the test server
@@ -55,7 +55,7 @@ func TestAuthorizationService_CheckPermission_TableDriven(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := buildTestGitHubClient(t, srv.URL)
-	svc := services.NewAuthorizationService(ghClient, zap.NewNop())
+	svc := services.NewAuthorizationService(ghClient, config.NewNopLogger())
 
 	type testCase struct {
 		name      string
@@ -97,7 +97,7 @@ func TestAuthorizationService_CheckPermission_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := buildTestGitHubClient(t, srv.URL)
-	svc := services.NewAuthorizationService(ghClient, zap.NewNop())
+	svc := services.NewAuthorizationService(ghClient, config.NewNopLogger())
 
 	ctx := context.Background()
 	allowed, err := svc.CheckPermission(ctx, "org", "repo", "fail")

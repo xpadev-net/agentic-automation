@@ -22,7 +22,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -159,7 +158,7 @@ func Test_US5_Unblock_AutoTrigger(t *testing.T) {
 	t.Cleanup(func() { os.Unsetenv("GITHUB_WEBHOOK_SECRET") })
 
 	// Logger & DB
-	logger, _ := zap.NewDevelopment()
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 	db := setupDBForUS5(t)
 	config.SetDBForTesting(db)

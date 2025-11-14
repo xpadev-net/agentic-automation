@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -108,7 +107,7 @@ func InitDatabase() error {
 	// Force session charset/collation (defensive)
 	if err := sqlDB.Ping(); err == nil {
 		if errExec := database.Exec("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci").Error; errExec != nil {
-			log.Warn("Failed to SET NAMES utf8mb4 (continuing)", zap.Error(errExec))
+			log.Warn("Failed to SET NAMES utf8mb4 (continuing)", Error(errExec))
 		}
 	}
 
@@ -148,12 +147,12 @@ func CloseDatabase() error {
 	log := GetLogger()
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Error("Failed to get underlying sql.DB for closing", zap.Error(err))
+		log.Error("Failed to get underlying sql.DB for closing", Error(err))
 		return err
 	}
 
 	if err := sqlDB.Close(); err != nil {
-		log.Error("Failed to close database connection", zap.Error(err))
+		log.Error("Failed to close database connection", Error(err))
 		return err
 	}
 

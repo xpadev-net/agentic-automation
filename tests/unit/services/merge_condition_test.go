@@ -5,9 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/services"
+
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 type fakeCI struct {
@@ -42,7 +43,7 @@ func TestMergeCondition_Satisfied(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -59,7 +60,7 @@ func TestMergeCondition_PendingCI(t *testing.T) {
 		fakeCI{state: services.CIStatePending},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -79,7 +80,7 @@ func TestMergeCondition_ConflictDetectError_BlocksMerge(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict, err: errors.New("boom")},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -101,7 +102,7 @@ func TestMergeCondition_CIFailed(t *testing.T) {
 		fakeCI{state: services.CIStateFailed},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -120,7 +121,7 @@ func TestMergeCondition_CIUnknown(t *testing.T) {
 		fakeCI{state: services.CIStateUnknown},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -135,7 +136,7 @@ func TestMergeCondition_CIError(t *testing.T) {
 		fakeCI{state: "", err: errors.New("CI fetch failed")},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -150,7 +151,7 @@ func TestMergeCondition_CIEmptyString(t *testing.T) {
 		fakeCI{state: ""}, // 空文字列
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -167,7 +168,7 @@ func TestMergeCondition_CodexNotApproved(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: false},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -186,7 +187,7 @@ func TestMergeCondition_CodexError(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: false, err: errors.New("Codex fetch failed")},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -203,7 +204,7 @@ func TestMergeCondition_HasConflict(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusHasConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -222,7 +223,7 @@ func TestMergeCondition_ConflictUnknown(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusUnknown},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -237,7 +238,7 @@ func TestMergeCondition_ConflictEmptyString(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: true},
 		fakeConflict{status: ""}, // 空文字列
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -252,7 +253,7 @@ func TestMergeCondition_ConflictDetectError(t *testing.T) {
 		fakeCI{state: services.CIStateSuccess},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict, err: errors.New("conflict check failed")},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -269,7 +270,7 @@ func TestMergeCondition_MultipleFailures(t *testing.T) {
 		fakeCI{state: services.CIStateFailed},
 		fakeCodex{approved: false},
 		fakeConflict{status: services.MergeConflictStatusHasConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -289,7 +290,7 @@ func TestMergeCondition_CIAndCodexFail(t *testing.T) {
 		fakeCI{state: services.CIStateFailed},
 		fakeCodex{approved: false},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -320,7 +321,7 @@ func TestMergeCondition_AllErrors(t *testing.T) {
 		fakeCI{state: "", err: errors.New("CI error")},
 		fakeCodex{approved: false, err: errors.New("Codex error")},
 		fakeConflict{status: "", err: errors.New("Conflict error")},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)
@@ -340,7 +341,7 @@ func TestMergeCondition_PendingCIWithCodexApproved(t *testing.T) {
 		fakeCI{state: services.CIStatePending},
 		fakeCodex{approved: true},
 		fakeConflict{status: services.MergeConflictStatusNoConflict},
-		zap.NewNop(),
+		config.NewNopLogger(),
 	)
 
 	res, err := checker.Check(context.Background(), "o", "r", 1)

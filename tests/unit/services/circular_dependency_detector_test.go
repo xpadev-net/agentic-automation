@@ -3,14 +3,14 @@ package services_test
 import (
 	"testing"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 	"agentic-automation/internal/utils"
-	"go.uber.org/zap"
 )
 
 func newDetector() *services.CircularDependencyDetector {
-	return services.NewCircularDependencyDetector(zap.NewNop())
+	return services.NewCircularDependencyDetector(config.NewNopLogger())
 }
 
 func TestValidateAcyclic_WithAcyclicGraph_ReturnsNil(t *testing.T) {

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/utils"
-	"go.uber.org/zap"
 )
 
 // BlockerGraphBuilder builds and persists blocker graph edges for issues.
@@ -24,16 +24,16 @@ type blockerGraphBuilder struct {
 	fetcher IssueDependencyFetcher
 	issues  *repositories.IssueRepository
 	edges   *repositories.BlockerGraphRepository
-	logger  *zap.Logger
+	logger  *config.AppLogger
 }
 
 // NewBlockerGraphBuilder constructs a BlockerGraphBuilder.
-// All dependencies are required; logger may be nil and will default to zap.NewNop().
+// All dependencies are required; logger may be nil and will default to config.NewNopLogger().
 func NewBlockerGraphBuilder(
 	fetcher IssueDependencyFetcher,
 	issues *repositories.IssueRepository,
 	edges *repositories.BlockerGraphRepository,
-	logger *zap.Logger,
+	logger *config.AppLogger,
 ) BlockerGraphBuilder {
 	if fetcher == nil {
 		panic("fetcher is required for BlockerGraphBuilder")
@@ -45,7 +45,7 @@ func NewBlockerGraphBuilder(
 		panic("edge repository is required for BlockerGraphBuilder")
 	}
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &blockerGraphBuilder{fetcher: fetcher, issues: issues, edges: edges, logger: logger}
 }
@@ -67,13 +67,13 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 		// which we cannot import here; just attempt an upsert path.
 		root = &models.Issue{Repo: repoKey, Number: issueNumber}
 		if upErr := b.issues.Upsert(root); upErr != nil {
-			b.logger.Error("failed to upsert root issue", zap.String("repo", repoKey), zap.Int("number", issueNumber), zap.Error(upErr))
+			b.logger.Error("failed to upsert root issue", config.String("repo", repoKey), config.Int("number", issueNumber), config.Error(upErr))
 			return upErr
 		}
 		// reload to ensure ID populated (Upsert may have created it)
 		root, err = b.issues.FindByRepoAndNumber(repoKey, issueNumber)
 		if err != nil {
-			b.logger.Error("failed to load root issue after upsert", zap.String("repo", repoKey), zap.Int("number", issueNumber), zap.Error(err))
+			b.logger.Error("failed to load root issue after upsert", config.String("repo", repoKey), config.Int("number", issueNumber), config.Error(err))
 			return err
 		}
 	}
@@ -85,7 +85,7 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 	// Fetch dependencies (blocked_by)
 	deps, err := b.fetcher.ListBlockedBy(ctx, owner, repo, issueNumber)
 	if err != nil {
-		b.logger.Error("failed to fetch blocked_by list", zap.String("owner", owner), zap.String("repo", repo), zap.Int("issue_number", issueNumber), zap.Error(err))
+		b.logger.Error("failed to fetch blocked_by list", config.String("owner", owner), config.String("repo", repo), config.Int("issue_number", issueNumber), config.Error(err))
 		return err
 	}
 
@@ -104,13 +104,13 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 			updates["state"] = d.State
 		}
 		if upErr := b.issues.UpsertSelective(depRepoKey, d.Number, updates); upErr != nil {
-			b.logger.Error("failed to upsert (selective) dependency issue", zap.String("repo", depRepoKey), zap.Int("number", d.Number), zap.Error(upErr))
+			b.logger.Error("failed to upsert (selective) dependency issue", config.String("repo", depRepoKey), config.Int("number", d.Number), config.Error(upErr))
 			return upErr
 		}
 		// Ensure we have ID
 		loaded, findErr := b.issues.FindByRepoAndNumber(depRepoKey, d.Number)
 		if findErr != nil {
-			b.logger.Error("failed to load dependency issue after upsert", zap.String("repo", depRepoKey), zap.Int("number", d.Number), zap.Error(findErr))
+			b.logger.Error("failed to load dependency issue after upsert", config.String("repo", depRepoKey), config.Int("number", d.Number), config.Error(findErr))
 			return findErr
 		}
 		desired[loaded.ID] = struct{}{}
@@ -123,7 +123,7 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 	// Load existing edges for the task (root issue)
 	existingEdges, err := b.edges.GetDependenciesForTask(root.ID)
 	if err != nil {
-		b.logger.Error("failed to load existing edges", zap.Int("task_id", root.ID), zap.Error(err))
+		b.logger.Error("failed to load existing edges", config.Int("task_id", root.ID), config.Error(err))
 		return err
 	}
 
@@ -150,7 +150,7 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 			return err
 		}
 		if delErr := b.edges.DeleteEdge(pair[0], pair[1]); delErr != nil {
-			b.logger.Error("failed to delete obsolete edge", zap.Int("task_id", pair[0]), zap.Int("depends_on_task_id", pair[1]), zap.Error(delErr))
+			b.logger.Error("failed to delete obsolete edge", config.Int("task_id", pair[0]), config.Int("depends_on_task_id", pair[1]), config.Error(delErr))
 			return delErr
 		}
 	}
@@ -161,7 +161,7 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 			return err
 		}
 		if crtErr := b.edges.CreateEdges(toCreate); crtErr != nil {
-			b.logger.Error("failed to create edges", zap.Int("task_id", root.ID), zap.Int("count", len(toCreate)), zap.Error(crtErr))
+			b.logger.Error("failed to create edges", config.Int("task_id", root.ID), config.Int("count", len(toCreate)), config.Error(crtErr))
 			return crtErr
 		}
 	}
@@ -170,8 +170,8 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 	currentEdges, curErr := b.edges.GetDependenciesForTask(root.ID)
 	if curErr != nil {
 		b.logger.Error("failed to reload edges for snapshot",
-			zap.Int("task_id", root.ID),
-			zap.Error(curErr),
+			config.Int("task_id", root.ID),
+			config.Error(curErr),
 		)
 		return curErr
 	}
@@ -186,21 +186,21 @@ func (b *blockerGraphBuilder) BuildForIssue(ctx context.Context, owner, repo str
 	snapshotJSON, truncated, hash := utils.BuildGraphSnapshot(g, snapshotLimit)
 
 	b.logger.Info("blocker_graph.updated",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("task_id", root.ID),
-		zap.Int("deps_fetched", len(deps)),
-		zap.Int("edges_deleted", len(toDelete)),
-		zap.Int("edges_created", len(toCreate)),
-		zap.Int("totalEdges", len(currentEdges)),
-		zap.String("graphHash", hash),
-		zap.Bool("snapshotTruncated", truncated),
-		zap.Duration("elapsed", time.Since(start)),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("task_id", root.ID),
+		config.Int("deps_fetched", len(deps)),
+		config.Int("edges_deleted", len(toDelete)),
+		config.Int("edges_created", len(toCreate)),
+		config.Int("totalEdges", len(currentEdges)),
+		config.String("graphHash", hash),
+		config.Bool("snapshotTruncated", truncated),
+		config.Duration("elapsed", time.Since(start)),
 	)
 
 	// Full snapshot only on debug to avoid log bloat
-	b.logger.Debug("blocker_graph.snapshot", zap.String("graphSnapshot", snapshotJSON))
+	b.logger.Debug("blocker_graph.snapshot", config.String("graphSnapshot", snapshotJSON))
 
 	return nil
 }

@@ -10,8 +10,6 @@ import (
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
-
-	"go.uber.org/zap"
 )
 
 const (
@@ -24,7 +22,7 @@ type RetryOrchestrator struct {
 	agentRunRepo        repositories.AgentRunRepository
 	jobService          KubernetesJobService
 	issueContextService *IssueContextService
-	logger              *zap.Logger
+	logger              *config.AppLogger
 }
 
 // NewRetryOrchestrator creates a new RetryOrchestrator instance.
@@ -43,7 +41,7 @@ func NewRetryOrchestrator(
 	agentRunRepo repositories.AgentRunRepository,
 	jobService KubernetesJobService,
 	issueContextService *IssueContextService,
-	logger *zap.Logger,
+	logger *config.AppLogger,
 ) *RetryOrchestrator {
 	if agentRunRepo == nil {
 		panic("agentRunRepo is required for RetryOrchestrator")
@@ -55,7 +53,7 @@ func NewRetryOrchestrator(
 	}
 
 	logger.Info("RetryOrchestrator initialized",
-		zap.String("service", "retry_orchestrator"),
+		config.String("service", "retry_orchestrator"),
 	)
 
 	return &RetryOrchestrator{
@@ -82,11 +80,11 @@ func (r *RetryOrchestrator) ShouldRetry(agentRun *models.AgentRun) bool {
 	shouldRetry := agentRun.RetryCount < MaxRetryCount
 
 	r.logger.Debug("Checking if retry is allowed",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Int("max_retry_count", MaxRetryCount),
-		zap.Bool("should_retry", shouldRetry),
-		zap.String("service", "retry_orchestrator"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Int("max_retry_count", MaxRetryCount),
+		config.Bool("should_retry", shouldRetry),
+		config.String("service", "retry_orchestrator"),
 	)
 
 	return shouldRetry
@@ -115,14 +113,14 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 	// Parameter validation
 	if agentRun == nil {
 		r.logger.Error("agentRun must not be nil",
-			zap.String("service", "retry_orchestrator"),
+			config.String("service", "retry_orchestrator"),
 		)
 		return errors.New("agentRun must not be nil")
 	}
 
 	if agentRun.ID == 0 {
 		r.logger.Error("agentRun.ID must not be zero",
-			zap.String("service", "retry_orchestrator"),
+			config.String("service", "retry_orchestrator"),
 		)
 		return errors.New("agentRun.ID must not be zero")
 	}
@@ -131,10 +129,10 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 	currentRetryCount := agentRun.RetryCount
 
 	r.logger.Info("Incrementing retry count atomically",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("current_retry_count", currentRetryCount),
-		zap.Int("max_retry_count", MaxRetryCount),
-		zap.String("service", "retry_orchestrator"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("current_retry_count", currentRetryCount),
+		config.Int("max_retry_count", MaxRetryCount),
+		config.String("service", "retry_orchestrator"),
 	)
 
 	// Use atomic increment at the repository level to prevent lost increments under concurrent retries
@@ -145,11 +143,11 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 		// Check if error is due to max retries already reached
 		if strings.Contains(err.Error(), "already at or above maximum") {
 			r.logger.Warn("Cannot increment retry count: max retries already reached",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("retry_count", newRetryCount),
-				zap.Int("max_retry_count", MaxRetryCount),
-				zap.Error(err),
-				zap.String("service", "retry_orchestrator"),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("retry_count", newRetryCount),
+				config.Int("max_retry_count", MaxRetryCount),
+				config.Error(err),
+				config.String("service", "retry_orchestrator"),
 			)
 			// Reload full record to update caller's agentRun with latest data
 			latestAgentRun, reloadErr := r.agentRunRepo.GetByID(agentRun.ID)
@@ -160,9 +158,9 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 		}
 
 		r.logger.Error("Failed to increment retry count",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Error(err),
-			zap.String("service", "retry_orchestrator"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "retry_orchestrator"),
 		)
 		return fmt.Errorf("failed to increment retry count: %w", err)
 	}
@@ -171,10 +169,10 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 	latestAgentRun, err := r.agentRunRepo.GetByID(agentRun.ID)
 	if err != nil {
 		r.logger.Error("Failed to reload AgentRun after increment",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("new_retry_count", newRetryCount),
-			zap.Error(err),
-			zap.String("service", "retry_orchestrator"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("new_retry_count", newRetryCount),
+			config.Error(err),
+			config.String("service", "retry_orchestrator"),
 		)
 		// Even if reload fails, update retry_count in the caller's struct
 		agentRun.RetryCount = newRetryCount
@@ -186,10 +184,10 @@ func (r *RetryOrchestrator) IncrementRetryCount(ctx context.Context, agentRun *m
 
 	// Log successful update
 	r.logger.Info("Retry count incremented successfully",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("old_retry_count", currentRetryCount),
-		zap.Int("new_retry_count", newRetryCount),
-		zap.String("service", "retry_orchestrator"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("old_retry_count", currentRetryCount),
+		config.Int("new_retry_count", newRetryCount),
+		config.String("service", "retry_orchestrator"),
 	)
 
 	return nil
@@ -227,17 +225,17 @@ func (r *RetryOrchestrator) TriggerRetry(
 	}
 
 	r.logger.Info("Triggering retry for AgentRun",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("current_retry_count", agentRun.RetryCount),
-		zap.Int("issue_id", issue.ID),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("current_retry_count", agentRun.RetryCount),
+		config.Int("issue_id", issue.ID),
 	)
 
 	// Check if retry is allowed
 	if !r.ShouldRetry(agentRun) {
 		r.logger.Warn("Max retry count exceeded, cannot trigger retry",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", agentRun.RetryCount),
-			zap.Int("max_retry_count", MaxRetryCount),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("retry_count", agentRun.RetryCount),
+			config.Int("max_retry_count", MaxRetryCount),
 		)
 		return r.HandleMaxRetriesExceeded(agentRun)
 	}
@@ -250,8 +248,8 @@ func (r *RetryOrchestrator) TriggerRetry(
 	// Check if max retries exceeded after increment
 	if agentRun.RetryCount >= MaxRetryCount {
 		r.logger.Warn("Max retry count reached after increment",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", agentRun.RetryCount),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("retry_count", agentRun.RetryCount),
 		)
 		return r.HandleMaxRetriesExceeded(agentRun)
 	}
@@ -260,8 +258,8 @@ func (r *RetryOrchestrator) TriggerRetry(
 	agentRun.State = "queued"
 	if err := r.agentRunRepo.Update(agentRun); err != nil {
 		r.logger.Error("Failed to update AgentRun state for retry",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Error(err),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
 		)
 		return fmt.Errorf("failed to update agent run state: %w", err)
 	}
@@ -278,9 +276,9 @@ func (r *RetryOrchestrator) TriggerRetry(
 	issueContext, err := r.issueContextService.CollectIssueContext(ctx, owner, repo, issue.Number)
 	if err != nil {
 		r.logger.Error("Failed to collect Issue context for retry",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("issue_id", issue.ID),
-			zap.Error(err),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("issue_id", issue.ID),
+			config.Error(err),
 		)
 		return fmt.Errorf("failed to collect issue context: %w", err)
 	}
@@ -297,22 +295,22 @@ func (r *RetryOrchestrator) TriggerRetry(
 		if prErr == nil && pr != nil && pr.Status == "open" {
 			existingBranchName = pr.Branch
 			r.logger.Info("Found PR associated with agent run, will use existing branch for retry",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("pr_id", *agentRun.PRID),
-				zap.Int("pr_number", pr.Number),
-				zap.String("branch", existingBranchName),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("pr_id", *agentRun.PRID),
+				config.Int("pr_number", pr.Number),
+				config.String("branch", existingBranchName),
 			)
 		} else if prErr != nil {
 			r.logger.Warn("Failed to find PR associated with agent run, falling back to issue PRs",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("pr_id", *agentRun.PRID),
-				zap.Error(prErr),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("pr_id", *agentRun.PRID),
+				config.Error(prErr),
 			)
 		} else if pr != nil && pr.Status != "open" {
 			r.logger.Info("PR associated with agent run is not open, falling back to issue PRs",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("pr_id", *agentRun.PRID),
-				zap.String("pr_status", pr.Status),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("pr_id", *agentRun.PRID),
+				config.String("pr_status", pr.Status),
 			)
 		}
 	}
@@ -326,10 +324,10 @@ func (r *RetryOrchestrator) TriggerRetry(
 				if pr.Status == "open" {
 					existingBranchName = pr.Branch
 					r.logger.Info("Found existing PR for issue, will use existing branch for retry",
-						zap.Int("agent_run_id", agentRun.ID),
-						zap.Int("issue_id", issue.ID),
-						zap.Int("pr_number", pr.Number),
-						zap.String("branch", existingBranchName),
+						config.Int("agent_run_id", agentRun.ID),
+						config.Int("issue_id", issue.ID),
+						config.Int("pr_number", pr.Number),
+						config.String("branch", existingBranchName),
 					)
 					break
 				}
@@ -338,26 +336,26 @@ func (r *RetryOrchestrator) TriggerRetry(
 	}
 
 	r.logger.Info("Creating retry Job for AgentRun",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Bool("has_feedback", feedback != nil),
-		zap.String("branch_name", existingBranchName),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Bool("has_feedback", feedback != nil),
+		config.String("branch_name", existingBranchName),
 	)
 
 	// Create new Kubernetes Job with feedback
 	_, err = r.jobService.CreateJobForAgentRunWithFeedback(ctx, agentRun, issue, prompt, feedback, existingBranchName)
 	if err != nil {
 		r.logger.Error("Failed to create retry Job",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", agentRun.RetryCount),
-			zap.Error(err),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("retry_count", agentRun.RetryCount),
+			config.Error(err),
 		)
 		return fmt.Errorf("failed to create retry job: %w", err)
 	}
 
 	r.logger.Info("Retry Job created successfully",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", agentRun.RetryCount),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("retry_count", agentRun.RetryCount),
 	)
 
 	return nil
@@ -380,9 +378,9 @@ func (r *RetryOrchestrator) HandleMaxRetriesExceeded(agentRun *models.AgentRun) 
 	}
 
 	r.logger.Warn("Handling max retries exceeded",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Int("max_retry_count", MaxRetryCount),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Int("max_retry_count", MaxRetryCount),
 	)
 
 	// Update state to failed
@@ -393,15 +391,15 @@ func (r *RetryOrchestrator) HandleMaxRetriesExceeded(agentRun *models.AgentRun) 
 	// Update AgentRun in database
 	if err := r.agentRunRepo.Update(agentRun); err != nil {
 		r.logger.Error("Failed to update AgentRun state to failed",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Error(err),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
 		)
 		return fmt.Errorf("failed to update agent run state: %w", err)
 	}
 
 	r.logger.Info("AgentRun state updated to failed due to max retries",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", agentRun.RetryCount),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("retry_count", agentRun.RetryCount),
 	)
 
 	// TODO(T100, T101): Trigger GitHub and Discord notifications for max retries exceeded
@@ -441,11 +439,11 @@ func (r *RetryOrchestrator) IsMaxRetriesReached(agentRun *models.AgentRun) bool 
 	maxReached := agentRun.RetryCount >= MaxRetryCount
 
 	r.logger.Debug("Checking if max retries reached",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Int("max_retry_count", MaxRetryCount),
-		zap.Bool("max_reached", maxReached),
-		zap.String("service", "retry_orchestrator"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Int("max_retry_count", MaxRetryCount),
+		config.Bool("max_reached", maxReached),
+		config.String("service", "retry_orchestrator"),
 	)
 
 	return maxReached
@@ -464,7 +462,7 @@ func (r *RetryOrchestrator) ValidateRetryCount(agentRun *models.AgentRun) error 
 	// Parameter validation
 	if agentRun == nil {
 		r.logger.Error("agentRun must not be nil for validation",
-			zap.String("service", "retry_orchestrator"),
+			config.String("service", "retry_orchestrator"),
 		)
 		return errors.New("agentRun must not be nil")
 	}
@@ -473,10 +471,10 @@ func (r *RetryOrchestrator) ValidateRetryCount(agentRun *models.AgentRun) error 
 	if agentRun.RetryCount < 0 {
 		err := fmt.Errorf("retry_count must be non-negative, got: %d", agentRun.RetryCount)
 		r.logger.Error("Retry count validation failed",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", agentRun.RetryCount),
-			zap.Error(err),
-			zap.String("service", "retry_orchestrator"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("retry_count", agentRun.RetryCount),
+			config.Error(err),
+			config.String("service", "retry_orchestrator"),
 		)
 		return err
 	}
@@ -484,10 +482,10 @@ func (r *RetryOrchestrator) ValidateRetryCount(agentRun *models.AgentRun) error 
 	// Warn if retry_count exceeds maximum (but don't return error - allow existing exceeded counts)
 	if agentRun.RetryCount > MaxRetryCount {
 		r.logger.Warn("Retry count exceeds maximum",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", agentRun.RetryCount),
-			zap.Int("max_retry_count", MaxRetryCount),
-			zap.String("service", "retry_orchestrator"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("retry_count", agentRun.RetryCount),
+			config.Int("max_retry_count", MaxRetryCount),
+			config.String("service", "retry_orchestrator"),
 		)
 	}
 

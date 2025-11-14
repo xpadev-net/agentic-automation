@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -57,8 +56,8 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 		// Validate delivery ID
 		if deliveryID == "" {
 			logger.Warn("Missing X-GitHub-Delivery header",
-				zap.String("path", c.Request.URL.Path),
-				zap.String("method", c.Request.Method),
+				config.String("path", c.Request.URL.Path),
+				config.String("method", c.Request.Method),
 			)
 			// Continue processing even without delivery ID (defensive programming)
 			// GitHub should always send this header, but we don't want to block
@@ -82,8 +81,8 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					// If payload is not in context, we cannot extract issue ID
 					// Continue processing - downstream handlers may handle this
 					logger.Debug("Processing new webhook delivery (no payload in context)",
-						zap.String("delivery_id", deliveryID),
-						zap.String("path", c.Request.URL.Path),
+						config.String("delivery_id", deliveryID),
+						config.String("path", c.Request.URL.Path),
 					)
 					c.Set("delivery_id", deliveryID)
 					c.Next()
@@ -96,9 +95,9 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					// Payload parsing failed - continue processing
 					// This may happen for non-issue related events
 					logger.Debug("Processing new webhook delivery (cannot parse payload for issue ID)",
-						zap.String("delivery_id", deliveryID),
-						zap.String("path", c.Request.URL.Path),
-						zap.Error(err),
+						config.String("delivery_id", deliveryID),
+						config.String("path", c.Request.URL.Path),
+						config.Error(err),
 					)
 					c.Set("delivery_id", deliveryID)
 					c.Next()
@@ -110,8 +109,8 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					// No repository or issue number in payload - this is not an issue-related event
 					// Continue processing without creating AgentRun
 					logger.Debug("Processing new webhook delivery (no repository or issue number in payload)",
-						zap.String("delivery_id", deliveryID),
-						zap.String("path", c.Request.URL.Path),
+						config.String("delivery_id", deliveryID),
+						config.String("path", c.Request.URL.Path),
 					)
 					c.Set("delivery_id", deliveryID)
 					c.Next()
@@ -148,11 +147,11 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 				} else if findErr != nil {
 					// Some other error occurred
 					logger.Error("Failed to find issue for idempotency",
-						zap.Error(findErr),
-						zap.String("delivery_id", deliveryID),
-						zap.String("repo", repoFullName),
-						zap.Int("issue_number", issueNumber),
-						zap.String("path", c.Request.URL.Path),
+						config.Error(findErr),
+						config.String("delivery_id", deliveryID),
+						config.String("repo", repoFullName),
+						config.Int("issue_number", issueNumber),
+						config.String("path", c.Request.URL.Path),
 					)
 
 					// Return 200 OK to prevent GitHub from retrying
@@ -175,11 +174,11 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					// Update the issue
 					if err := issueRepo.Update(issue); err != nil {
 						logger.Error("Failed to update issue for idempotency",
-							zap.Error(err),
-							zap.String("delivery_id", deliveryID),
-							zap.String("repo", repoFullName),
-							zap.Int("issue_number", issueNumber),
-							zap.String("path", c.Request.URL.Path),
+							config.Error(err),
+							config.String("delivery_id", deliveryID),
+							config.String("repo", repoFullName),
+							config.Int("issue_number", issueNumber),
+							config.String("path", c.Request.URL.Path),
 						)
 
 						// Return 200 OK to prevent GitHub from retrying
@@ -197,12 +196,12 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					if err := issueRepo.Create(issue); err != nil {
 						// Failed to create issue - log error and abort
 						logger.Error("Failed to create issue for idempotency",
-							zap.Error(err),
-							zap.String("delivery_id", deliveryID),
-							zap.String("repo", repoFullName),
-							zap.Int("issue_number", issueNumber),
-							zap.Uint64("github_issue_id", githubIssueID),
-							zap.String("path", c.Request.URL.Path),
+							config.Error(err),
+							config.String("delivery_id", deliveryID),
+							config.String("repo", repoFullName),
+							config.Int("issue_number", issueNumber),
+							config.Uint64("github_issue_id", githubIssueID),
+							config.String("path", c.Request.URL.Path),
 						)
 
 						// Return 200 OK to prevent GitHub from retrying
@@ -231,12 +230,12 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 					// Failed to create/get record - log error but continue processing
 					// The downstream handler may handle this or retry
 					logger.Error("Failed to persist delivery ID for idempotency",
-						zap.Error(createErr),
-						zap.String("delivery_id", deliveryID),
-						zap.Int("issue_db_id", issueDBID),
-						zap.String("repo", repoFullName),
-						zap.Int("issue_number", issueNumber),
-						zap.String("path", c.Request.URL.Path),
+						config.Error(createErr),
+						config.String("delivery_id", deliveryID),
+						config.Int("issue_db_id", issueDBID),
+						config.String("repo", repoFullName),
+						config.Int("issue_number", issueNumber),
+						config.String("path", c.Request.URL.Path),
 					)
 
 					// Return 200 OK to prevent GitHub from retrying
@@ -251,10 +250,10 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 				if !isNew {
 					// Record already exists (race condition - another request created it)
 					logger.Info("Webhook already processed (race condition detected), skipping",
-						zap.String("delivery_id", deliveryID),
-						zap.Int("agent_run_id", createdRun.ID),
-						zap.String("agent_run_state", createdRun.State),
-						zap.String("path", c.Request.URL.Path),
+						config.String("delivery_id", deliveryID),
+						config.Int("agent_run_id", createdRun.ID),
+						config.String("agent_run_state", createdRun.State),
+						config.String("path", c.Request.URL.Path),
 					)
 
 					// Return 200 OK to acknowledge receipt and prevent GitHub from retrying
@@ -268,12 +267,12 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 
 				// Successfully created new record
 				logger.Debug("Created idempotency record for new webhook delivery",
-					zap.String("delivery_id", deliveryID),
-					zap.Int("agent_run_id", createdRun.ID),
-					zap.Int("issue_db_id", issueDBID),
-					zap.String("repo", repoFullName),
-					zap.Int("issue_number", issueNumber),
-					zap.String("path", c.Request.URL.Path),
+					config.String("delivery_id", deliveryID),
+					config.Int("agent_run_id", createdRun.ID),
+					config.Int("issue_db_id", issueDBID),
+					config.String("repo", repoFullName),
+					config.Int("issue_number", issueNumber),
+					config.String("path", c.Request.URL.Path),
 				)
 
 				// Store delivery ID and agent run ID in context for downstream handlers
@@ -287,10 +286,10 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 
 			// Database error (unexpected)
 			logger.Error("Failed to check idempotency",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.String("path", c.Request.URL.Path),
-				zap.String("method", c.Request.Method),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.String("path", c.Request.URL.Path),
+				config.String("method", c.Request.Method),
 			)
 
 			// Return 200 OK to prevent GitHub from retrying
@@ -305,10 +304,10 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 
 		// Existing record found - this webhook has already been processed
 		logger.Info("Webhook already processed, skipping",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("agent_run_id", existingRun.ID),
-			zap.String("agent_run_state", existingRun.State),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.Int("agent_run_id", existingRun.ID),
+			config.String("agent_run_state", existingRun.State),
+			config.String("path", c.Request.URL.Path),
 		)
 
 		// Return 200 OK to acknowledge receipt and prevent GitHub from retrying

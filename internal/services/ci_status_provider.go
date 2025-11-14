@@ -1,12 +1,11 @@
 package services
 
 import (
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"context"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 // NOTE: We directly use concrete repositories and internal/models here.
@@ -14,12 +13,12 @@ import (
 type ciStatusProvider struct {
 	ciRepo *repositories.CIStatusRepository
 	prRepo *repositories.PullRequestRepository
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
-func NewCIStatusProvider(ciRepo *repositories.CIStatusRepository, prRepo *repositories.PullRequestRepository, logger *zap.Logger) CIStatusProvider {
+func NewCIStatusProvider(ciRepo *repositories.CIStatusRepository, prRepo *repositories.PullRequestRepository, logger *config.AppLogger) CIStatusProvider {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &ciStatusProvider{ciRepo: ciRepo, prRepo: prRepo, logger: logger}
 }

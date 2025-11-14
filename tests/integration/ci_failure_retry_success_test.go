@@ -21,7 +21,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -268,8 +267,7 @@ func Test_CheckSuite_CIFailure_TriggersRetry(t *testing.T) {
 	})
 
 	// Setup logger and DB
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	db := setupDBCheckSuite(t)
@@ -404,8 +402,7 @@ func Test_CheckSuite_CIFailure_MaxRetriesExceeded(t *testing.T) {
 	})
 
 	// Setup logger and DB
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	db := setupDBCheckSuite(t)
@@ -509,8 +506,7 @@ func Test_CheckSuite_CISuccess_RecordsStatus(t *testing.T) {
 	})
 
 	// Setup logger and DB
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	db := setupDBCheckSuite(t)
@@ -601,8 +597,7 @@ func Test_CheckSuite_CIFailure_Retry_Success_Flow(t *testing.T) {
 	})
 
 	// Setup logger and DB
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	db := setupDBCheckSuite(t)

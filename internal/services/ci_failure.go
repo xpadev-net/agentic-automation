@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/utils"
+
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 )
 
 // CIFailureResult represents the result of analyzing CI failure logs.
@@ -27,7 +28,7 @@ type CIFailureResult struct {
 // It extracts error information and generates structured feedback for AI retry prompts.
 type CIFailureAnalyzer struct {
 	githubClient *clients.Client
-	logger       *zap.Logger
+	logger       *config.AppLogger
 }
 
 // Failure type constants
@@ -50,18 +51,18 @@ var (
 //
 // Parameters:
 //   - githubClient: GitHub API client (must not be nil, will panic if nil)
-//   - logger: Structured logger instance (if nil, uses zap.NewNop())
+//   - logger: Structured logger instance (if nil, uses config.NewNopLogger())
 //
 // Returns:
 //   - *CIFailureAnalyzer: Initialized analyzer instance
-func NewCIFailureAnalyzer(githubClient *clients.Client, logger *zap.Logger) *CIFailureAnalyzer {
+func NewCIFailureAnalyzer(githubClient *clients.Client, logger *config.AppLogger) *CIFailureAnalyzer {
 	if githubClient == nil {
 		panic("githubClient is required for CIFailureAnalyzer")
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	return &CIFailureAnalyzer{
@@ -90,19 +91,19 @@ func (a *CIFailureAnalyzer) AnalyzeCIFailure(
 	checkSuiteID int64,
 ) (*CIFailureResult, error) {
 	a.logger.Info("Analyzing CI failure",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int64("check_suite_id", checkSuiteID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int64("check_suite_id", checkSuiteID),
 	)
 
 	// Retrieve all check runs for the check suite
 	checkRuns, err := a.githubClient.ListCheckRunsForCheckSuite(ctx, owner, repo, checkSuiteID)
 	if err != nil {
 		a.logger.Error("Failed to retrieve check runs",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int64("check_suite_id", checkSuiteID),
-			zap.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int64("check_suite_id", checkSuiteID),
+			config.Error(err),
 		)
 		return nil, fmt.Errorf("failed to retrieve check runs: %w", err)
 	}
@@ -117,9 +118,9 @@ func (a *CIFailureAnalyzer) AnalyzeCIFailure(
 
 	if len(failedCheckRuns) == 0 {
 		a.logger.Warn("No failed check runs found",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int64("check_suite_id", checkSuiteID),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int64("check_suite_id", checkSuiteID),
 		)
 		return nil, fmt.Errorf("no failed check runs found")
 	}
@@ -168,12 +169,12 @@ func (a *CIFailureAnalyzer) AnalyzeCIFailure(
 	}
 
 	a.logger.Info("CI failure analysis completed",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int64("check_suite_id", checkSuiteID),
-		zap.String("failure_type", overallFailureType),
-		zap.Int("failed_check_count", len(failedCheckNames)),
-		zap.Int("summary_length", len(summary)),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int64("check_suite_id", checkSuiteID),
+		config.String("failure_type", overallFailureType),
+		config.Int("failed_check_count", len(failedCheckNames)),
+		config.Int("summary_length", len(summary)),
 	)
 
 	return result, nil

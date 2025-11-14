@@ -1,9 +1,8 @@
 package services
 
 import (
+	"agentic-automation/internal/config"
 	"context"
-
-	"go.uber.org/zap"
 )
 
 // CIState represents aggregated CI state for a PR.
@@ -46,13 +45,13 @@ type mergeConditionChecker struct {
 	ci        CIStatusProvider
 	codex     CodexApprovalChecker
 	conflicts MergeConflictDetector
-	logger    *zap.Logger
+	logger    *config.AppLogger
 }
 
 // NewMergeConditionChecker constructs a new MergeConditionChecker.
-func NewMergeConditionChecker(ci CIStatusProvider, codex CodexApprovalChecker, conflicts MergeConflictDetector, logger *zap.Logger) MergeConditionChecker {
+func NewMergeConditionChecker(ci CIStatusProvider, codex CodexApprovalChecker, conflicts MergeConflictDetector, logger *config.AppLogger) MergeConditionChecker {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &mergeConditionChecker{ci: ci, codex: codex, conflicts: conflicts, logger: logger}
 }
@@ -72,7 +71,7 @@ func (m *mergeConditionChecker) Check(ctx context.Context, owner, repo string, p
 	// CI state
 	ciState, err := m.ci.GetAggregatedState(ctx, owner, repo, prNumber)
 	if err != nil {
-		m.logger.Warn("failed to get aggregated CI state", zap.Error(err), zap.String("owner", owner), zap.String("repo", repo), zap.Int("pr_number", prNumber))
+		m.logger.Warn("failed to get aggregated CI state", config.Error(err), config.String("owner", owner), config.String("repo", repo), config.Int("pr_number", prNumber))
 		result.Reasons = append(result.Reasons, "ci_state_error")
 	}
 	if ciState == "" {
@@ -83,7 +82,7 @@ func (m *mergeConditionChecker) Check(ctx context.Context, owner, repo string, p
 	// Codex approval
 	approved, err := m.codex.IsApproved(ctx, owner, repo, prNumber)
 	if err != nil {
-		m.logger.Warn("failed to get Codex approval", zap.Error(err), zap.String("owner", owner), zap.String("repo", repo), zap.Int("pr_number", prNumber))
+		m.logger.Warn("failed to get Codex approval", config.Error(err), config.String("owner", owner), config.String("repo", repo), config.Int("pr_number", prNumber))
 		result.Reasons = append(result.Reasons, "codex_approval_error")
 	}
 	result.CodexApproved = approved
@@ -91,7 +90,7 @@ func (m *mergeConditionChecker) Check(ctx context.Context, owner, repo string, p
 	// Conflict status
 	conflict, err := m.conflicts.Detect(ctx, owner, repo, prNumber)
 	if err != nil {
-		m.logger.Warn("failed to detect merge conflicts", zap.Error(err), zap.String("owner", owner), zap.String("repo", repo), zap.Int("pr_number", prNumber))
+		m.logger.Warn("failed to detect merge conflicts", config.Error(err), config.String("owner", owner), config.String("repo", repo), config.Int("pr_number", prNumber))
 		// Guard against stale non-conflict status leaking through on error
 		conflict = MergeConflictStatusUnknown
 		result.Reasons = append(result.Reasons, "conflict_detection_error")
@@ -121,19 +120,19 @@ func (m *mergeConditionChecker) Check(ctx context.Context, owner, repo string, p
 			result.Reasons = append(result.Reasons, "conflict_unknown")
 		}
 		m.logger.Info("merge conditions not satisfied",
-			zap.String("ci", string(result.CIState)),
-			zap.Bool("codex", result.CodexApproved),
-			zap.String("conflict", string(result.Conflict)),
-			zap.Int("reasons_count", len(result.Reasons)),
+			config.String("ci", string(result.CIState)),
+			config.Bool("codex", result.CodexApproved),
+			config.String("conflict", string(result.Conflict)),
+			config.Int("reasons_count", len(result.Reasons)),
 		)
 		return result, nil
 	}
 
 	result.Mergeable = true
 	m.logger.Info("merge conditions satisfied",
-		zap.String("ci", string(result.CIState)),
-		zap.Bool("codex", result.CodexApproved),
-		zap.String("conflict", string(result.Conflict)),
+		config.String("ci", string(result.CIState)),
+		config.Bool("codex", result.CodexApproved),
+		config.String("conflict", string(result.Conflict)),
 	)
 	return result, nil
 }

@@ -19,8 +19,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -116,7 +114,7 @@ func setupTestDBForCheckSuite(t *testing.T) *gorm.DB {
 
 // setupTestRouterForCheckSuite creates a Gin router with signature verification middleware
 // It uses HandleCheckSuiteWithDeps to inject test dependencies
-func setupTestRouterForCheckSuite(db *gorm.DB, logger *zap.Logger) *gin.Engine {
+func setupTestRouterForCheckSuite(db *gorm.DB, logger *config.AppLogger) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
@@ -191,7 +189,7 @@ func TestCheckSuite_HandleCheckSuite_NonCompletedAction(t *testing.T) {
 	})
 
 	db := setupTestDBForCheckSuite(t)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	router := setupTestRouterForCheckSuite(db, logger)
 
 	payload := createTestCheckSuitePayload("requested", nil, 1)
@@ -218,7 +216,7 @@ func TestCheckSuite_HandleCheckSuite_NoPullRequests(t *testing.T) {
 	})
 
 	db := setupTestDBForCheckSuite(t)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	router := setupTestRouterForCheckSuite(db, logger)
 
 	payload := handlers.CheckSuitePayload{
@@ -258,7 +256,7 @@ func TestCheckSuite_HandleCheckSuite_PRNotFound(t *testing.T) {
 	})
 
 	db := setupTestDBForCheckSuite(t)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	router := setupTestRouterForCheckSuite(db, logger)
 
 	payload := createTestCheckSuitePayload("completed", stringPtr("success"), 999)
@@ -285,7 +283,7 @@ func TestCheckSuite_HandleCheckSuite_CISuccess(t *testing.T) {
 	})
 
 	db := setupTestDBForCheckSuite(t)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	router := setupTestRouterForCheckSuite(db, logger)
 
 	// Create test PR
@@ -329,7 +327,7 @@ func TestCheckSuite_HandleCheckSuite_NoConclusion(t *testing.T) {
 	})
 
 	db := setupTestDBForCheckSuite(t)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	router := setupTestRouterForCheckSuite(db, logger)
 
 	// Create test PR

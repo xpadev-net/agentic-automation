@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/errors"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/utils"
-	"go.uber.org/zap"
 )
 
 // CircularDependencyError represents a detected cycle in the dependency graph.
@@ -38,13 +38,13 @@ func (e *CircularDependencyError) GetErrorCode() errors.ErrorCode {
 
 // CircularDependencyDetector provides cycle detection over a dependency graph.
 type CircularDependencyDetector struct {
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 // NewCircularDependencyDetector constructs a new detector with the provided logger.
-func NewCircularDependencyDetector(logger *zap.Logger) *CircularDependencyDetector {
+func NewCircularDependencyDetector(logger *config.AppLogger) *CircularDependencyDetector {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &CircularDependencyDetector{logger: logger}
 }
@@ -60,7 +60,7 @@ func (d *CircularDependencyDetector) DetectCycleFromGraph(g *utils.DependencyGra
 			Cycle: cycle,
 			Code:  errors.ERR_DEPENDENCY_CIRCULAR,
 		}
-		d.logger.Info("circular dependency detected", zap.Ints("cycle", cycle))
+		d.logger.Info("circular dependency detected", config.Ints("cycle", cycle))
 		return cycle, err
 	}
 	return nil, nil
@@ -79,7 +79,7 @@ func (d *CircularDependencyDetector) FindAllCyclesFromGraph(g *utils.DependencyG
 	}
 	cycles := g.FindAllCycles(limit)
 	if len(cycles) > 0 {
-		d.logger.Debug("cycles found", zap.Int("count", len(cycles)))
+		d.logger.Debug("cycles found", config.Int("count", len(cycles)))
 	}
 	return cycles
 }
@@ -94,7 +94,7 @@ func (d *CircularDependencyDetector) ValidateAcyclic(g *utils.DependencyGraph) e
 			Cycle: cycle,
 			Code:  errors.ERR_DEPENDENCY_CIRCULAR,
 		}
-		d.logger.Info("circular dependency detected", zap.Ints("cycle", cycle))
+		d.logger.Info("circular dependency detected", config.Ints("cycle", cycle))
 		return err
 	}
 	return nil

@@ -5,8 +5,6 @@ import (
 	"agentic-automation/internal/config"
 	"strconv"
 	"strings"
-
-	"go.uber.org/zap"
 )
 
 // codexApprovalExactMatch is the exact approval message from Codex bot.
@@ -14,7 +12,7 @@ const codexApprovalExactMatch = "Codex Review: Didn't find any major issues."
 
 // CodexApprovalDetector detects Codex bot approval patterns in review comments.
 type CodexApprovalDetector struct {
-	logger           *zap.Logger
+	logger           *config.AppLogger
 	codexBotUsername string
 	codexBotUserID   int64
 }
@@ -23,7 +21,7 @@ type CodexApprovalDetector struct {
 // If logger is nil, it uses config.GetLogger().
 // The Codex bot username is read from CODEX_BOT_USERNAME environment variable (default: "chatgpt-codex-connector[bot]").
 // The Codex bot user ID is read from CODEX_BOT_USER_ID environment variable (default: 199175422).
-func NewCodexApprovalDetector(logger *zap.Logger) *CodexApprovalDetector {
+func NewCodexApprovalDetector(logger *config.AppLogger) *CodexApprovalDetector {
 	if logger == nil {
 		logger = config.GetLogger()
 	}
@@ -77,11 +75,11 @@ func (s *CodexApprovalDetector) DetectApproval(reviewBody string, reviewerUserna
 	}
 
 	s.logger.Info("Codex approval detection result",
-		zap.Bool("approval_detected", detected),
-		zap.String("reviewer_username", reviewerUsername),
-		zap.Int64("reviewer_user_id", reviewerUserID),
-		zap.String("review_body_preview", preview),
-		zap.String("service", "codex_approval"),
+		config.Bool("approval_detected", detected),
+		config.String("reviewer_username", reviewerUsername),
+		config.Int64("reviewer_user_id", reviewerUserID),
+		config.String("review_body_preview", preview),
+		config.String("service", "codex_approval"),
 	)
 
 	// 5. Return detection result

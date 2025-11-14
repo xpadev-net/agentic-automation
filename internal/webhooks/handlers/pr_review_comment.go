@@ -18,7 +18,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -57,7 +56,7 @@ type CodexReviewService interface {
 
 // PullRequestReviewCommentDeps represents injectable dependencies for HandlePullRequestReviewComment
 type PullRequestReviewCommentDeps struct {
-	Logger                   *zap.Logger
+	Logger                   *config.AppLogger
 	GitHubClient             *clients.Client
 	AuthorizationService     Authorization // Reuse from issue_comment.go
 	CodexReviewService       CodexReviewService
@@ -85,7 +84,7 @@ func HandlePullRequestReviewComment(c *gin.Context) {
 		ghApp, err := clients.NewGitHubAppClient(logger)
 		if err != nil {
 			// テスト環境などで資格情報が無い場合でもここではエラーにせず後段で処理
-			logger.Warn("GitHub App client not initialized", zap.Error(err))
+			logger.Warn("GitHub App client not initialized", config.Error(err))
 		} else {
 			appGitHubClient = ghApp
 		}
@@ -109,7 +108,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	deliveryID := c.GetHeader(deliveryHeader)
 	if deliveryID == "" {
 		logger.Warn("Missing X-GitHub-Delivery header",
-			zap.String("path", c.Request.URL.Path),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_MISSING_DELIVERY, "missing X-GitHub-Delivery header", nil))
 		return
@@ -119,8 +118,8 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	payloadData, exists := c.Get("webhook_payload")
 	if !exists {
 		logger.Error("Webhook payload not found in context",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_PAYLOAD_NOT_FOUND, "webhook payload not found in context", nil))
 		return
@@ -129,8 +128,8 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	payloadBytes, ok := payloadData.([]byte)
 	if !ok {
 		logger.Error("Invalid webhook payload type",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid webhook payload type", nil))
 		return
@@ -139,9 +138,9 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	var payload PullRequestReviewCommentPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		logger.Error("Failed to parse webhook payload",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(err)
 		return
@@ -150,10 +149,10 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	// Step 4: Action 検証
 	if payload.Action != models.PullRequestReviewCommentActionCreated {
 		logger.Info("Ignoring non-created action",
-			zap.String("action", payload.Action),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.String("action", payload.Action),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "ignored",
@@ -167,10 +166,10 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 
 	// Step 5: トリガー検出
 	logger.Info("Checking for trigger in comment",
-		zap.String("delivery_id", deliveryID),
-		zap.Int("pr_number", payload.PullRequest.Number),
-		zap.String("repo", payload.Repository.FullName),
-		zap.String("comment_user", payload.Comment.User.Login),
+		config.String("delivery_id", deliveryID),
+		config.Int("pr_number", payload.PullRequest.Number),
+		config.String("repo", payload.Repository.FullName),
+		config.String("comment_user", payload.Comment.User.Login),
 	)
 
 	commentBodyPreview := payload.Comment.Body
@@ -181,22 +180,22 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	triggerDetected := utils.ContainsCodexReviewTrigger(payload.Comment.Body)
 	if !triggerDetected {
 		logger.Info("No trigger detected in comment",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
-			zap.Int("comment_id", payload.Comment.ID),
-			zap.String("comment_created_at", payload.Comment.CreatedAt),
-			zap.String("comment_body_preview", commentBodyPreview),
-			zap.String("comment_user", payload.Comment.User.Login),
-			zap.String("trigger_string", utils.CodexReviewTrigger),
-			zap.String("detection_reason", "trigger string '@codex review' not found in comment body"),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
+			config.Int("comment_id", payload.Comment.ID),
+			config.String("comment_created_at", payload.Comment.CreatedAt),
+			config.String("comment_body_preview", commentBodyPreview),
+			config.String("comment_user", payload.Comment.User.Login),
+			config.String("trigger_string", utils.CodexReviewTrigger),
+			config.String("detection_reason", "trigger string '@codex review' not found in comment body"),
 		)
 	} else {
 		logger.Info("Trigger detected in comment",
-			zap.Bool("trigger_detected", true),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.Bool("trigger_detected", true),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 	}
 
@@ -204,8 +203,8 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	repoParts := strings.Split(payload.Repository.FullName, "/")
 	if len(repoParts) != 2 {
 		logger.Error("Invalid repository full name format",
-			zap.String("full_name", payload.Repository.FullName),
-			zap.String("delivery_id", deliveryID),
+			config.String("full_name", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_REPO_FORMAT, "invalid repository full name format", nil))
 		return
@@ -226,9 +225,9 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			// エラーを返さずにプラン作成をスキップして成功を返す
 			// これにより、GitHubが通常のコメントでもwebhookをリトライしないようにする
 			logger.Info("PullRequest not found, skipping plan creation",
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_number", payload.PullRequest.Number),
-				zap.String("repo", payload.Repository.FullName),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_number", payload.PullRequest.Number),
+				config.String("repo", payload.Repository.FullName),
 			)
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "no_trigger",
@@ -238,20 +237,20 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			return
 		}
 		logger.Error("Failed to get PullRequest",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("PullRequest retrieved",
-		zap.Int("pr_id", pr.ID),
-		zap.Int("pr_number", pr.Number),
-		zap.String("repo", pr.Repo),
-		zap.String("delivery_id", deliveryID),
+		config.Int("pr_id", pr.ID),
+		config.Int("pr_number", pr.Number),
+		config.String("repo", pr.Repo),
+		config.String("delivery_id", deliveryID),
 	)
 
 	planResult, planErr := startPlanCreationIfNeeded(ctx, deps, logger, pr, commentBody, int64(payload.Comment.ID), payload.Comment.User.Login, payload.Comment.User.ID, deliveryID)
@@ -293,7 +292,7 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	if githubClient == nil {
 		if appGitHubClient == nil {
 			logger.Error("GitHub App client not available",
-				zap.String("delivery_id", deliveryID),
+				config.String("delivery_id", deliveryID),
 			)
 			c.Error(errors.NewCodedError(errors.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 			return
@@ -301,10 +300,10 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 		if err != nil {
 			logger.Error("Failed to init per-repo GitHub client",
-				zap.Error(err),
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.String("delivery_id", deliveryID),
 			)
 			c.Error(err)
 			return
@@ -351,16 +350,16 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 			}
 		}
 
-		logFields := []zap.Field{
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.String("user", payload.Comment.User.Login),
-			zap.String("repo", payload.Repository.FullName),
-			zap.String("api_method", "GetPermissionLevel"),
-			zap.String("error_type", errorType),
+		logFields := []config.Field{
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.String("user", payload.Comment.User.Login),
+			config.String("repo", payload.Repository.FullName),
+			config.String("api_method", "GetPermissionLevel"),
+			config.String("error_type", errorType),
 		}
 		if httpStatusCode > 0 {
-			logFields = append(logFields, zap.Int("http_status_code", httpStatusCode))
+			logFields = append(logFields, config.Int("http_status_code", httpStatusCode))
 		}
 
 		logger.Error("Failed to check user permission",
@@ -372,12 +371,12 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 
 	if !hasPermission {
 		logger.Warn("User lacks permission to trigger Codex review",
-			zap.String("delivery_id", deliveryID),
-			zap.String("user", payload.Comment.User.Login),
-			zap.String("repo", payload.Repository.FullName),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("authorization_required_level", "write/maintain/admin"),
-			zap.String("authorization_policy", "FR-018: Collaborator+ permission required"),
+			config.String("delivery_id", deliveryID),
+			config.String("user", payload.Comment.User.Login),
+			config.String("repo", payload.Repository.FullName),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("authorization_required_level", "write/maintain/admin"),
+			config.String("authorization_policy", "FR-018: Collaborator+ permission required"),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "permission_denied",
@@ -387,10 +386,10 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	}
 
 	logger.Info("User permission verified",
-		zap.Bool("authorized", true),
-		zap.String("user", payload.Comment.User.Login),
-		zap.String("repo", payload.Repository.FullName),
-		zap.String("delivery_id", deliveryID),
+		config.Bool("authorized", true),
+		config.String("user", payload.Comment.User.Login),
+		config.String("repo", payload.Repository.FullName),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Step 9: CodexReviewService 呼び出し
@@ -399,9 +398,9 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 		// T091 で実装される予定のサービスが未実装の場合
 		// 警告を出して処理を続行（レビューリクエストとReviewFeedback作成をスキップ）
 		logger.Warn("CodexReviewService not available (T091 not implemented yet), skipping review request",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		// 処理を成功として返す（レビューリクエストとReviewFeedback作成をスキップ）
 		c.JSON(http.StatusOK, gin.H{
@@ -419,19 +418,19 @@ func HandlePullRequestReviewCommentWithDeps(c *gin.Context, deps PullRequestRevi
 	_, err = codexReviewService.RequestReview(ctx, owner, repo, payload.PullRequest.Number, pr.ID, idempotencyKey)
 	if err != nil {
 		logger.Error("Failed to request Codex review",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("Codex review requested successfully",
-		zap.String("delivery_id", deliveryID),
-		zap.Int("pr_number", payload.PullRequest.Number),
-		zap.String("repo", payload.Repository.FullName),
+		config.String("delivery_id", deliveryID),
+		config.Int("pr_number", payload.PullRequest.Number),
+		config.String("repo", payload.Repository.FullName),
 	)
 
 	// Step 11: 成功レスポンス返却
@@ -488,7 +487,7 @@ func (r *planCreationResult) hasStarted() bool {
 func startPlanCreationIfNeeded(
 	ctx context.Context,
 	deps PullRequestReviewCommentDeps,
-	logger *zap.Logger,
+	logger *config.AppLogger,
 	pr *models.PullRequest,
 	commentBody string,
 	commentID int64,
@@ -499,8 +498,8 @@ func startPlanCreationIfNeeded(
 	commentBody = strings.TrimSpace(commentBody)
 	if commentBody == "" {
 		logger.Info("Skipping plan creation: empty review comment",
-			zap.Int("pr_id", pr.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		return &planCreationResult{Status: "skipped_empty_comment"}, nil
 	}
@@ -511,10 +510,10 @@ func startPlanCreationIfNeeded(
 	}
 	if utf8.RuneCountInString(commentBody) < minCommentLength {
 		logger.Info("Skipping plan creation: comment shorter than minimum threshold",
-			zap.Int("pr_id", pr.ID),
-			zap.Int("comment_length", utf8.RuneCountInString(commentBody)),
-			zap.Int("min_length", minCommentLength),
-			zap.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.Int("comment_length", utf8.RuneCountInString(commentBody)),
+			config.Int("min_length", minCommentLength),
+			config.String("delivery_id", deliveryID),
 		)
 		return &planCreationResult{Status: "skipped_short_comment"}, nil
 	}
@@ -532,10 +531,10 @@ func startPlanCreationIfNeeded(
 	existingByCommentID, err := reviewFeedbackRepo.FindByGitHubCommentID(commentID)
 	if err != nil {
 		logger.Error("Failed to load review feedback by GitHub comment ID",
-			zap.Error(err),
-			zap.Int64("github_comment_id", commentID),
-			zap.Int("pr_id", pr.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int64("github_comment_id", commentID),
+			config.Int("pr_id", pr.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		return nil, err
 	}
@@ -544,11 +543,11 @@ func startPlanCreationIfNeeded(
 		// Use the existing record to prevent duplicate plan creation
 		reviewFeedback = existingByCommentID
 		logger.Info("Found existing review feedback for GitHub comment ID",
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.Int64("github_comment_id", commentID),
-			zap.String("status", reviewFeedback.Status),
-			zap.String("plan_creation_status", reviewFeedback.PlanCreationStatus),
-			zap.String("delivery_id", deliveryID),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.Int64("github_comment_id", commentID),
+			config.String("status", reviewFeedback.Status),
+			config.String("plan_creation_status", reviewFeedback.PlanCreationStatus),
+			config.String("delivery_id", deliveryID),
 		)
 
 		// If the existing record is in "requested" status and this is a Codex comment,
@@ -559,25 +558,25 @@ func startPlanCreationIfNeeded(
 			if isCodexComment {
 				if updateErr := reviewFeedbackRepo.UpdateToReceived(reviewFeedback.ID, commentBody, false, commentIDPtr); updateErr != nil {
 					logger.Error("Failed to update existing requested review feedback to received",
-						zap.Error(updateErr),
-						zap.Int("review_feedback_id", reviewFeedback.ID),
-						zap.String("delivery_id", deliveryID),
+						config.Error(updateErr),
+						config.Int("review_feedback_id", reviewFeedback.ID),
+						config.String("delivery_id", deliveryID),
 					)
 					return nil, updateErr
 				}
 				reviewFeedback, err = reviewFeedbackRepo.FindByID(reviewFeedback.ID)
 				if err != nil {
 					logger.Error("Failed to reload review feedback after update",
-						zap.Error(err),
-						zap.Int("review_feedback_id", reviewFeedback.ID),
-						zap.String("delivery_id", deliveryID),
+						config.Error(err),
+						config.Int("review_feedback_id", reviewFeedback.ID),
+						config.String("delivery_id", deliveryID),
 					)
 					return nil, err
 				}
 				logger.Info("Updated existing requested review feedback to received (Codex comment)",
-					zap.Int("review_feedback_id", reviewFeedback.ID),
-					zap.Int64("github_comment_id", commentID),
-					zap.String("delivery_id", deliveryID),
+					config.Int("review_feedback_id", reviewFeedback.ID),
+					config.Int64("github_comment_id", commentID),
+					config.String("delivery_id", deliveryID),
 				)
 			}
 		}
@@ -590,9 +589,9 @@ func startPlanCreationIfNeeded(
 		requestedList, err := reviewFeedbackRepo.FindByPRIDAndStatus(pr.ID, "requested")
 		if err != nil {
 			logger.Error("Failed to load requested review feedback records",
-				zap.Error(err),
-				zap.Int("pr_id", pr.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.Int("pr_id", pr.ID),
+				config.String("delivery_id", deliveryID),
 			)
 			return nil, err
 		}
@@ -608,26 +607,26 @@ func startPlanCreationIfNeeded(
 			if shouldUpdate {
 				if updateErr := reviewFeedbackRepo.UpdateToReceived(latest.ID, commentBody, false, commentIDPtr); updateErr != nil {
 					logger.Error("Failed to update review feedback to received",
-						zap.Error(updateErr),
-						zap.Int("review_feedback_id", latest.ID),
-						zap.String("delivery_id", deliveryID),
+						config.Error(updateErr),
+						config.Int("review_feedback_id", latest.ID),
+						config.String("delivery_id", deliveryID),
 					)
 					return nil, updateErr
 				}
 				reviewFeedback, err = reviewFeedbackRepo.FindByID(latest.ID)
 				if err != nil {
 					logger.Error("Failed to reload review feedback after update",
-						zap.Error(err),
-						zap.Int("review_feedback_id", latest.ID),
-						zap.String("delivery_id", deliveryID),
+						config.Error(err),
+						config.Int("review_feedback_id", latest.ID),
+						config.String("delivery_id", deliveryID),
 					)
 					return nil, err
 				}
 				logger.Info("Updated existing requested review feedback to received",
-					zap.Int("review_feedback_id", reviewFeedback.ID),
-					zap.Int64("github_comment_id", commentID),
-					zap.Bool("is_codex_comment", isCodexComment),
-					zap.String("delivery_id", deliveryID),
+					config.Int("review_feedback_id", reviewFeedback.ID),
+					config.Int64("github_comment_id", commentID),
+					config.Bool("is_codex_comment", isCodexComment),
+					config.String("delivery_id", deliveryID),
 				)
 			} else {
 				// Human comment or comment ID mismatch: create a new received record
@@ -635,27 +634,27 @@ func startPlanCreationIfNeeded(
 				reviewFeedback, err = reviewFeedbackRepo.CreateReceivedReview(pr.ID, commentBody, false, commentIDPtr)
 				if err != nil {
 					logger.Error("Failed to create received review feedback",
-						zap.Error(err),
-						zap.Int("pr_id", pr.ID),
-						zap.String("delivery_id", deliveryID),
+						config.Error(err),
+						config.Int("pr_id", pr.ID),
+						config.String("delivery_id", deliveryID),
 					)
 					return nil, err
 				}
 				logger.Info("Created new received review feedback (preserving existing requested record)",
-					zap.Int("review_feedback_id", reviewFeedback.ID),
-					zap.Int64("github_comment_id", commentID),
-					zap.Bool("is_codex_comment", isCodexComment),
-					zap.Int("existing_requested_count", len(requestedList)),
-					zap.String("delivery_id", deliveryID),
+					config.Int("review_feedback_id", reviewFeedback.ID),
+					config.Int64("github_comment_id", commentID),
+					config.Bool("is_codex_comment", isCodexComment),
+					config.Int("existing_requested_count", len(requestedList)),
+					config.String("delivery_id", deliveryID),
 				)
 			}
 		} else {
 			reviewFeedback, err = reviewFeedbackRepo.CreateReceivedReview(pr.ID, commentBody, false, commentIDPtr)
 			if err != nil {
 				logger.Error("Failed to create received review feedback",
-					zap.Error(err),
-					zap.Int("pr_id", pr.ID),
-					zap.String("delivery_id", deliveryID),
+					config.Error(err),
+					config.Int("pr_id", pr.ID),
+					config.String("delivery_id", deliveryID),
 				)
 				return nil, err
 			}
@@ -664,8 +663,8 @@ func startPlanCreationIfNeeded(
 
 	if reviewFeedback == nil {
 		logger.Warn("Review feedback record unavailable after processing",
-			zap.Int("pr_id", pr.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		return &planCreationResult{Status: "skipped_feedback_missing"}, nil
 	}
@@ -673,9 +672,9 @@ func startPlanCreationIfNeeded(
 	planState := strings.TrimSpace(reviewFeedback.PlanCreationStatus)
 	if planState == "creating" || planState == "created" || planState == "executed" {
 		logger.Info("Plan creation already in progress or completed",
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("plan_creation_status", planState),
-			zap.String("delivery_id", deliveryID),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.String("plan_creation_status", planState),
+			config.String("delivery_id", deliveryID),
 		)
 		result := &planCreationResult{
 			Status:            "skipped_plan_already_started",
@@ -690,8 +689,8 @@ func startPlanCreationIfNeeded(
 
 	if pr.IssueID == nil {
 		logger.Warn("Skipping plan creation: PR not linked to issue",
-			zap.Int("pr_id", pr.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		return &planCreationResult{
 			Status:           "skipped_missing_issue",
@@ -703,16 +702,16 @@ func startPlanCreationIfNeeded(
 	issue, err := issueRepo.FindByID(*pr.IssueID)
 	if err != nil {
 		logger.Error("Failed to load issue for plan creation",
-			zap.Error(err),
-			zap.Int("issue_id", *pr.IssueID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("issue_id", *pr.IssueID),
+			config.String("delivery_id", deliveryID),
 		)
 		return nil, err
 	}
 	if issue == nil {
 		logger.Warn("Skipping plan creation: linked issue not found",
-			zap.Int("issue_id", *pr.IssueID),
-			zap.String("delivery_id", deliveryID),
+			config.Int("issue_id", *pr.IssueID),
+			config.String("delivery_id", deliveryID),
 		)
 		return &planCreationResult{
 			Status:           "skipped_issue_not_found",
@@ -742,9 +741,9 @@ func startPlanCreationIfNeeded(
 		// Plan recreation: use unique idempotency key with timestamp
 		idempotencyKey = fmt.Sprintf("plan_creation:review_feedback:%d:recreation:%d", reviewFeedback.ID, time.Now().UnixNano())
 		logger.Info("Detected plan recreation, using unique idempotency key",
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.Int("previous_agent_run_id", *reviewFeedback.PlanAgentRunID),
-			zap.String("delivery_id", deliveryID),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.Int("previous_agent_run_id", *reviewFeedback.PlanAgentRunID),
+			config.String("delivery_id", deliveryID),
 		)
 	} else {
 		// New plan creation: use standard idempotency key
@@ -753,9 +752,9 @@ func startPlanCreationIfNeeded(
 	createdRun, isNew, err := agentRunRepo.CreateOrGet(idempotencyKey, planRun)
 	if err != nil {
 		logger.Error("Failed to create or get plan creation agent run",
-			zap.Error(err),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		return nil, err
 	}
@@ -763,17 +762,17 @@ func startPlanCreationIfNeeded(
 	planAgentRun := createdRun
 	if !isNew {
 		logger.Info("Reusing existing plan creation agent run",
-			zap.Int("agent_run_id", createdRun.ID),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Int("agent_run_id", createdRun.ID),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		planAgentRun.AgentType = agentType
 		planAgentRun.ExecutionMode = "plan_creation"
 		planAgentRun.ReviewFeedbackID = &reviewFeedback.ID
 		if err := agentRunRepo.Update(planAgentRun); err != nil {
 			logger.Warn("Failed to update existing plan creation agent run",
-				zap.Error(err),
-				zap.Int("agent_run_id", planAgentRun.ID),
+				config.Error(err),
+				config.Int("agent_run_id", planAgentRun.ID),
 			)
 		}
 	}
@@ -783,11 +782,11 @@ func startPlanCreationIfNeeded(
 	started, err := reviewFeedbackRepo.TryStartPlanCreationForPR(pr.ID, reviewFeedback.ID, planAgentRun.ID)
 	if err != nil {
 		logger.Error("Failed to atomically start plan creation for PR",
-			zap.Error(err),
-			zap.Int("pr_id", pr.ID),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.Int("agent_run_id", planAgentRun.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("pr_id", pr.ID),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.Int("agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		return nil, err
 	}
@@ -798,9 +797,9 @@ func startPlanCreationIfNeeded(
 		allFeedbacks, err := reviewFeedbackRepo.FindByPRID(pr.ID)
 		if err != nil {
 			logger.Error("Failed to load review feedbacks for PR after concurrent update",
-				zap.Error(err),
-				zap.Int("pr_id", pr.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.Int("pr_id", pr.ID),
+				config.String("delivery_id", deliveryID),
 			)
 			return nil, err
 		}
@@ -816,10 +815,10 @@ func startPlanCreationIfNeeded(
 
 		if creatingFeedback != nil {
 			logger.Info("Plan creation already started for this PR by another ReviewFeedback",
-				zap.Int("pr_id", pr.ID),
-				zap.Int("current_review_feedback_id", reviewFeedback.ID),
-				zap.Int("creating_review_feedback_id", creatingFeedback.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
+				config.Int("current_review_feedback_id", reviewFeedback.ID),
+				config.Int("creating_review_feedback_id", creatingFeedback.ID),
+				config.String("delivery_id", deliveryID),
 			)
 			result := &planCreationResult{
 				Status:            "skipped_plan_already_started",
@@ -836,16 +835,16 @@ func startPlanCreationIfNeeded(
 		updatedFeedback, err := reviewFeedbackRepo.FindByID(reviewFeedback.ID)
 		if err != nil {
 			logger.Error("Failed to reload review feedback after concurrent update",
-				zap.Error(err),
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.Int("review_feedback_id", reviewFeedback.ID),
+				config.String("delivery_id", deliveryID),
 			)
 			return nil, err
 		}
 		if updatedFeedback == nil {
 			logger.Warn("Review feedback not found after concurrent update",
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Int("review_feedback_id", reviewFeedback.ID),
+				config.String("delivery_id", deliveryID),
 			)
 			return &planCreationResult{
 				Status:           "skipped_feedback_missing",
@@ -854,9 +853,9 @@ func startPlanCreationIfNeeded(
 		}
 
 		logger.Info("Plan creation already started by another process",
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("plan_creation_status", updatedFeedback.PlanCreationStatus),
-			zap.String("delivery_id", deliveryID),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.String("plan_creation_status", updatedFeedback.PlanCreationStatus),
+			config.String("delivery_id", deliveryID),
 		)
 		result := &planCreationResult{
 			Status:            "skipped_plan_already_started",
@@ -874,14 +873,14 @@ func startPlanCreationIfNeeded(
 		kubernetesClient, clientErr := clients.NewKubernetesClient(logger)
 		if clientErr != nil {
 			logger.Error("Failed to initialize Kubernetes client for plan creation",
-				zap.Error(clientErr),
-				zap.String("delivery_id", deliveryID),
+				config.Error(clientErr),
+				config.String("delivery_id", deliveryID),
 			)
 			// Rollback: reset PlanCreationStatus to 'pending'
 			if rollbackErr := reviewFeedbackRepo.UpdatePlanCreationStatus(reviewFeedback.ID, "pending"); rollbackErr != nil {
 				logger.Error("Failed to rollback plan creation status after Kubernetes client error",
-					zap.Error(rollbackErr),
-					zap.Int("review_feedback_id", reviewFeedback.ID),
+					config.Error(rollbackErr),
+					config.Int("review_feedback_id", reviewFeedback.ID),
 				)
 			}
 			return nil, clientErr
@@ -897,27 +896,27 @@ func startPlanCreationIfNeeded(
 	job, jobErr := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, reviewFeedback, branchName)
 	if jobErr != nil {
 		logger.Error("Failed to create plan creation job",
-			zap.Error(jobErr),
-			zap.Int("agent_run_id", planAgentRun.ID),
-			zap.Int("review_feedback_id", reviewFeedback.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Error(jobErr),
+			config.Int("agent_run_id", planAgentRun.ID),
+			config.Int("review_feedback_id", reviewFeedback.ID),
+			config.String("delivery_id", deliveryID),
 		)
 		// Rollback: reset PlanCreationStatus to 'pending'
 		if rollbackErr := reviewFeedbackRepo.UpdatePlanCreationStatus(reviewFeedback.ID, "pending"); rollbackErr != nil {
 			logger.Error("Failed to rollback plan creation status after job creation failure",
-				zap.Error(rollbackErr),
-				zap.Int("review_feedback_id", reviewFeedback.ID),
+				config.Error(rollbackErr),
+				config.Int("review_feedback_id", reviewFeedback.ID),
 			)
 		}
 		return nil, jobErr
 	}
 
 	logger.Info("Plan creation job started",
-		zap.Int("agent_run_id", planAgentRun.ID),
-		zap.Int("review_feedback_id", reviewFeedback.ID),
-		zap.String("delivery_id", deliveryID),
-		zap.String("branch_name", branchName),
-		zap.Bool("job_created", job != nil),
+		config.Int("agent_run_id", planAgentRun.ID),
+		config.Int("review_feedback_id", reviewFeedback.ID),
+		config.String("delivery_id", deliveryID),
+		config.String("branch_name", branchName),
+		config.Bool("job_created", job != nil),
 	)
 
 	result := &planCreationResult{

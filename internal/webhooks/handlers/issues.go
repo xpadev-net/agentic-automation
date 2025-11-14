@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 const issuesDeliveryHeader = "X-GitHub-Delivery"
@@ -37,7 +36,7 @@ type BlockedTaskResolver interface {
 
 // IssuesDeps represents injectable dependencies for issues webhook handler
 type IssuesDeps struct {
-	Logger               *zap.Logger
+	Logger               *config.AppLogger
 	GitHubClient         *clients.Client
 	AuthorizationService IssuesAuthorization
 	DependencyFetcher    IssueDependencyFetcher
@@ -83,7 +82,7 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	deliveryID := c.GetHeader(issuesDeliveryHeader)
 	if deliveryID == "" {
 		logger.Warn("Missing X-GitHub-Delivery header",
-			zap.String("path", c.Request.URL.Path),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("missing X-GitHub-Delivery header"))
 		return
@@ -95,8 +94,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	payloadData, exists := c.Get("webhook_payload")
 	if !exists {
 		logger.Error("Webhook payload not found in context",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("webhook payload not found in context"))
 		return
@@ -104,8 +103,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	payloadBytes, ok := payloadData.([]byte)
 	if !ok {
 		logger.Error("Invalid webhook payload type",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("invalid webhook payload type"))
 		return
@@ -114,8 +113,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	var payload IssuesPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		logger.Error("Failed to parse issues webhook payload",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
@@ -124,8 +123,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	// Filter actions: only closed/reopened
 	if payload.Action != models.IssuesActionClosed && payload.Action != models.IssuesActionReopened {
 		logger.Info("Ignoring issues action",
-			zap.String("action", payload.Action),
-			zap.String("delivery_id", deliveryID),
+			config.String("action", payload.Action),
+			config.String("delivery_id", deliveryID),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "ignored",
@@ -139,8 +138,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	repoParts := strings.Split(payload.Repository.FullName, "/")
 	if len(repoParts) != 2 {
 		logger.Error("Invalid repository full name format",
-			zap.String("full_name", payload.Repository.FullName),
-			zap.String("delivery_id", deliveryID),
+			config.String("full_name", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(errors.New("invalid repository full name format"))
 		return
@@ -149,11 +148,11 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	repo := repoParts[1]
 
 	logger.Info("Issues event received",
-		zap.String("delivery_id", deliveryID),
-		zap.String("action", payload.Action),
-		zap.String("repo", payload.Repository.FullName),
-		zap.Int("issue_number", payload.Issue.Number),
-		zap.String("sender", payload.Sender.Login),
+		config.String("delivery_id", deliveryID),
+		config.String("action", payload.Action),
+		config.String("repo", payload.Repository.FullName),
+		config.Int("issue_number", payload.Issue.Number),
+		config.String("sender", payload.Sender.Login),
 	)
 
 	// Ensure GitHub client and authorization service
@@ -165,17 +164,17 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 			if err == nil {
 				appGitHubClient = ghApp
 			} else {
-				logger.Warn("GitHub App client not initialized", zap.Error(err))
+				logger.Warn("GitHub App client not initialized", config.Error(err))
 			}
 		}
 		if appGitHubClient != nil && deps.GitHubClient == nil {
 			rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 			if err != nil {
 				logger.Error("Failed to init per-repo GitHub client",
-					zap.Error(err),
-					zap.String("owner", owner),
-					zap.String("repo", repo),
-					zap.String("delivery_id", deliveryID),
+					config.Error(err),
+					config.String("owner", owner),
+					config.String("repo", repo),
+					config.String("delivery_id", deliveryID),
 				)
 				c.Error(err)
 				return
@@ -192,20 +191,20 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 		hasPermission, err := authorizationService.CheckPermission(ctx, owner, repo, payload.Sender.Login)
 		if err != nil {
 			logger.Error("Failed to check user permission",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.String("user", payload.Sender.Login),
-				zap.String("repo", payload.Repository.FullName),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.String("user", payload.Sender.Login),
+				config.String("repo", payload.Repository.FullName),
 			)
 			c.Error(err)
 			return
 		}
 		if !hasPermission {
 			logger.Warn("User lacks permission for issues event processing",
-				zap.String("delivery_id", deliveryID),
-				zap.String("user", payload.Sender.Login),
-				zap.String("repo", payload.Repository.FullName),
-				zap.Int("issue_number", payload.Issue.Number),
+				config.String("delivery_id", deliveryID),
+				config.String("user", payload.Sender.Login),
+				config.String("repo", payload.Repository.FullName),
+				config.Int("issue_number", payload.Issue.Number),
 			)
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "permission_denied",
@@ -219,8 +218,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	if deps.DependencyFetcher != nil {
 		if err := deps.DependencyFetcher.Fetch(ctx, owner, repo, payload.Issue.Number); err != nil {
 			logger.Error("Dependency fetch failed",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
 			)
 			c.JSON(http.StatusAccepted, gin.H{
 				"status":      "accepted_with_errors",
@@ -234,8 +233,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	if deps.GraphBuilder != nil {
 		if err := deps.GraphBuilder.UpdateFromIssueEvent(ctx, owner, repo, payload.Issue.Number, payload.Action); err != nil {
 			logger.Error("Blocker graph update failed",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
 			)
 			c.JSON(http.StatusAccepted, gin.H{
 				"status":      "accepted_with_errors",
@@ -258,8 +257,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	if deps.BlockedTaskResolver != nil {
 		if err := deps.BlockedTaskResolver.ResolveAndMaybeTrigger(ctx, owner, repo, payload.Issue.Number); err != nil {
 			logger.Error("Blocked task resolve/trigger failed",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
 			)
 			c.JSON(http.StatusAccepted, gin.H{
 				"status":      "accepted_with_errors",
@@ -271,10 +270,10 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 	}
 
 	logger.Info("Issues event processed",
-		zap.String("delivery_id", deliveryID),
-		zap.String("action", payload.Action),
-		zap.String("repo", payload.Repository.FullName),
-		zap.Int("issue_number", payload.Issue.Number),
+		config.String("delivery_id", deliveryID),
+		config.String("action", payload.Action),
+		config.String("repo", payload.Repository.FullName),
+		config.Int("issue_number", payload.Issue.Number),
 	)
 
 	c.JSON(http.StatusOK, gin.H{

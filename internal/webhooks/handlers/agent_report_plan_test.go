@@ -21,7 +21,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
@@ -70,7 +69,7 @@ func setupPlanTestFixtures(t *testing.T) *planTestFixtures {
 	require.NoError(t, err)
 
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -179,10 +178,10 @@ func TestHandlePlanReportPassesFullPlanToJob(t *testing.T) {
 
 	origClientFactory := kubernetesClientFactory
 	origJobFactory := kubernetesJobServiceFactory
-	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+	kubernetesClientFactory = func(logger *config.AppLogger) (*clients.KubernetesClient, error) {
 		return nil, nil
 	}
-	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *config.AppLogger) services.KubernetesJobService {
 		return fakeJob
 	}
 	defer func() {
@@ -240,10 +239,10 @@ func TestHandleAgentReportDispatchesPlanReport(t *testing.T) {
 
 	origClientFactory := kubernetesClientFactory
 	origJobFactory := kubernetesJobServiceFactory
-	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+	kubernetesClientFactory = func(logger *config.AppLogger) (*clients.KubernetesClient, error) {
 		return nil, nil
 	}
-	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *config.AppLogger) services.KubernetesJobService {
 		return fakeJob
 	}
 	defer func() {
@@ -293,10 +292,10 @@ func TestHandlePlanCreatedRollsBackWhenJobCreationFails(t *testing.T) {
 
 	origClientFactory := kubernetesClientFactory
 	origJobFactory := kubernetesJobServiceFactory
-	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+	kubernetesClientFactory = func(logger *config.AppLogger) (*clients.KubernetesClient, error) {
 		return nil, nil
 	}
-	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *config.AppLogger) services.KubernetesJobService {
 		return fakeJob
 	}
 	defer func() {
@@ -353,7 +352,7 @@ func TestHandlePlanRejectedRollsBackWhenCommentFails(t *testing.T) {
 	defer func() { postPlanRejectionComment = originalPost }()
 
 	callCount := 0
-	postPlanRejectionComment = func(ctx context.Context, logger *zap.Logger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
+	postPlanRejectionComment = func(ctx context.Context, logger *config.AppLogger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
 		callCount++
 		require.Equal(t, fixtures.reviewFeedback.ID, reviewFeedback.ID)
 		require.Equal(t, utils.TruncateWithSuffix(utils.SanitizeUTF8("Needs more detail"), utils.GetDBOutputLimitBytes(), "… [truncated]"), sanitizedReason)
@@ -414,7 +413,7 @@ func TestHandlePlanRejectedUpdatesStatusAfterComment(t *testing.T) {
 	defer func() { postPlanRejectionComment = originalPost }()
 
 	callCount := 0
-	postPlanRejectionComment = func(ctx context.Context, logger *zap.Logger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
+	postPlanRejectionComment = func(ctx context.Context, logger *config.AppLogger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
 		callCount++
 		require.Equal(t, fixtures.reviewFeedback.ID, reviewFeedback.ID)
 		require.Equal(t, utils.TruncateWithSuffix(utils.SanitizeUTF8("Missing acceptance tests"), utils.GetDBOutputLimitBytes(), "… [truncated]"), sanitizedReason)
@@ -468,10 +467,10 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated(t *testing.T) {
 
 	origClientFactory := kubernetesClientFactory
 	origJobFactory := kubernetesJobServiceFactory
-	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+	kubernetesClientFactory = func(logger *config.AppLogger) (*clients.KubernetesClient, error) {
 		return nil, nil
 	}
-	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *config.AppLogger) services.KubernetesJobService {
 		return fakeJob
 	}
 	defer func() {
@@ -555,7 +554,7 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated_IssueTriggered(t *testing.T
 	require.NoError(t, err)
 
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()
@@ -622,10 +621,10 @@ func TestHandlePlanReportIgnoresDuplicatePlanCreated_IssueTriggered(t *testing.T
 
 	origClientFactory := kubernetesClientFactory
 	origJobFactory := kubernetesJobServiceFactory
-	kubernetesClientFactory = func(logger *zap.Logger) (*clients.KubernetesClient, error) {
+	kubernetesClientFactory = func(logger *config.AppLogger) (*clients.KubernetesClient, error) {
 		return nil, nil
 	}
-	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *zap.Logger) services.KubernetesJobService {
+	kubernetesJobServiceFactory = func(_ *clients.KubernetesClient, _ *config.AppLogger) services.KubernetesJobService {
 		return fakeJob
 	}
 	defer func() {

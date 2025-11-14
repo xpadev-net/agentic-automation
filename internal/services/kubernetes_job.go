@@ -8,10 +8,10 @@ import (
 	"strings"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	appconfig "agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 
-	"go.uber.org/zap"
 	batchv1 "k8s.io/api/batch/v1"
 )
 
@@ -49,7 +49,7 @@ type KubernetesJobService interface {
 // kubernetesJobService implements KubernetesJobService interface
 type kubernetesJobService struct {
 	kubernetesClient *clients.KubernetesClient
-	logger           *zap.Logger
+	logger           *config.AppLogger
 }
 
 // NewKubernetesJobService creates a new KubernetesJobService instance.
@@ -57,22 +57,22 @@ type kubernetesJobService struct {
 //
 // Parameters:
 //   - kubernetesClient: KubernetesClient instance (must not be nil, will panic if nil)
-//   - logger: Structured logger instance (if nil, uses zap.NewNop())
+//   - logger: Structured logger instance (if nil, uses config.NewNopLogger())
 //
 // Returns:
 //   - KubernetesJobService: Initialized service instance
-func NewKubernetesJobService(kubernetesClient *clients.KubernetesClient, logger *zap.Logger) KubernetesJobService {
+func NewKubernetesJobService(kubernetesClient *clients.KubernetesClient, logger *config.AppLogger) KubernetesJobService {
 	if kubernetesClient == nil {
 		panic("kubernetesClient is required for KubernetesJobService")
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	logger.Info("KubernetesJobService initialized",
-		zap.String("service", "kubernetes_job"),
+		config.String("service", "kubernetes_job"),
 	)
 
 	return &kubernetesJobService{
@@ -89,12 +89,12 @@ func NewKubernetesJobService(kubernetesClient *clients.KubernetesClient, logger 
 // Returns:
 //   - string: Environment variable value
 //   - error: Error if environment variable is empty
-func getRequiredEnv(key string, logger *zap.Logger) (string, error) {
+func getRequiredEnv(key string, logger *config.AppLogger) (string, error) {
 	value := appconfig.GetEnv(key, "")
 	if value == "" {
 		logger.Error("Required environment variable is not set",
-			zap.String("env_key", key),
-			zap.String("service", "kubernetes_job"),
+			config.String("env_key", key),
+			config.String("service", "kubernetes_job"),
 		)
 		return "", fmt.Errorf("required environment variable %s is not set", key)
 	}
@@ -109,7 +109,7 @@ func getRequiredEnv(key string, logger *zap.Logger) (string, error) {
 //
 // Returns:
 //   - int: Environment variable value or default value
-func getOptionalEnvInt(key string, defaultValue int, logger *zap.Logger) int {
+func getOptionalEnvInt(key string, defaultValue int, logger *config.AppLogger) int {
 	valueStr := appconfig.GetEnv(key, "")
 	if valueStr == "" {
 		return defaultValue
@@ -117,11 +117,11 @@ func getOptionalEnvInt(key string, defaultValue int, logger *zap.Logger) int {
 	value, err := strconv.Atoi(valueStr)
 	if err != nil {
 		logger.Warn("Failed to parse environment variable as integer, using default",
-			zap.String("env_key", key),
-			zap.String("value", valueStr),
-			zap.Int("default_value", defaultValue),
-			zap.Error(err),
-			zap.String("service", "kubernetes_job"),
+			config.String("env_key", key),
+			config.String("value", valueStr),
+			config.Int("default_value", defaultValue),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
 		)
 		return defaultValue
 	}
@@ -153,7 +153,7 @@ func resolveExecutionMode(agentRun *models.AgentRun) string {
 // This is not the same format as previous-attempts, which expects an array of {retry_count, error} entries.
 // Until we implement proper previous attempts tracking, this function returns an empty string to avoid
 // passing the Input object to agent-runner, which would cause validation errors.
-func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) string {
+func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *config.AppLogger) string {
 	if agentRun == nil || len(agentRun.Input) == 0 {
 		return ""
 	}
@@ -163,9 +163,9 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) 
 	if err := json.Unmarshal(agentRun.Input, &inputMap); err != nil {
 		// If Input is not valid JSON, return empty string
 		logger.Warn("AgentRun.Input contains invalid JSON, returning empty string for PreviousAttempts",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Error(err),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
 		)
 		return ""
 	}
@@ -176,8 +176,8 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) 
 		// Return empty string to avoid passing the Input object to agent-runner
 		// TODO: In the future, extract actual previous attempts from Output or a dedicated field
 		logger.Debug("AgentRun.Input uses new schema v1, returning empty string for PreviousAttempts",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return ""
 	}
@@ -185,8 +185,8 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *zap.Logger) 
 	// Old format or unrecognized format - return empty string for safety
 	// Previous attempts should be in a separate field or extracted differently
 	logger.Debug("AgentRun.Input does not contain previous attempts data, returning empty string",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.String("service", "kubernetes_job"),
 	)
 	return ""
 }
@@ -196,32 +196,32 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 	// Input validation
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil",
-			zap.String("service", "kubernetes_job"),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("agentRun must not be nil")
 	}
 
 	if issue == nil {
 		s.logger.Error("issue must not be nil",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("issue must not be nil")
 	}
 
 	if prompt == "" {
 		s.logger.Error("prompt must not be empty",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("issue_id", issue.Number),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("issue_id", issue.Number),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("prompt must not be empty")
 	}
 
 	if s.kubernetesClient == nil {
 		s.logger.Error("kubernetesClient must not be nil",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("kubernetesClient is not initialized")
 	}
@@ -237,13 +237,13 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 
 	// Log job configuration before building
 	s.logger.Info("Building JobConfig for AgentRun",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("issue_id", issue.Number),
-		zap.String("repo", issue.Repo),
-		zap.String("agent_type", agentRun.AgentType),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Int("timeout_minutes", timeoutMinutes),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("issue_id", issue.Number),
+		config.String("repo", issue.Repo),
+		config.String("agent_type", agentRun.AgentType),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Int("timeout_minutes", timeoutMinutes),
+		config.String("service", "kubernetes_job"),
 	)
 
 	// Build JobConfig
@@ -272,21 +272,21 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
 	if err != nil {
 		s.logger.Error("Failed to create Kubernetes Job",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("job_name", jobName),
-			zap.Error(err),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("job_name", jobName),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("failed to create kubernetes job: %w", err)
 	}
 
 	// Log successful job creation
 	s.logger.Info("Kubernetes Job created successfully",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.String("job_name", jobName),
-		zap.String("job_uid", string(job.UID)),
-		zap.String("namespace", job.Namespace),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.String("job_name", jobName),
+		config.String("job_uid", string(job.UID)),
+		config.String("namespace", job.Namespace),
+		config.String("service", "kubernetes_job"),
 	)
 
 	return job, nil
@@ -297,32 +297,32 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 	// Input validation
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil",
-			zap.String("service", "kubernetes_job"),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("agentRun must not be nil")
 	}
 
 	if issue == nil {
 		s.logger.Error("issue must not be nil",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("issue must not be nil")
 	}
 
 	if prompt == "" {
 		s.logger.Error("prompt must not be empty",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("issue_id", issue.Number),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("issue_id", issue.Number),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("prompt must not be empty")
 	}
 
 	if s.kubernetesClient == nil {
 		s.logger.Error("kubernetesClient must not be nil",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("kubernetesClient is not initialized")
 	}
@@ -363,18 +363,18 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 
 	// Log job configuration before building
 	s.logger.Info("Building JobConfig for AgentRun with feedback",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("issue_id", issue.Number),
-		zap.String("repo", issue.Repo),
-		zap.String("agent_type", agentRun.AgentType),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Int("timeout_minutes", timeoutMinutes),
-		zap.Bool("has_feedback", hasFeedback),
-		zap.Bool("has_review_feedback", hasReviewFeedback),
-		zap.Bool("has_ci_failure", hasCIFailure),
-		zap.Int("previous_attempts_length", previousAttemptsLength),
-		zap.Int("ci_logs_length", ciLogsLength),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("issue_id", issue.Number),
+		config.String("repo", issue.Repo),
+		config.String("agent_type", agentRun.AgentType),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Int("timeout_minutes", timeoutMinutes),
+		config.Bool("has_feedback", hasFeedback),
+		config.Bool("has_review_feedback", hasReviewFeedback),
+		config.Bool("has_ci_failure", hasCIFailure),
+		config.Int("previous_attempts_length", previousAttemptsLength),
+		config.Int("ci_logs_length", ciLogsLength),
+		config.String("service", "kubernetes_job"),
 	)
 
 	// Build JobConfig
@@ -403,22 +403,22 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
 	if err != nil {
 		s.logger.Error("Failed to create Kubernetes Job with feedback",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("job_name", jobName),
-			zap.Error(err),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("job_name", jobName),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("failed to create kubernetes job: %w", err)
 	}
 
 	// Log successful job creation
 	s.logger.Info("Kubernetes Job created successfully with feedback",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.String("job_name", jobName),
-		zap.String("job_uid", string(job.UID)),
-		zap.String("namespace", job.Namespace),
-		zap.Bool("has_feedback", hasFeedback),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.String("job_name", jobName),
+		config.String("job_uid", string(job.UID)),
+		config.String("namespace", job.Namespace),
+		config.Bool("has_feedback", hasFeedback),
+		config.String("service", "kubernetes_job"),
 	)
 
 	return job, nil
@@ -429,23 +429,23 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil for plan creation",
-			zap.String("service", "kubernetes_job"),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("agentRun must not be nil")
 	}
 
 	if issue == nil {
 		s.logger.Error("issue must not be nil for plan creation",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("issue must not be nil")
 	}
 
 	if s.kubernetesClient == nil {
 		s.logger.Error("kubernetesClient must not be nil",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("kubernetesClient is not initialized")
 	}
@@ -462,9 +462,9 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		}
 		if planContent == "" {
 			s.logger.Error("review feedback content must not be empty for plan creation",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("review_feedback_id", reviewFeedback.ID),
-				zap.String("service", "kubernetes_job"),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("review_feedback_id", reviewFeedback.ID),
+				config.String("service", "kubernetes_job"),
 			)
 			return nil, fmt.Errorf("review feedback content must not be empty")
 		}
@@ -494,9 +494,9 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 
 	if planContent == "" {
 		s.logger.Error("plan content must not be empty for plan creation",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("content_source", contentSource),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("content_source", contentSource),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("plan content must not be empty")
 	}
@@ -509,16 +509,16 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 	timeoutMinutes := getOptionalEnvInt("AGENT_RUNNER_TIMEOUT_MINUTES", 60, s.logger)
 
 	s.logger.Info("Building JobConfig for plan creation",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("issue_id", issue.Number),
-		zap.String("repo", issue.Repo),
-		zap.String("agent_type", agentRun.AgentType),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Int("timeout_minutes", timeoutMinutes),
-		zap.String("content_source", contentSource),
-		zap.Int("review_feedback_id", reviewFeedbackID),
-		zap.Int("plan_content_length", len(planContent)),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("issue_id", issue.Number),
+		config.String("repo", issue.Repo),
+		config.String("agent_type", agentRun.AgentType),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Int("timeout_minutes", timeoutMinutes),
+		config.String("content_source", contentSource),
+		config.Int("review_feedback_id", reviewFeedbackID),
+		config.Int("plan_content_length", len(planContent)),
+		config.String("service", "kubernetes_job"),
 	)
 
 	jobConfig := &clients.JobConfig{
@@ -543,24 +543,24 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
 	if err != nil {
 		s.logger.Error("Failed to create plan creation job",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("content_source", contentSource),
-			zap.Int("review_feedback_id", reviewFeedbackID),
-			zap.String("job_name", jobName),
-			zap.Error(err),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("content_source", contentSource),
+			config.Int("review_feedback_id", reviewFeedbackID),
+			config.String("job_name", jobName),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("failed to create plan creation kubernetes job: %w", err)
 	}
 
 	s.logger.Info("Plan creation job created successfully",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.String("content_source", contentSource),
-		zap.Int("review_feedback_id", reviewFeedbackID),
-		zap.String("job_name", jobName),
-		zap.String("job_uid", string(job.UID)),
-		zap.String("namespace", job.Namespace),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.String("content_source", contentSource),
+		config.Int("review_feedback_id", reviewFeedbackID),
+		config.String("job_name", jobName),
+		config.String("job_uid", string(job.UID)),
+		config.String("namespace", job.Namespace),
+		config.String("service", "kubernetes_job"),
 	)
 
 	return job, nil
@@ -570,15 +570,15 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil for plan execution",
-			zap.String("service", "kubernetes_job"),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("agentRun must not be nil")
 	}
 
 	if issue == nil {
 		s.logger.Error("issue must not be nil for plan execution",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("issue must not be nil")
 	}
@@ -586,16 +586,16 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 	planContent = strings.TrimSpace(planContent)
 	if planContent == "" {
 		s.logger.Error("planContent must not be empty for plan execution",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("planContent must not be empty")
 	}
 
 	if s.kubernetesClient == nil {
 		s.logger.Error("kubernetesClient must not be nil",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("kubernetesClient is not initialized")
 	}
@@ -608,14 +608,14 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 	timeoutMinutes := getOptionalEnvInt("AGENT_RUNNER_TIMEOUT_MINUTES", 60, s.logger)
 
 	s.logger.Info("Building JobConfig for plan execution",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("issue_id", issue.Number),
-		zap.String("repo", issue.Repo),
-		zap.String("agent_type", agentRun.AgentType),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.Int("timeout_minutes", timeoutMinutes),
-		zap.Int("plan_content_length", len(planContent)),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("issue_id", issue.Number),
+		config.String("repo", issue.Repo),
+		config.String("agent_type", agentRun.AgentType),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.Int("timeout_minutes", timeoutMinutes),
+		config.Int("plan_content_length", len(planContent)),
+		config.String("service", "kubernetes_job"),
 	)
 
 	jobConfig := &clients.JobConfig{
@@ -642,20 +642,20 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
 	if err != nil {
 		s.logger.Error("Failed to create plan execution job",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.String("job_name", jobName),
-			zap.Error(err),
-			zap.String("service", "kubernetes_job"),
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("job_name", jobName),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
 		)
 		return nil, fmt.Errorf("failed to create plan execution kubernetes job: %w", err)
 	}
 
 	s.logger.Info("Plan execution job created successfully",
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.String("job_name", jobName),
-		zap.String("job_uid", string(job.UID)),
-		zap.String("namespace", job.Namespace),
-		zap.String("service", "kubernetes_job"),
+		config.Int("agent_run_id", agentRun.ID),
+		config.String("job_name", jobName),
+		config.String("job_uid", string(job.UID)),
+		config.String("namespace", job.Namespace),
+		config.String("service", "kubernetes_job"),
 	)
 
 	return job, nil

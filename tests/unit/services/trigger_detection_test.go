@@ -6,13 +6,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest"
 )
 
 // setupTestLogger creates a test logger and sets it up for testing
-func setupTestLogger(t *testing.T) *zap.Logger {
-	testLogger := zaptest.NewLogger(t)
+func setupTestLogger(t *testing.T) *config.AppLogger {
+	testLogger := config.NewNopLogger()
 	config.SetLoggerForTesting(testLogger)
 	return testLogger
 }

@@ -3,6 +3,7 @@ package repositories
 import (
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

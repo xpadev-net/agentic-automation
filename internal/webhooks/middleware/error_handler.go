@@ -8,7 +8,6 @@ import (
 	"runtime/debug"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 const webhookPath = "/webhooks/github"
@@ -32,17 +31,17 @@ func ErrorHandler() gin.HandlerFunc {
 }
 
 // handlePanic recovers from panics and logs the error with stack trace
-func handlePanic(c *gin.Context, logger *zap.Logger) {
+func handlePanic(c *gin.Context, logger *config.AppLogger) {
 	if r := recover(); r != nil {
 		// Get stack trace
 		stack := debug.Stack()
 
 		// Log panic details
 		logger.Error("Panic recovered",
-			zap.Any("panic", r),
-			zap.String("path", c.Request.URL.Path),
-			zap.String("method", c.Request.Method),
-			zap.String("stack", string(stack)),
+			config.Any("panic", r),
+			config.String("path", c.Request.URL.Path),
+			config.String("method", c.Request.Method),
+			config.String("stack", string(stack)),
 		)
 
 		// Determine if this is a webhook request
@@ -71,7 +70,7 @@ func handlePanic(c *gin.Context, logger *zap.Logger) {
 }
 
 // handleError processes errors set by handlers using c.Error()
-func handleError(c *gin.Context, logger *zap.Logger) {
+func handleError(c *gin.Context, logger *config.AppLogger) {
 	// Get the last error (most recent)
 	err := c.Errors.Last()
 
@@ -85,11 +84,11 @@ func handleError(c *gin.Context, logger *zap.Logger) {
 
 	// Log error details
 	logger.Error("Request error",
-		zap.Error(err.Err),
-		zap.String("error_code", string(code)),
-		zap.String("path", c.Request.URL.Path),
-		zap.String("method", c.Request.Method),
-		zap.String("type", fmt.Sprintf("%v", err.Type)),
+		config.Error(err.Err),
+		config.String("error_code", string(code)),
+		config.String("path", c.Request.URL.Path),
+		config.String("method", c.Request.Method),
+		config.String("type", fmt.Sprintf("%v", err.Type)),
 	)
 
 	// Determine if this is a webhook request

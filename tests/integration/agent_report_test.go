@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/webhooks/handlers"
@@ -19,7 +20,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -207,7 +207,7 @@ func createTestAgentRun(t *testing.T, db *gorm.DB, issueID int, state string) *m
 }
 
 // setupTestRouter creates a test Gin router with the agent report endpoint
-func setupTestRouter(db *gorm.DB, logger *zap.Logger) *gin.Engine {
+func setupTestRouter(db *gorm.DB, logger *config.AppLogger) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
@@ -233,7 +233,7 @@ func setupTestRouter(db *gorm.DB, logger *zap.Logger) *gin.Engine {
 // handleAgentReportWithDeps is a wrapper that calls HandleAgentReport with custom DB and Logger
 // Since HandleAgentReport uses config.GetDB() and config.GetLogger(), we need to work around this
 // For testing, we'll create a modified version that accepts dependencies
-func handleAgentReportWithDeps(c *gin.Context, db *gorm.DB, logger *zap.Logger) {
+func handleAgentReportWithDeps(c *gin.Context, db *gorm.DB, logger *config.AppLogger) {
 	// This is a workaround since the original handler uses config package
 	// We'll temporarily set the config globals (not ideal but necessary for testing)
 	// Actually, we should modify the handler to accept dependencies
@@ -242,14 +242,14 @@ func handleAgentReportWithDeps(c *gin.Context, db *gorm.DB, logger *zap.Logger) 
 }
 
 // handleAgentReportTest is a test version of HandleAgentReport that accepts DB and Logger
-func handleAgentReportTest(c *gin.Context, db *gorm.DB, logger *zap.Logger) {
+func handleAgentReportTest(c *gin.Context, db *gorm.DB, logger *config.AppLogger) {
 	// Get AgentRun ID from path parameter
 	idStr := c.Param("id")
 	agentRunID, err := strconv.Atoi(idStr)
 	if err != nil {
 		logger.Warn("Invalid agent run ID in path",
-			zap.String("id", idStr),
-			zap.String("path", c.Request.URL.Path),
+			config.String("id", idStr),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "INVALID_REQUEST",
@@ -262,9 +262,9 @@ func handleAgentReportTest(c *gin.Context, db *gorm.DB, logger *zap.Logger) {
 	var req handlers.ReportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Warn("Invalid request body",
-			zap.Error(err),
-			zap.Int("agent_run_id", agentRunID),
-			zap.String("path", c.Request.URL.Path),
+			config.Error(err),
+			config.Int("agent_run_id", agentRunID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "INVALID_REQUEST",
@@ -281,8 +281,8 @@ func handleAgentReportTest(c *gin.Context, db *gorm.DB, logger *zap.Logger) {
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Warn("AgentRun not found",
-				zap.Int("agent_run_id", agentRunID),
-				zap.String("path", c.Request.URL.Path),
+				config.Int("agent_run_id", agentRunID),
+				config.String("path", c.Request.URL.Path),
 			)
 			c.JSON(http.StatusNotFound, gin.H{
 				"error":   "AGENT_RUN_NOT_FOUND",
@@ -292,9 +292,9 @@ func handleAgentReportTest(c *gin.Context, db *gorm.DB, logger *zap.Logger) {
 		}
 
 		logger.Error("Failed to retrieve AgentRun",
-			zap.Error(err),
-			zap.Int("agent_run_id", agentRunID),
-			zap.String("path", c.Request.URL.Path),
+			config.Error(err),
+			config.Int("agent_run_id", agentRunID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "INTERNAL_ERROR",
@@ -328,10 +328,10 @@ func handleAgentReportTest(c *gin.Context, db *gorm.DB, logger *zap.Logger) {
 	// Save updated AgentRun
 	if err := agentRunRepo.Update(agentRun); err != nil {
 		logger.Error("Failed to update AgentRun",
-			zap.Error(err),
-			zap.Int("agent_run_id", agentRunID),
-			zap.String("status", req.Status),
-			zap.String("path", c.Request.URL.Path),
+			config.Error(err),
+			config.Int("agent_run_id", agentRunID),
+			config.String("status", req.Status),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "INTERNAL_ERROR",
@@ -342,10 +342,10 @@ func handleAgentReportTest(c *gin.Context, db *gorm.DB, logger *zap.Logger) {
 
 	// Log successful report
 	logger.Info("Agent execution report received",
-		zap.Int("agent_run_id", agentRunID),
-		zap.String("status", req.Status),
-		zap.String("agent_type", req.AgentType),
-		zap.String("path", c.Request.URL.Path),
+		config.Int("agent_run_id", agentRunID),
+		config.String("status", req.Status),
+		config.String("agent_type", req.AgentType),
+		config.String("path", c.Request.URL.Path),
 	)
 
 	// Return success response
@@ -395,8 +395,8 @@ func TestAgentReportFlow_Success(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
+	var err error
 
 	router := setupTestRouter(db, logger)
 	issue := createTestIssue(t, db)
@@ -440,8 +440,8 @@ func TestAgentReportFlow_Failure(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
+	var err error
 
 	router := setupTestRouter(db, logger)
 	issue := createTestIssue(t, db)
@@ -482,8 +482,7 @@ func TestAgentReportFlow_BearerToken_Valid(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
 
 	router := setupTestRouter(db, logger)
 	issue := createTestIssue(t, db)
@@ -507,8 +506,8 @@ func TestAgentReportFlow_BearerToken_Invalid(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
+	var err error
 
 	router := setupTestRouter(db, logger)
 	issue := createTestIssue(t, db)
@@ -537,8 +536,8 @@ func TestAgentReportFlow_BearerToken_Missing(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
+	var err error
 
 	router := setupTestRouter(db, logger)
 	issue := createTestIssue(t, db)
@@ -567,8 +566,8 @@ func TestAgentReportFlow_NotFound(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
+	var err error
 
 	router := setupTestRouter(db, logger)
 
@@ -595,8 +594,8 @@ func TestAgentReportFlow_InvalidRequestBody(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
+	var err error
 
 	router := setupTestRouter(db, logger)
 	issue := createTestIssue(t, db)
@@ -621,8 +620,8 @@ func TestAgentReportFlow_InvalidStatus(t *testing.T) {
 	db := setupTestDB(t)
 	defer teardownTestDB(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
+	var err error
 
 	router := setupTestRouter(db, logger)
 	issue := createTestIssue(t, db)
