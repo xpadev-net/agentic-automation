@@ -127,4 +127,3 @@ func intPtr(i int) *int {
 func stringPtr(s string) *string {
 	return &s
 }
-
