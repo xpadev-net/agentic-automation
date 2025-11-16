@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -349,8 +350,29 @@ func Time(key string, value time.Time) Field {
 }
 
 // Any formats any value using fmt.Sprint.
+// Pointers are automatically dereferenced to show their underlying values.
+// Nil pointers are formatted as "nil".
 func Any(key string, value any) Field {
-	return newField(key, fmt.Sprint(value))
+	return newField(key, formatAnyValue(value))
+}
+
+// formatAnyValue formats a value, dereferencing pointers recursively.
+func formatAnyValue(value any) string {
+	if value == nil {
+		return "nil"
+	}
+
+	v := reflect.ValueOf(value)
+	// Handle pointers by dereferencing them
+	for v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return "nil"
+		}
+		v = v.Elem()
+	}
+
+	// Format the dereferenced value
+	return fmt.Sprint(v.Interface())
 }
 
 // Error formats an error field. Nil errors are ignored.
