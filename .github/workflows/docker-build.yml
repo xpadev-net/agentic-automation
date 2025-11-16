@@ -51,7 +51,7 @@ jobs:
           echo "OWNER=$OWNER" >> $GITHUB_OUTPUT
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_OUTPUT
           echo "BUILT_AT=$BUILT_AT" >> $GITHUB_OUTPUT
-          echo "tags=ghcr.io/$OWNER/$IMAGE_NAME:latest,ghcr.io/$OWNER/$IMAGE_NAME:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "tags=ghcr.io/$OWNER/$IMAGE_NAME:latest,ghcr.io/$OWNER/$IMAGE_NAME:sha-$SHORT_SHA,harbor-osk-k8s-pve.xpa.dev/$OWNER/$IMAGE_NAME:latest,harbor-osk-k8s-pve.xpa.dev/$OWNER/$IMAGE_NAME:sha-$SHORT_SHA" >> $GITHUB_OUTPUT
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
