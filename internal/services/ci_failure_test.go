@@ -5,15 +5,16 @@ import (
 	"testing"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
+
 	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
 )
 
 // TestNewCIFailureAnalyzer_Success tests successful creation of CIFailureAnalyzer
 func TestNewCIFailureAnalyzer_Success(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
@@ -30,12 +31,12 @@ func TestNewCIFailureAnalyzer_NilLogger(t *testing.T) {
 	analyzer := NewCIFailureAnalyzer(githubClient, nil)
 
 	require.NotNil(t, analyzer)
-	assert.NotNil(t, analyzer.logger) // Should use zap.NewNop()
+	assert.NotNil(t, analyzer.logger) // Should use config.NewNopLogger()
 }
 
 // TestNewCIFailureAnalyzer_NilGitHubClient tests that nil githubClient causes panic
 func TestNewCIFailureAnalyzer_NilGitHubClient(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 
 	assert.Panics(t, func() {
 		NewCIFailureAnalyzer(nil, logger)
@@ -44,7 +45,7 @@ func TestNewCIFailureAnalyzer_NilGitHubClient(t *testing.T) {
 
 // TestDetectFailureType_TestFailure tests detection of test failure patterns
 func TestDetectFailureType_TestFailure(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -95,7 +96,7 @@ func TestDetectFailureType_TestFailure(t *testing.T) {
 
 // TestDetectFailureType_BuildError tests detection of build error patterns
 func TestDetectFailureType_BuildError(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -146,7 +147,7 @@ func TestDetectFailureType_BuildError(t *testing.T) {
 
 // TestDetectFailureType_LintError tests detection of lint error patterns
 func TestDetectFailureType_LintError(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -202,7 +203,7 @@ func TestDetectFailureType_LintError(t *testing.T) {
 
 // TestDetectFailureType_Unknown tests detection of unknown failure types
 func TestDetectFailureType_Unknown(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -238,7 +239,7 @@ func TestDetectFailureType_Unknown(t *testing.T) {
 
 // TestDetectFailureType_Priority tests priority order when multiple patterns match
 func TestDetectFailureType_Priority(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -274,7 +275,7 @@ func TestDetectFailureType_Priority(t *testing.T) {
 
 // TestAnalyzeCheckRunLogs_WithText tests extraction of logs from Output.Text
 func TestAnalyzeCheckRunLogs_WithText(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -295,7 +296,7 @@ func TestAnalyzeCheckRunLogs_WithText(t *testing.T) {
 
 // TestAnalyzeCheckRunLogs_WithSummaryOnly tests extraction of logs from Output.Summary when Text is empty
 func TestAnalyzeCheckRunLogs_WithSummaryOnly(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -316,7 +317,7 @@ func TestAnalyzeCheckRunLogs_WithSummaryOnly(t *testing.T) {
 
 // TestAnalyzeCheckRunLogs_EmptyOutput tests handling of nil or empty Output
 func TestAnalyzeCheckRunLogs_EmptyOutput(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -362,7 +363,7 @@ func TestAnalyzeCheckRunLogs_EmptyOutput(t *testing.T) {
 
 // TestAnalyzeCheckRunLogs_TestFailure tests detection of test failure in check run logs
 func TestAnalyzeCheckRunLogs_TestFailure(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -381,7 +382,7 @@ func TestAnalyzeCheckRunLogs_TestFailure(t *testing.T) {
 
 // TestAnalyzeCheckRunLogs_BuildError tests detection of build error in check run logs
 func TestAnalyzeCheckRunLogs_BuildError(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -400,7 +401,7 @@ func TestAnalyzeCheckRunLogs_BuildError(t *testing.T) {
 
 // TestAnalyzeCheckRunLogs_LintError tests detection of lint error in check run logs
 func TestAnalyzeCheckRunLogs_LintError(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -422,7 +423,7 @@ func TestAnalyzeCheckRunLogs_LintError(t *testing.T) {
 func TestAnalyzeCIFailure_Success(t *testing.T) {
 	t.Skip("Requires mock GitHub client or integration test setup - test core logic separately")
 
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -434,7 +435,7 @@ func TestAnalyzeCIFailure_Success(t *testing.T) {
 
 // TestAnalyzeCIFailure_NoFailedRuns tests error handling when no failed runs exist
 func TestAnalyzeCIFailure_NoFailedRuns(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -452,7 +453,7 @@ func TestAnalyzeCIFailure_NoFailedRuns(t *testing.T) {
 
 // TestAnalyzeCIFailure_EmptyLogs tests handling of empty logs
 func TestAnalyzeCIFailure_EmptyLogs(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -467,7 +468,7 @@ func TestAnalyzeCIFailure_EmptyLogs(t *testing.T) {
 
 // TestAnalyzeCIFailure_MultipleFailureTypes tests priority handling of multiple failure types
 func TestAnalyzeCIFailure_MultipleFailureTypes(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -482,7 +483,7 @@ func TestAnalyzeCIFailure_MultipleFailureTypes(t *testing.T) {
 
 // TestAnalyzeCIFailure_GitHubAPIError tests error handling for GitHub API failures
 func TestAnalyzeCIFailure_GitHubAPIError(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 
@@ -497,7 +498,7 @@ func TestAnalyzeCIFailure_GitHubAPIError(t *testing.T) {
 
 // TestDetermineOverallFailureType tests the priority logic for determining overall failure type
 func TestDetermineOverallFailureType(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	analyzer := NewCIFailureAnalyzer(githubClient, logger)
 

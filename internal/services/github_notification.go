@@ -7,10 +7,9 @@ import (
 	"strings"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/utils"
-
-	"go.uber.org/zap"
 )
 
 // GitHubNotificationService provides GitHub notification functionality
@@ -18,7 +17,7 @@ import (
 // for GitHub notifications required by webhook handlers.
 type GitHubNotificationService struct {
 	githubClient *clients.Client
-	logger       *zap.Logger
+	logger       *config.AppLogger
 }
 
 // NewGitHubNotificationService creates a new GitHubNotificationService instance.
@@ -26,18 +25,18 @@ type GitHubNotificationService struct {
 //
 // Parameters:
 //   - githubClient: GitHub API client (must not be nil, will panic if nil)
-//   - logger: Structured logger instance (if nil, uses zap.NewNop())
+//   - logger: Structured logger instance (if nil, uses config.NewNopLogger())
 //
 // Returns:
 //   - *GitHubNotificationService: Initialized service instance
-func NewGitHubNotificationService(githubClient *clients.Client, logger *zap.Logger) *GitHubNotificationService {
+func NewGitHubNotificationService(githubClient *clients.Client, logger *config.AppLogger) *GitHubNotificationService {
 	if githubClient == nil {
 		panic("githubClient is required for GitHubNotificationService")
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	return &GitHubNotificationService{
@@ -242,20 +241,20 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 	prURL, branch, sha, idempotencyKey string,
 ) error {
 	s.logger.Info("Posting PR created notifications",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
-		zap.String("pr_url", prURL),
-		zap.String("branch", branch),
-		zap.String("sha", sha),
-		zap.String("idempotency_key", idempotencyKey),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("pr_number", prNumber),
+		config.String("pr_url", prURL),
+		config.String("branch", branch),
+		config.String("sha", sha),
+		config.String("idempotency_key", idempotencyKey),
 	)
 
 	if prNumber <= 0 || prURL == "" {
 		s.logger.Warn("Missing PR info; skipping PR created notifications",
-			zap.Int("pr_number", prNumber),
-			zap.String("pr_url", prURL),
+			config.Int("pr_number", prNumber),
+			config.String("pr_url", prURL),
 		)
 		return nil
 	}
@@ -268,11 +267,11 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 	if issueNumber > 0 {
 		exists, err := s.hasCommentWithMarker(ctx, owner, repo, issueNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan issue comments for marker", zap.Error(err), zap.Int("issue_number", issueNumber))
+			s.logger.Warn("Failed to scan issue comments for marker", config.Error(err), config.Int("issue_number", issueNumber))
 			aggErr = err
 		} else if !exists {
 			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
-				s.logger.Warn("Failed to post issue comment for PR created", zap.Error(err), zap.Int("issue_number", issueNumber))
+				s.logger.Warn("Failed to post issue comment for PR created", config.Error(err), config.Int("issue_number", issueNumber))
 				aggErr = err
 			}
 		}
@@ -282,13 +281,13 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 	if prNumber > 0 {
 		exists, err := s.hasCommentWithMarker(ctx, owner, repo, prNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan PR comments for marker", zap.Error(err), zap.Int("pr_number", prNumber))
+			s.logger.Warn("Failed to scan PR comments for marker", config.Error(err), config.Int("pr_number", prNumber))
 			if aggErr == nil {
 				aggErr = err
 			}
 		} else if !exists {
 			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
-				s.logger.Warn("Failed to post PR comment for PR created", zap.Error(err), zap.Int("pr_number", prNumber))
+				s.logger.Warn("Failed to post PR comment for PR created", config.Error(err), config.Int("pr_number", prNumber))
 				if aggErr == nil {
 					aggErr = err
 				}
@@ -301,8 +300,8 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 	}
 
 	s.logger.Info("PR created notifications posted (or already present)",
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
+		config.Int("issue_number", issueNumber),
+		config.Int("pr_number", prNumber),
 	)
 	return nil
 }
@@ -323,11 +322,11 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 //   - error: Error if comment posting failed (GitHub API error, network error, etc.)
 func (s *GitHubNotificationService) PostExecutionStartComment(ctx context.Context, owner, repo string, issueNumber int, agentType string, agentRunID int) error {
 	s.logger.Info("Posting GitHub execution start comment",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.String("agent_type", agentType),
-		zap.Int("agent_run_id", agentRunID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.String("agent_type", agentType),
+		config.Int("agent_run_id", agentRunID),
 	)
 
 	// Format the message
@@ -337,22 +336,22 @@ func (s *GitHubNotificationService) PostExecutionStartComment(ctx context.Contex
 	_, err := s.githubClient.CreateIssueComment(ctx, owner, repo, issueNumber, message)
 	if err != nil {
 		s.logger.Error("Failed to post GitHub execution start comment",
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
-			zap.String("agent_type", agentType),
-			zap.Int("agent_run_id", agentRunID),
+			config.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
+			config.String("agent_type", agentType),
+			config.Int("agent_run_id", agentRunID),
 		)
 		return err
 	}
 
 	s.logger.Info("GitHub execution start comment posted successfully",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.String("agent_type", agentType),
-		zap.Int("agent_run_id", agentRunID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.String("agent_type", agentType),
+		config.Int("agent_run_id", agentRunID),
 	)
 
 	return nil
@@ -466,13 +465,13 @@ func (s *GitHubNotificationService) NotifyRetryProgress(
 	}
 
 	s.logger.Info("Posting retry progress notifications",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
-		zap.Int("retry_count", retryCount),
-		zap.Int("max_retries", maxRetries),
-		zap.String("idempotency_key", idempotencyKey),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("pr_number", prNumber),
+		config.Int("retry_count", retryCount),
+		config.Int("max_retries", maxRetries),
+		config.String("idempotency_key", idempotencyKey),
 	)
 
 	// Generate marker
@@ -487,23 +486,23 @@ func (s *GitHubNotificationService) NotifyRetryProgress(
 	if issueNumber > 0 {
 		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, issueNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan issue comments for marker", zap.Error(err), zap.Int("issue_number", issueNumber))
+			s.logger.Warn("Failed to scan issue comments for marker", config.Error(err), config.Int("issue_number", issueNumber))
 			aggErr = err
 		} else if found && commentID != nil {
 			// Update existing comment
 			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
-				s.logger.Warn("Failed to update issue comment for retry progress", zap.Error(err), zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Warn("Failed to update issue comment for retry progress", config.Error(err), config.Int("issue_number", issueNumber), config.Int64("comment_id", *commentID))
 				aggErr = err
 			} else {
-				s.logger.Info("Updated issue comment for retry progress", zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Info("Updated issue comment for retry progress", config.Int("issue_number", issueNumber), config.Int64("comment_id", *commentID))
 			}
 		} else {
 			// Create new comment
 			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
-				s.logger.Warn("Failed to post issue comment for retry progress", zap.Error(err), zap.Int("issue_number", issueNumber))
+				s.logger.Warn("Failed to post issue comment for retry progress", config.Error(err), config.Int("issue_number", issueNumber))
 				aggErr = err
 			} else {
-				s.logger.Info("Posted issue comment for retry progress", zap.Int("issue_number", issueNumber))
+				s.logger.Info("Posted issue comment for retry progress", config.Int("issue_number", issueNumber))
 			}
 		}
 	}
@@ -512,29 +511,29 @@ func (s *GitHubNotificationService) NotifyRetryProgress(
 	if prNumber > 0 {
 		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, prNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan PR comments for marker", zap.Error(err), zap.Int("pr_number", prNumber))
+			s.logger.Warn("Failed to scan PR comments for marker", config.Error(err), config.Int("pr_number", prNumber))
 			if aggErr == nil {
 				aggErr = err
 			}
 		} else if found && commentID != nil {
 			// Update existing comment
 			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
-				s.logger.Warn("Failed to update PR comment for retry progress", zap.Error(err), zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Warn("Failed to update PR comment for retry progress", config.Error(err), config.Int("pr_number", prNumber), config.Int64("comment_id", *commentID))
 				if aggErr == nil {
 					aggErr = err
 				}
 			} else {
-				s.logger.Info("Updated PR comment for retry progress", zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Info("Updated PR comment for retry progress", config.Int("pr_number", prNumber), config.Int64("comment_id", *commentID))
 			}
 		} else {
 			// Create new comment
 			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
-				s.logger.Warn("Failed to post PR comment for retry progress", zap.Error(err), zap.Int("pr_number", prNumber))
+				s.logger.Warn("Failed to post PR comment for retry progress", config.Error(err), config.Int("pr_number", prNumber))
 				if aggErr == nil {
 					aggErr = err
 				}
 			} else {
-				s.logger.Info("Posted PR comment for retry progress", zap.Int("pr_number", prNumber))
+				s.logger.Info("Posted PR comment for retry progress", config.Int("pr_number", prNumber))
 			}
 		}
 	}
@@ -544,8 +543,8 @@ func (s *GitHubNotificationService) NotifyRetryProgress(
 	}
 
 	s.logger.Info("Retry progress notifications posted (or updated)",
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
+		config.Int("issue_number", issueNumber),
+		config.Int("pr_number", prNumber),
 	)
 	return nil
 }
@@ -583,8 +582,8 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 	// Check if IdempotencyKey is empty
 	if agentRun.IdempotencyKey == "" {
 		s.logger.Warn("IdempotencyKey is empty for max retries notification",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("issue_id", issue.ID),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("issue_id", issue.ID),
 		)
 	}
 
@@ -592,8 +591,8 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 	parts := strings.SplitN(issue.Repo, "/", 2)
 	if len(parts) != 2 {
 		s.logger.Error("Invalid repo format",
-			zap.String("repo", issue.Repo),
-			zap.Int("issue_id", issue.ID),
+			config.String("repo", issue.Repo),
+			config.Int("issue_id", issue.ID),
 		)
 		return fmt.Errorf("invalid repo format: %s", issue.Repo)
 	}
@@ -602,12 +601,12 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 
 	// Log processing start
 	s.logger.Info("Posting max retries exceeded notification",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issue.Number),
-		zap.Int("agent_run_id", agentRun.ID),
-		zap.Int("retry_count", agentRun.RetryCount),
-		zap.String("idempotency_key", agentRun.IdempotencyKey),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issue.Number),
+		config.Int("agent_run_id", agentRun.ID),
+		config.Int("retry_count", agentRun.RetryCount),
+		config.String("idempotency_key", agentRun.IdempotencyKey),
 	)
 
 	// Generate idempotency marker
@@ -617,13 +616,13 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 	exists, err := s.hasCommentWithMarker(ctx, owner, repo, issue.Number, marker)
 	if err != nil {
 		s.logger.Warn("Failed to scan issue comments for marker",
-			zap.Error(err),
-			zap.Int("issue_number", issue.Number),
+			config.Error(err),
+			config.Int("issue_number", issue.Number),
 		)
 		// Continue processing even if scan fails
 	} else if exists {
 		s.logger.Info("Max retries notification already exists, skipping",
-			zap.Int("issue_number", issue.Number),
+			config.Int("issue_number", issue.Number),
 		)
 		return nil
 	}
@@ -634,16 +633,16 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 	// Post comment
 	if err := s.postComment(ctx, owner, repo, issue.Number, body); err != nil {
 		s.logger.Error("Failed to post max retries notification",
-			zap.Error(err),
-			zap.Int("issue_number", issue.Number),
+			config.Error(err),
+			config.Int("issue_number", issue.Number),
 		)
 		return err
 	}
 
 	// Log success
 	s.logger.Info("Max retries notification posted successfully",
-		zap.Int("issue_number", issue.Number),
-		zap.Int("agent_run_id", agentRun.ID),
+		config.Int("issue_number", issue.Number),
+		config.Int("agent_run_id", agentRun.ID),
 	)
 
 	return nil
@@ -668,12 +667,12 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 	}
 
 	s.logger.Info("Posting merge status notifications",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
-		zap.Bool("merged", merged),
-		zap.String("idempotency_key", idempotencyKey),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("pr_number", prNumber),
+		config.Bool("merged", merged),
+		config.String("idempotency_key", idempotencyKey),
 	)
 
 	// Prepare body and marker
@@ -698,21 +697,21 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 	if issueNumber > 0 {
 		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, issueNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan issue comments for merge marker", zap.Error(err), zap.Int("issue_number", issueNumber))
+			s.logger.Warn("Failed to scan issue comments for merge marker", config.Error(err), config.Int("issue_number", issueNumber))
 			aggErr = err
 		} else if found && commentID != nil {
 			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
-				s.logger.Warn("Failed to update issue comment for merge status", zap.Error(err), zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Warn("Failed to update issue comment for merge status", config.Error(err), config.Int("issue_number", issueNumber), config.Int64("comment_id", *commentID))
 				aggErr = err
 			} else {
-				s.logger.Info("Updated issue comment for merge status", zap.Int("issue_number", issueNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Info("Updated issue comment for merge status", config.Int("issue_number", issueNumber), config.Int64("comment_id", *commentID))
 			}
 		} else {
 			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
-				s.logger.Warn("Failed to post issue comment for merge status", zap.Error(err), zap.Int("issue_number", issueNumber))
+				s.logger.Warn("Failed to post issue comment for merge status", config.Error(err), config.Int("issue_number", issueNumber))
 				aggErr = err
 			} else {
-				s.logger.Info("Posted issue comment for merge status", zap.Int("issue_number", issueNumber))
+				s.logger.Info("Posted issue comment for merge status", config.Int("issue_number", issueNumber))
 			}
 		}
 	}
@@ -721,27 +720,27 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 	if prNumber > 0 {
 		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, prNumber, marker)
 		if err != nil {
-			s.logger.Warn("Failed to scan PR comments for merge marker", zap.Error(err), zap.Int("pr_number", prNumber))
+			s.logger.Warn("Failed to scan PR comments for merge marker", config.Error(err), config.Int("pr_number", prNumber))
 			if aggErr == nil {
 				aggErr = err
 			}
 		} else if found && commentID != nil {
 			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
-				s.logger.Warn("Failed to update PR comment for merge status", zap.Error(err), zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Warn("Failed to update PR comment for merge status", config.Error(err), config.Int("pr_number", prNumber), config.Int64("comment_id", *commentID))
 				if aggErr == nil {
 					aggErr = err
 				}
 			} else {
-				s.logger.Info("Updated PR comment for merge status", zap.Int("pr_number", prNumber), zap.Int64("comment_id", *commentID))
+				s.logger.Info("Updated PR comment for merge status", config.Int("pr_number", prNumber), config.Int64("comment_id", *commentID))
 			}
 		} else {
 			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
-				s.logger.Warn("Failed to post PR comment for merge status", zap.Error(err), zap.Int("pr_number", prNumber))
+				s.logger.Warn("Failed to post PR comment for merge status", config.Error(err), config.Int("pr_number", prNumber))
 				if aggErr == nil {
 					aggErr = err
 				}
 			} else {
-				s.logger.Info("Posted PR comment for merge status", zap.Int("pr_number", prNumber))
+				s.logger.Info("Posted PR comment for merge status", config.Int("pr_number", prNumber))
 			}
 		}
 	}
@@ -830,12 +829,12 @@ func (s *GitHubNotificationService) NotifyDependencyViolation(
 	}
 
 	s.logger.Info("Posting dependency violation notifications",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
-		zap.Int("blocked_count", len(blocked)),
-		zap.String("idempotency_key", idempotencyKey),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("pr_number", prNumber),
+		config.Int("blocked_count", len(blocked)),
+		config.String("idempotency_key", idempotencyKey),
 	)
 
 	// Generate marker
@@ -851,36 +850,36 @@ func (s *GitHubNotificationService) NotifyDependencyViolation(
 		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, issueNumber, marker)
 		if err != nil {
 			s.logger.Warn("Failed to scan issue comments for dependency violation marker",
-				zap.Error(err),
-				zap.Int("issue_number", issueNumber),
+				config.Error(err),
+				config.Int("issue_number", issueNumber),
 			)
 			aggErr = err
 		} else if found && commentID != nil {
 			// Update existing comment
 			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
 				s.logger.Warn("Failed to update issue comment for dependency violation",
-					zap.Error(err),
-					zap.Int("issue_number", issueNumber),
-					zap.Int64("comment_id", *commentID),
+					config.Error(err),
+					config.Int("issue_number", issueNumber),
+					config.Int64("comment_id", *commentID),
 				)
 				aggErr = err
 			} else {
 				s.logger.Info("Updated issue comment for dependency violation",
-					zap.Int("issue_number", issueNumber),
-					zap.Int64("comment_id", *commentID),
+					config.Int("issue_number", issueNumber),
+					config.Int64("comment_id", *commentID),
 				)
 			}
 		} else {
 			// Create new comment
 			if err := s.postComment(ctx, owner, repo, issueNumber, body); err != nil {
 				s.logger.Warn("Failed to post issue comment for dependency violation",
-					zap.Error(err),
-					zap.Int("issue_number", issueNumber),
+					config.Error(err),
+					config.Int("issue_number", issueNumber),
 				)
 				aggErr = err
 			} else {
 				s.logger.Info("Posted issue comment for dependency violation",
-					zap.Int("issue_number", issueNumber),
+					config.Int("issue_number", issueNumber),
 				)
 			}
 		}
@@ -891,8 +890,8 @@ func (s *GitHubNotificationService) NotifyDependencyViolation(
 		commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, prNumber, marker)
 		if err != nil {
 			s.logger.Warn("Failed to scan PR comments for dependency violation marker",
-				zap.Error(err),
-				zap.Int("pr_number", prNumber),
+				config.Error(err),
+				config.Int("pr_number", prNumber),
 			)
 			if aggErr == nil {
 				aggErr = err
@@ -901,32 +900,32 @@ func (s *GitHubNotificationService) NotifyDependencyViolation(
 			// Update existing comment
 			if err := s.updateComment(ctx, owner, repo, *commentID, body); err != nil {
 				s.logger.Warn("Failed to update PR comment for dependency violation",
-					zap.Error(err),
-					zap.Int("pr_number", prNumber),
-					zap.Int64("comment_id", *commentID),
+					config.Error(err),
+					config.Int("pr_number", prNumber),
+					config.Int64("comment_id", *commentID),
 				)
 				if aggErr == nil {
 					aggErr = err
 				}
 			} else {
 				s.logger.Info("Updated PR comment for dependency violation",
-					zap.Int("pr_number", prNumber),
-					zap.Int64("comment_id", *commentID),
+					config.Int("pr_number", prNumber),
+					config.Int64("comment_id", *commentID),
 				)
 			}
 		} else {
 			// Create new comment
 			if err := s.postComment(ctx, owner, repo, prNumber, body); err != nil {
 				s.logger.Warn("Failed to post PR comment for dependency violation",
-					zap.Error(err),
-					zap.Int("pr_number", prNumber),
+					config.Error(err),
+					config.Int("pr_number", prNumber),
 				)
 				if aggErr == nil {
 					aggErr = err
 				}
 			} else {
 				s.logger.Info("Posted PR comment for dependency violation",
-					zap.Int("pr_number", prNumber),
+					config.Int("pr_number", prNumber),
 				)
 			}
 		}
@@ -937,8 +936,8 @@ func (s *GitHubNotificationService) NotifyDependencyViolation(
 	}
 
 	s.logger.Info("Dependency violation notifications posted (or updated)",
-		zap.Int("issue_number", issueNumber),
-		zap.Int("pr_number", prNumber),
+		config.Int("issue_number", issueNumber),
+		config.Int("pr_number", prNumber),
 	)
 	return nil
 }

@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	errcodes "agentic-automation/internal/errors"
 )
 
@@ -133,7 +133,7 @@ func IsRetryableError(err error) bool {
 }
 
 // calculateBackoff calculates the backoff delay for a given attempt number
-func calculateBackoff(attempt int, config *RetryConfig) time.Duration {
+func calculateBackoff(attempt int, retryCfg *RetryConfig) time.Duration {
 	if attempt <= 1 {
 		return 0 // First attempt is immediate
 	}
@@ -143,11 +143,11 @@ func calculateBackoff(attempt int, config *RetryConfig) time.Duration {
 	// attempt=3: 2^1 * InitialDelay = 2 * InitialDelay
 	// attempt=4: 2^2 * InitialDelay = 4 * InitialDelay
 	// attempt=5: 2^3 * InitialDelay = 8 * InitialDelay
-	backoff := time.Duration(math.Pow(2, float64(attempt-2))) * config.InitialDelay
+	backoff := time.Duration(math.Pow(2, float64(attempt-2))) * retryCfg.InitialDelay
 
 	// Cap at MaxDelay
-	if backoff > config.MaxDelay {
-		backoff = config.MaxDelay
+	if backoff > retryCfg.MaxDelay {
+		backoff = retryCfg.MaxDelay
 	}
 
 	return backoff
@@ -176,18 +176,18 @@ func applyJitter(delay time.Duration, jitterPercent float64) time.Duration {
 }
 
 // Retry executes a function with retry logic using exponential backoff and jitter
-func Retry(ctx context.Context, fn func() error, config *RetryConfig, logger *zap.Logger) error {
-	if config == nil {
-		config = DefaultRetryConfig()
+func Retry(ctx context.Context, fn func() error, retryCfg *RetryConfig, logger *config.AppLogger) error {
+	if retryCfg == nil {
+		retryCfg = DefaultRetryConfig()
 	}
 
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	var lastErr error
 
-	for attempt := 1; attempt <= config.MaxAttempts; attempt++ {
+	for attempt := 1; attempt <= retryCfg.MaxAttempts; attempt++ {
 		// Check context cancellation before each attempt
 		select {
 		case <-ctx.Done():
@@ -201,8 +201,8 @@ func Retry(ctx context.Context, fn func() error, config *RetryConfig, logger *za
 			// Success - no retry needed
 			if attempt > 1 {
 				logger.Info("Retry succeeded",
-					zap.Int("attempt", attempt),
-					zap.Int("max_attempts", config.MaxAttempts))
+					config.Int("attempt", attempt),
+					config.Int("max_attempts", retryCfg.MaxAttempts))
 			}
 			return nil
 		}
@@ -212,25 +212,25 @@ func Retry(ctx context.Context, fn func() error, config *RetryConfig, logger *za
 		// Check if error is retryable
 		if !IsRetryableError(err) {
 			logger.Warn("Error is not retryable, stopping retry",
-				zap.Int("attempt", attempt),
-				zap.Error(err))
+				config.Int("attempt", attempt),
+				config.Error(err))
 			return err
 		}
 
 		// Don't wait after the last attempt
-		if attempt >= config.MaxAttempts {
+		if attempt >= retryCfg.MaxAttempts {
 			break
 		}
 
 		// Calculate backoff with jitter
-		backoff := calculateBackoff(attempt+1, config) // +1 because we're calculating for the next attempt
-		jitteredBackoff := applyJitter(backoff, config.JitterPercent)
+		backoff := calculateBackoff(attempt+1, retryCfg) // +1 because we're calculating for the next attempt
+		jitteredBackoff := applyJitter(backoff, retryCfg.JitterPercent)
 
 		logger.Warn("Retry attempt failed, waiting before next attempt",
-			zap.Int("attempt", attempt),
-			zap.Int("max_attempts", config.MaxAttempts),
-			zap.Duration("backoff", jitteredBackoff),
-			zap.Error(err))
+			config.Int("attempt", attempt),
+			config.Int("max_attempts", retryCfg.MaxAttempts),
+			config.Duration("backoff", jitteredBackoff),
+			config.Error(err))
 
 		// Wait with context cancellation support
 		select {
@@ -243,30 +243,30 @@ func Retry(ctx context.Context, fn func() error, config *RetryConfig, logger *za
 
 	// All retries exhausted
 	logger.Error("All retry attempts exhausted",
-		zap.Int("max_attempts", config.MaxAttempts),
-		zap.Error(lastErr))
+		config.Int("max_attempts", retryCfg.MaxAttempts),
+		config.Error(lastErr))
 
 	return &MaxRetriesExceededError{
-		MaxAttempts: config.MaxAttempts,
+		MaxAttempts: retryCfg.MaxAttempts,
 		LastError:   lastErr,
 	}
 }
 
 // RetryWithResult executes a function that returns a result and error with retry logic
-func RetryWithResult[T any](ctx context.Context, fn func() (T, error), config *RetryConfig, logger *zap.Logger) (T, error) {
+func RetryWithResult[T any](ctx context.Context, fn func() (T, error), retryCfg *RetryConfig, logger *config.AppLogger) (T, error) {
 	var zero T
 
-	if config == nil {
-		config = DefaultRetryConfig()
+	if retryCfg == nil {
+		retryCfg = DefaultRetryConfig()
 	}
 
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	var lastErr error
 
-	for attempt := 1; attempt <= config.MaxAttempts; attempt++ {
+	for attempt := 1; attempt <= retryCfg.MaxAttempts; attempt++ {
 		// Check context cancellation before each attempt
 		select {
 		case <-ctx.Done():
@@ -280,8 +280,8 @@ func RetryWithResult[T any](ctx context.Context, fn func() (T, error), config *R
 			// Success - no retry needed
 			if attempt > 1 {
 				logger.Info("Retry succeeded",
-					zap.Int("attempt", attempt),
-					zap.Int("max_attempts", config.MaxAttempts))
+					config.Int("attempt", attempt),
+					config.Int("max_attempts", retryCfg.MaxAttempts))
 			}
 			return result, nil
 		}
@@ -291,25 +291,25 @@ func RetryWithResult[T any](ctx context.Context, fn func() (T, error), config *R
 		// Check if error is retryable
 		if !IsRetryableError(err) {
 			logger.Warn("Error is not retryable, stopping retry",
-				zap.Int("attempt", attempt),
-				zap.Error(err))
+				config.Int("attempt", attempt),
+				config.Error(err))
 			return zero, err
 		}
 
 		// Don't wait after the last attempt
-		if attempt >= config.MaxAttempts {
+		if attempt >= retryCfg.MaxAttempts {
 			break
 		}
 
 		// Calculate backoff with jitter
-		backoff := calculateBackoff(attempt+1, config) // +1 because we're calculating for the next attempt
-		jitteredBackoff := applyJitter(backoff, config.JitterPercent)
+		backoff := calculateBackoff(attempt+1, retryCfg) // +1 because we're calculating for the next attempt
+		jitteredBackoff := applyJitter(backoff, retryCfg.JitterPercent)
 
 		logger.Warn("Retry attempt failed, waiting before next attempt",
-			zap.Int("attempt", attempt),
-			zap.Int("max_attempts", config.MaxAttempts),
-			zap.Duration("backoff", jitteredBackoff),
-			zap.Error(err))
+			config.Int("attempt", attempt),
+			config.Int("max_attempts", retryCfg.MaxAttempts),
+			config.Duration("backoff", jitteredBackoff),
+			config.Error(err))
 
 		// Wait with context cancellation support
 		select {
@@ -322,11 +322,11 @@ func RetryWithResult[T any](ctx context.Context, fn func() (T, error), config *R
 
 	// All retries exhausted
 	logger.Error("All retry attempts exhausted",
-		zap.Int("max_attempts", config.MaxAttempts),
-		zap.Error(lastErr))
+		config.Int("max_attempts", retryCfg.MaxAttempts),
+		config.Error(lastErr))
 
 	return zero, &MaxRetriesExceededError{
-		MaxAttempts: config.MaxAttempts,
+		MaxAttempts: retryCfg.MaxAttempts,
 		LastError:   lastErr,
 	}
 }

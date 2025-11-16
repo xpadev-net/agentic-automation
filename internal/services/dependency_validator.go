@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/errors"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
-	"go.uber.org/zap"
 )
 
 // ErrBlockedDependencies は、未クローズの依存Issueが存在する場合に返される業務エラー。
@@ -33,7 +33,7 @@ type dependencyValidator struct {
 	builder BlockerGraphBuilder
 	issues  *repositories.IssueRepository
 	edges   *repositories.BlockerGraphRepository
-	logger  *zap.Logger
+	logger  *config.AppLogger
 }
 
 // NewDependencyValidator を作成する。
@@ -41,7 +41,7 @@ func NewDependencyValidator(
 	builder BlockerGraphBuilder,
 	issues *repositories.IssueRepository,
 	edges *repositories.BlockerGraphRepository,
-	logger *zap.Logger,
+	logger *config.AppLogger,
 ) DependencyValidator {
 	if builder == nil {
 		panic("builder is required for DependencyValidator")
@@ -53,7 +53,7 @@ func NewDependencyValidator(
 		panic("edge repository is required for DependencyValidator")
 	}
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &dependencyValidator{builder: builder, issues: issues, edges: edges, logger: logger}
 }
@@ -67,10 +67,10 @@ func (v *dependencyValidator) ValidateUnblocked(ctx context.Context, owner, repo
 	// 1) 依存情報の最新化
 	if err := v.builder.BuildForIssue(ctx, owner, repo, issueNumber); err != nil {
 		v.logger.Error("failed to build blocker graph",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
-			zap.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
+			config.Error(err),
 		)
 		return nil, err
 	}

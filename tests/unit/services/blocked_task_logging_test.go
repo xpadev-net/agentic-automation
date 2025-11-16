@@ -3,9 +3,12 @@ package services_test
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	neturl "net/url"
+	"strings"
+	"sync"
 	"testing"
 
 	"agentic-automation/internal/clients"
@@ -15,8 +18,6 @@ import (
 	svc "agentic-automation/internal/services"
 
 	gh "github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	batchv1 "k8s.io/api/batch/v1"
@@ -105,9 +106,36 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 	return db
 }
 
-func newObserverLogger() (*zap.Logger, *observer.ObservedLogs) {
-	core, logs := observer.New(zap.InfoLevel)
-	return zap.New(core), logs
+type logCollector struct {
+	mu      sync.Mutex
+	entries []string
+}
+
+func (c *logCollector) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	line := strings.TrimSpace(string(p))
+	if line != "" {
+		c.entries = append(c.entries, line)
+	}
+	return len(p), nil
+}
+
+func (c *logCollector) Contains(sub string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, entry := range c.entries {
+		if strings.Contains(entry, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func newObserverLogger() (*appcfg.AppLogger, *logCollector) {
+	collector := &logCollector{}
+	std := log.New(collector, "", 0)
+	return appcfg.FromStdLogger(std), collector
 }
 
 // Test that end-to-end happy path emits key logs without external dependencies
@@ -183,7 +211,7 @@ func TestTriggerJobsForUnblockedTasks_EmitsLogs(t *testing.T) {
 		"blocked_task.resume_evaluation_completed",
 	}
 	for _, k := range wantKeys {
-		if logs.FilterMessage(k).Len() == 0 {
+		if !logs.Contains(k) {
 			t.Fatalf("expected log %q not found", k)
 		}
 	}

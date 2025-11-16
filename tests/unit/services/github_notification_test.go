@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 	testmocks "agentic-automation/tests/mocks"
@@ -9,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func TestNotifyPRCreated_NewPostsToIssueAndPR(t *testing.T) {
@@ -18,7 +18,7 @@ func TestNotifyPRCreated_NewPostsToIssueAndPR(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	owner, repo := "org", "repo"
@@ -64,7 +64,7 @@ func TestNotifyPRCreated_Idempotent_IssueHasMarkerOnly(t *testing.T) {
 	mock.Seed(100, marker+"\npre-existing")
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyPRCreated(ctx, "o", "r", 100, 200, "https://github.com/o/r/pull/200", "b", "abcdef0", idem)
@@ -87,7 +87,7 @@ func TestNotifyPRCreated_Idempotent_BothHaveMarker(t *testing.T) {
 	mock.Seed(20, marker+"\npr")
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", idem)
@@ -103,7 +103,7 @@ func TestNotifyPRCreated_SkipWhenMissingPRNumber(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 0, "", "b", "abcd12", "id1")
@@ -118,7 +118,7 @@ func TestNotifyPRCreated_IssueList500_ReturnsErrorButPRPosts(t *testing.T) {
 	mock.SetErrorMode(testmocks.ErrorMode{List500For: map[int]bool{10: true}})
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
@@ -143,7 +143,7 @@ func TestNotifyPRCreated_PRPost500_ReturnsErrorButIssuePosts(t *testing.T) {
 	mock.SetErrorMode(testmocks.ErrorMode{Post500For: map[int]bool{20: true}})
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
@@ -166,7 +166,7 @@ func TestNotifyPRCreated_ShortSHABoundary(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 	ctx := context.Background()
 
 	// 6 chars -> unchanged
@@ -198,7 +198,7 @@ func TestNotifyPRCreated_NoIssueNumber_PROnly(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyPRCreated(ctx, "o", "r", 0, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
@@ -278,7 +278,7 @@ func TestFindCommentWithMarker_Found(t *testing.T) {
 	mock.Seed(100, marker+"\nExisting comment")
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	commentID, found, err := svc.FindCommentWithMarker(ctx, "o", "r", 100, marker)
@@ -295,7 +295,7 @@ func TestFindCommentWithMarker_NotFound(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	commentID, found, err := svc.FindCommentWithMarker(ctx, "o", "r", 100, "<!-- agent:retry-progress:not-found -->")
@@ -311,7 +311,7 @@ func TestNotifyRetryProgress_NewPostsToIssueAndPR(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 20, 5, 50, "Test error", "delivery-1")
@@ -349,7 +349,7 @@ func TestNotifyRetryProgress_UpdatesExistingComment(t *testing.T) {
 	mock.Seed(100, marker+"\nOld comment")
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyRetryProgress(ctx, "o", "r", 100, 0, 3, 50, "New error", idem)
@@ -370,7 +370,7 @@ func TestNotifyRetryProgress_InputValidation(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 
@@ -396,7 +396,7 @@ func TestNotifyRetryProgress_IssueOnly(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 0, 2, 50, "Error", "key1")
@@ -413,7 +413,7 @@ func TestNotifyRetryProgress_PROnly(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 	err := svc.NotifyRetryProgress(ctx, "org", "repo", 0, 20, 2, 50, "Error", "key2")
@@ -479,7 +479,7 @@ func TestNotifyDependencyViolation_NewPostsToIssueAndPR(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	blocked := []models.Issue{
 		{Repo: "owner/repo", Number: 100, State: "open"},
@@ -522,7 +522,7 @@ func TestNotifyDependencyViolation_UpdatesExistingComment(t *testing.T) {
 	mock.Seed(100, marker+"\nOld comment")
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	blocked := []models.Issue{
 		{Repo: "owner/repo", Number: 200, State: "open"},
@@ -546,7 +546,7 @@ func TestNotifyDependencyViolation_InputValidation(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
 
@@ -570,7 +570,7 @@ func TestNotifyDependencyViolation_IssueOnly(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	blocked := []models.Issue{
 		{Repo: "owner/repo", Number: 1, State: "open"},
@@ -591,7 +591,7 @@ func TestNotifyDependencyViolation_PROnly(t *testing.T) {
 	mock.Reset()
 
 	gh := buildTestGitHubClient(t, mock.URL())
-	svc := services.NewGitHubNotificationService(gh, zap.NewNop())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	blocked := []models.Issue{
 		{Repo: "owner/repo", Number: 1, State: "open"},

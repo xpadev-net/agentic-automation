@@ -8,10 +8,10 @@ import (
 	"github.com/google/go-github/v76/github"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/utils"
-	"go.uber.org/zap"
 )
 
 const (
@@ -24,7 +24,7 @@ const (
 type CodexReviewService struct {
 	githubClient       *clients.Client
 	reviewFeedbackRepo *repositories.ReviewFeedbackRepository
-	logger             *zap.Logger
+	logger             *config.AppLogger
 }
 
 // makeCodexReviewComment creates a comment body with idempotency marker.
@@ -39,14 +39,14 @@ func makeCodexReviewComment(idempotencyKey string) string {
 // Parameters:
 //   - githubClient: GitHub API client (must not be nil, will panic if nil)
 //   - reviewFeedbackRepo: ReviewFeedback repository for creating review records (must not be nil, will panic if nil)
-//   - logger: Structured logger instance (if nil, uses zap.NewNop())
+//   - logger: Structured logger instance (if nil, uses config.NewNopLogger())
 //
 // Returns:
 //   - *CodexReviewService: Initialized service instance
 func NewCodexReviewService(
 	githubClient *clients.Client,
 	reviewFeedbackRepo *repositories.ReviewFeedbackRepository,
-	logger *zap.Logger,
+	logger *config.AppLogger,
 ) *CodexReviewService {
 	if githubClient == nil {
 		panic("githubClient is required for CodexReviewService")
@@ -56,9 +56,9 @@ func NewCodexReviewService(
 		panic("reviewFeedbackRepo is required for CodexReviewService")
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	return &CodexReviewService{
@@ -151,35 +151,35 @@ func (s *CodexReviewService) RequestReview(
 	}
 
 	s.logger.Info("Requesting Codex review",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
-		zap.Int("pr_id", prID),
-		zap.String("idempotency_key", idempotencyKey),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
+		config.Int("pr_id", prID),
+		config.String("idempotency_key", idempotencyKey),
 	)
 
 	// Check for existing ReviewFeedback record with status="requested"
 	existingFeedbacks, err := s.reviewFeedbackRepo.FindByPRIDAndStatus(prID, "requested")
 	if err != nil {
 		s.logger.Warn("Failed to check for existing ReviewFeedback records",
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("pr_number", prNumber),
-			zap.Int("pr_id", prID),
-			zap.String("idempotency_key", idempotencyKey),
+			config.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
+			config.Int("pr_id", prID),
+			config.String("idempotency_key", idempotencyKey),
 		)
 		// Continue processing even if check fails (best effort)
 	} else if len(existingFeedbacks) > 0 {
 		// Existing request found - return the most recent one
 		existingFeedback := existingFeedbacks[0] // Already ordered by created_at DESC
 		s.logger.Info("Existing Codex review request found, returning existing record",
-			zap.Int("feedback_id", existingFeedback.ID),
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("pr_number", prNumber),
-			zap.Int("pr_id", prID),
-			zap.String("idempotency_key", idempotencyKey),
+			config.Int("feedback_id", existingFeedback.ID),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
+			config.Int("pr_id", prID),
+			config.String("idempotency_key", idempotencyKey),
 		)
 		return existingFeedback, nil
 	}
@@ -189,12 +189,12 @@ func (s *CodexReviewService) RequestReview(
 	hasMarker, err := s.hasCommentWithMarker(ctx, owner, repo, prNumber, marker)
 	if err != nil {
 		s.logger.Warn("Failed to check for existing comment marker",
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("pr_number", prNumber),
-			zap.Int("pr_id", prID),
-			zap.String("idempotency_key", idempotencyKey),
+			config.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
+			config.Int("pr_id", prID),
+			config.String("idempotency_key", idempotencyKey),
 		)
 		// Continue processing even if check fails (best effort)
 	} else if hasMarker {
@@ -203,12 +203,12 @@ func (s *CodexReviewService) RequestReview(
 		if err == nil && len(existingFeedbacks) > 0 {
 			existingFeedback := existingFeedbacks[0]
 			s.logger.Info("Existing Codex review comment found, returning existing record",
-				zap.Int("feedback_id", existingFeedback.ID),
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.Int("pr_number", prNumber),
-				zap.Int("pr_id", prID),
-				zap.String("idempotency_key", idempotencyKey),
+				config.Int("feedback_id", existingFeedback.ID),
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.Int("pr_number", prNumber),
+				config.Int("pr_id", prID),
+				config.String("idempotency_key", idempotencyKey),
 			)
 			return existingFeedback, nil
 		}
@@ -216,22 +216,22 @@ func (s *CodexReviewService) RequestReview(
 		existingComment, err := s.findCommentWithMarker(ctx, owner, repo, prNumber, marker)
 		if err != nil {
 			s.logger.Warn("Failed to find existing comment with marker",
-				zap.Error(err),
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.Int("pr_number", prNumber),
-				zap.Int("pr_id", prID),
-				zap.String("idempotency_key", idempotencyKey),
+				config.Error(err),
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.Int("pr_number", prNumber),
+				config.Int("pr_id", prID),
+				config.String("idempotency_key", idempotencyKey),
 			)
 			// Continue to normal flow if we can't find the comment
 		} else if existingComment != nil {
 			// Comment exists - create ReviewFeedback record without reposting
 			s.logger.Info("Codex review comment already exists, skipping repost, creating ReviewFeedback record only",
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.Int("pr_number", prNumber),
-				zap.Int("pr_id", prID),
-				zap.String("idempotency_key", idempotencyKey),
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.Int("pr_number", prNumber),
+				config.Int("pr_id", prID),
+				config.String("idempotency_key", idempotencyKey),
 			)
 			feedback := &models.ReviewFeedback{
 				PRID:             prID,
@@ -245,22 +245,22 @@ func (s *CodexReviewService) RequestReview(
 			}
 			if err := s.reviewFeedbackRepo.Create(feedback); err != nil {
 				s.logger.Error("Failed to create ReviewFeedback record from existing comment",
-					zap.Error(err),
-					zap.String("owner", owner),
-					zap.String("repo", repo),
-					zap.Int("pr_number", prNumber),
-					zap.Int("pr_id", prID),
-					zap.String("idempotency_key", idempotencyKey),
+					config.Error(err),
+					config.String("owner", owner),
+					config.String("repo", repo),
+					config.Int("pr_number", prNumber),
+					config.Int("pr_id", prID),
+					config.String("idempotency_key", idempotencyKey),
 				)
 				return nil, fmt.Errorf("failed to create ReviewFeedback record from existing comment: %w", err)
 			}
 			s.logger.Info("Created ReviewFeedback record from existing comment",
-				zap.Int("feedback_id", feedback.ID),
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.Int("pr_number", prNumber),
-				zap.Int("pr_id", prID),
-				zap.String("idempotency_key", idempotencyKey),
+				config.Int("feedback_id", feedback.ID),
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.Int("pr_number", prNumber),
+				config.Int("pr_id", prID),
+				config.String("idempotency_key", idempotencyKey),
 			)
 			return feedback, nil
 		}
@@ -277,25 +277,25 @@ func (s *CodexReviewService) RequestReview(
 	}, nil, s.logger)
 	if err != nil {
 		s.logger.Error("Failed to post Codex review request comment",
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("pr_number", prNumber),
-			zap.Int("pr_id", prID),
-			zap.String("idempotency_key", idempotencyKey),
+			config.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
+			config.Int("pr_id", prID),
+			config.String("idempotency_key", idempotencyKey),
 		)
 		return nil, fmt.Errorf("failed to post Codex review request comment: %w", err)
 	}
 
-	logFields := []zap.Field{
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
-		zap.Int("pr_id", prID),
-		zap.String("idempotency_key", idempotencyKey),
+	logFields := []config.Field{
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
+		config.Int("pr_id", prID),
+		config.String("idempotency_key", idempotencyKey),
 	}
 	if comment != nil && comment.ID != nil {
-		logFields = append(logFields, zap.Int64("comment_id", *comment.ID))
+		logFields = append(logFields, config.Int64("comment_id", *comment.ID))
 	}
 	s.logger.Info("Codex review request comment posted successfully", logFields...)
 
@@ -312,31 +312,31 @@ func (s *CodexReviewService) RequestReview(
 	}
 
 	if err := s.reviewFeedbackRepo.Create(feedback); err != nil {
-		warnFields := []zap.Field{
-			zap.Error(err),
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("pr_number", prNumber),
-			zap.Int("pr_id", prID),
-			zap.String("idempotency_key", idempotencyKey),
+		warnFields := []config.Field{
+			config.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
+			config.Int("pr_id", prID),
+			config.String("idempotency_key", idempotencyKey),
 		}
 		if comment != nil && comment.ID != nil {
-			warnFields = append(warnFields, zap.Int64("comment_id", *comment.ID))
+			warnFields = append(warnFields, config.Int64("comment_id", *comment.ID))
 		}
 		s.logger.Warn("Failed to create ReviewFeedback record after posting comment", warnFields...)
 		return nil, fmt.Errorf("failed to create ReviewFeedback record: %w", err)
 	}
 
-	successFields := []zap.Field{
-		zap.Int("feedback_id", feedback.ID),
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("pr_number", prNumber),
-		zap.Int("pr_id", prID),
-		zap.String("idempotency_key", idempotencyKey),
+	successFields := []config.Field{
+		config.Int("feedback_id", feedback.ID),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
+		config.Int("pr_id", prID),
+		config.String("idempotency_key", idempotencyKey),
 	}
 	if comment != nil && comment.ID != nil {
-		successFields = append(successFields, zap.Int64("comment_id", *comment.ID))
+		successFields = append(successFields, config.Int64("comment_id", *comment.ID))
 	}
 	s.logger.Info("ReviewFeedback record created successfully", successFields...)
 

@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
-	"go.uber.org/zap"
 )
 
 // DiscordNotificationService provides Discord notification functionality
@@ -13,7 +13,7 @@ import (
 // for Discord notifications required by webhook handlers.
 type DiscordNotificationService struct {
 	discordClient *clients.DiscordClient
-	logger        *zap.Logger
+	logger        *config.AppLogger
 }
 
 // NewDiscordNotificationService creates a new DiscordNotificationService instance.
@@ -21,11 +21,11 @@ type DiscordNotificationService struct {
 //
 // Parameters:
 //   - discordClient: Discord webhook client (can be nil - notifications will be disabled)
-//   - logger: Structured logger instance (if nil, uses zap.NewNop())
+//   - logger: Structured logger instance (if nil, uses config.NewNopLogger())
 //
 // Returns:
 //   - *DiscordNotificationService: Initialized service instance
-func NewDiscordNotificationService(discordClient *clients.DiscordClient, logger *zap.Logger) *DiscordNotificationService {
+func NewDiscordNotificationService(discordClient *clients.DiscordClient, logger *config.AppLogger) *DiscordNotificationService {
 	// Warn if discordClient is nil (non-blocking)
 	if discordClient == nil {
 		if logger != nil {
@@ -33,9 +33,9 @@ func NewDiscordNotificationService(discordClient *clients.DiscordClient, logger 
 		}
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	return &DiscordNotificationService{
@@ -65,9 +65,9 @@ func (s *DiscordNotificationService) NotifyPRCreated(ctx context.Context, pr *mo
 	err := s.discordClient.SendPRCreatedNotification(ctx, pr, issue, agentRun.AgentType)
 	if err != nil {
 		s.logger.Error("Failed to send Discord PR created notification",
-			zap.Error(err),
-			zap.Int("pr_number", pr.Number),
-			zap.Int("agent_run_id", agentRun.ID))
+			config.Error(err),
+			config.Int("pr_number", pr.Number),
+			config.Int("agent_run_id", agentRun.ID))
 		return err
 	}
 
@@ -94,9 +94,9 @@ func (s *DiscordNotificationService) NotifyMaxRetries(ctx context.Context, agent
 	err := s.discordClient.SendMaxRetriesNotification(ctx, agentRun, issue)
 	if err != nil {
 		s.logger.Error("Failed to send Discord max retries notification",
-			zap.Error(err),
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("issue_number", issue.Number))
+			config.Error(err),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("issue_number", issue.Number))
 		return err
 	}
 
@@ -111,8 +111,8 @@ func (s *DiscordNotificationService) NotifyMergeSuccess(ctx context.Context, pr 
 	}
 	if err := s.discordClient.SendPRMergedNotification(ctx, pr, issue, retryCount); err != nil {
 		s.logger.Warn("Failed to send Discord PR merged notification",
-			zap.Error(err),
-			zap.Int("pr_number", pr.Number),
+			config.Error(err),
+			config.Int("pr_number", pr.Number),
 		)
 		return err
 	}
@@ -127,9 +127,9 @@ func (s *DiscordNotificationService) NotifyMergeFailure(ctx context.Context, pr 
 	}
 	if err := s.discordClient.SendPRMergeFailureNotification(ctx, pr, issue, errorMessage, errorCode); err != nil {
 		s.logger.Warn("Failed to send Discord PR merge failure notification",
-			zap.Error(err),
-			zap.Int("pr_number", pr.Number),
-			zap.String("error_code", errorCode),
+			config.Error(err),
+			config.Int("pr_number", pr.Number),
+			config.String("error_code", errorCode),
 		)
 		return err
 	}

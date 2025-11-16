@@ -14,14 +14,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 )
 
 // dbCIProvider implements services.CIStatusProvider backed by DB aggregation rows
 type dbCIProvider struct {
 	prRepo *repositories.PullRequestRepository
 	ciRepo *repositories.CIStatusRepository
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 func (p *dbCIProvider) GetAggregatedState(ctx context.Context, owner, repo string, prNumber int) (services.CIState, error) {
@@ -86,7 +85,7 @@ func (p *dbCIProvider) GetAggregatedState(ctx context.Context, owner, repo strin
 type dbCodexChecker struct {
 	prRepo *repositories.PullRequestRepository
 	rfRepo *repositories.ReviewFeedbackRepository
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 func (c *dbCodexChecker) IsApproved(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
@@ -118,7 +117,7 @@ type StatusPayload struct {
 
 // StatusDeps contains injectable dependencies for Status handler
 type StatusDeps struct {
-	Logger           *zap.Logger
+	Logger           *config.AppLogger
 	GitHubAppClient  *clients.GitHubClient
 	PullRequestRepo  *repositories.PullRequestRepository
 	CIStatusRepo     *repositories.CIStatusRepository
@@ -137,7 +136,7 @@ func HandleStatus(c *gin.Context) {
 		if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
 			appGitHubClient = ghApp
 		} else {
-			logger.Warn("GitHub App client not initialized", zap.Error(err))
+			logger.Warn("GitHub App client not initialized", config.Error(err))
 		}
 	}
 
@@ -169,7 +168,7 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	deliveryID := c.GetHeader(deliveryHeader)
 	if deliveryID == "" {
 		logger.Warn("Missing X-GitHub-Delivery header",
-			zap.String("path", c.Request.URL.Path),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("missing X-GitHub-Delivery header"))
 		return
@@ -178,8 +177,8 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	payloadData, exists := c.Get("webhook_payload")
 	if !exists {
 		logger.Error("Webhook payload not found in context",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("webhook payload not found in context"))
 		return
@@ -187,8 +186,8 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	payloadBytes, ok := payloadData.([]byte)
 	if !ok {
 		logger.Error("Invalid webhook payload type",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("invalid webhook payload type"))
 		return
@@ -197,19 +196,19 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	var payload StatusPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		logger.Error("Failed to parse status payload",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("Received status webhook",
-		zap.String("delivery_id", deliveryID),
-		zap.String("state", payload.State),
-		zap.String("context", payload.Context),
-		zap.String("sha", payload.Sha),
-		zap.String("repo", payload.Repository.FullName),
+		config.String("delivery_id", deliveryID),
+		config.String("state", payload.State),
+		config.String("context", payload.Context),
+		config.String("sha", payload.Sha),
+		config.String("repo", payload.Repository.FullName),
 	)
 
 	// Validate minimal fields
@@ -246,14 +245,14 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 		if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
 			appGitHubClient = ghApp
 		} else {
-			logger.Warn("GitHub App client not available", zap.Error(err))
+			logger.Warn("GitHub App client not available", config.Error(err))
 		}
 	}
 	if appGitHubClient != nil {
 		if g, err := appGitHubClient.ForRepo(ctx, owner, repo); err == nil {
 			perRepoGH = g
 		} else {
-			logger.Warn("Failed to init per-repo GitHub client", zap.Error(err))
+			logger.Warn("Failed to init per-repo GitHub client", config.Error(err))
 		}
 	}
 
@@ -277,7 +276,7 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 		if g, err := ghApp.ForRepo(ctx, owner, repo); err == nil {
 			gh = g
 		} else {
-			logger.Warn("Failed to init repo GitHub client", zap.Error(err))
+			logger.Warn("Failed to init repo GitHub client", config.Error(err))
 		}
 	}
 
@@ -288,12 +287,12 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 		if err == nil && len(prs) > 0 {
 			prNumber = prs[0].GetNumber()
 			config.GetLogger().Debug("PR resolved from commit",
-				zap.Int("pr_number", prNumber),
-				zap.String("sha", payload.Sha),
+				config.Int("pr_number", prNumber),
+				config.String("sha", payload.Sha),
 			)
 		} else {
 			if resp != nil {
-				config.GetLogger().Debug("No PR found for commit", zap.String("sha", payload.Sha))
+				config.GetLogger().Debug("No PR found for commit", config.String("sha", payload.Sha))
 			}
 		}
 	}
@@ -321,9 +320,9 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	pr, err := prRepo.FindByRepoAndNumber(payload.Repository.FullName, prNumber)
 	if err != nil {
 		logger.Error("Failed to load PR from repository",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", prNumber),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", prNumber),
 		)
 		c.Error(err)
 		return
@@ -381,10 +380,10 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	}
 	if err := ciRepo.CreateOrUpdate(ci); err != nil {
 		logger.Warn("Failed to upsert supplementary CI status",
-			zap.Error(err),
-			zap.Int("pr_id", pr.ID),
-			zap.String("context", payload.Context),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.Int("pr_id", pr.ID),
+			config.String("context", payload.Context),
+			config.String("delivery_id", deliveryID),
 		)
 		// non-fatal
 	}
@@ -393,7 +392,7 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 	aggregator := deps.Aggregator
 	if aggregator != nil {
 		if err := aggregator.AddStatusSignal(ctx, pr.ID, payload.Context, payload.State, payload.TargetURL); err != nil {
-			logger.Debug("AddStatusSignal failed", zap.Error(err))
+			logger.Debug("AddStatusSignal failed", config.Error(err))
 		}
 	}
 
@@ -404,9 +403,9 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 			result, err := mergeChecker.Check(ctx, owner, repo, pr.Number)
 			if err != nil {
 				logger.Warn("Merge condition evaluation failed",
-					zap.Error(err),
-					zap.String("delivery_id", deliveryID),
-					zap.Int("pr_number", pr.Number),
+					config.Error(err),
+					config.String("delivery_id", deliveryID),
+					config.Int("pr_number", pr.Number),
 				)
 			} else if result.Mergeable {
 				autoMerge := deps.AutoMergeService
@@ -415,9 +414,9 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 					if mergeErr != nil {
 						// 予期しないエラー（通常はAutoMergeResultで返却される）
 						logger.Warn("Auto-merge attempt returned error",
-							zap.Error(mergeErr),
-							zap.String("delivery_id", deliveryID),
-							zap.Int("pr_number", pr.Number),
+							config.Error(mergeErr),
+							config.String("delivery_id", deliveryID),
+							config.Int("pr_number", pr.Number),
 						)
 						// Discord: notify merge failure (best-effort)
 						func() {
@@ -437,7 +436,7 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 							if i, err := repositories.NewIssueRepository().FindByID(*pr.IssueID); err == nil {
 								issue = i
 							} else {
-								logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+								logger.Warn("failed to load issue for merge failure notification", config.Error(err))
 							}
 						}
 
@@ -453,22 +452,22 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 						}()
 
 						logger.Warn("auto-merge failed",
-							zap.String("error_type", mergeRes.ErrorType),
-							zap.String("error_message", mergeRes.ErrorMessage),
-							zap.String("delivery_id", deliveryID),
-							zap.Int("pr_number", pr.Number),
+							config.String("error_type", mergeRes.ErrorType),
+							config.String("error_message", mergeRes.ErrorMessage),
+							config.String("delivery_id", deliveryID),
+							config.Int("pr_number", pr.Number),
 						)
 					} else {
 						logger.Info("Auto-merge succeeded",
-							zap.Bool("merged", mergeRes != nil && mergeRes.Merged),
-							zap.String("merge_sha", func() string {
+							config.Bool("merged", mergeRes != nil && mergeRes.Merged),
+							config.String("merge_sha", func() string {
 								if mergeRes != nil {
 									return mergeRes.MergeSHA
 								}
 								return ""
 							}()),
-							zap.String("delivery_id", deliveryID),
-							zap.Int("pr_number", pr.Number),
+							config.String("delivery_id", deliveryID),
+							config.Int("pr_number", pr.Number),
 						)
 						// Discord: notify merge success (best-effort)
 						func() {
@@ -483,15 +482,15 @@ func HandleStatusWithDeps(c *gin.Context, deps StatusDeps) {
 					}
 				} else {
 					logger.Info("Auto-merge service not configured; skipping merge attempt",
-						zap.Int("pr_number", pr.Number),
-						zap.String("delivery_id", deliveryID),
+						config.Int("pr_number", pr.Number),
+						config.String("delivery_id", deliveryID),
 					)
 				}
 			}
 		} else {
 			logger.Info("Merge condition checker not configured; skipping evaluation",
-				zap.Int("pr_number", pr.Number),
-				zap.String("delivery_id", deliveryID),
+				config.Int("pr_number", pr.Number),
+				config.String("delivery_id", deliveryID),
 			)
 		}
 	}

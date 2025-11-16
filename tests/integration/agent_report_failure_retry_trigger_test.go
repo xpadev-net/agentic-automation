@@ -17,7 +17,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -163,7 +162,7 @@ func createStartedRun(t *testing.T, db *gorm.DB, issueID int) *models.AgentRun {
 	return run
 }
 
-func buildRealRouter(db *gorm.DB, logger *zap.Logger) *gin.Engine {
+func buildRealRouter(db *gorm.DB, logger *config.AppLogger) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	// Inject test DB/logger into config used by real handler
 	config.SetDBForTesting(db)
@@ -182,8 +181,7 @@ func Test_AgentRunnerFailure_Report_RecordsAuditAndNoRetry(t *testing.T) {
 	db := setupDBFailureRetry(t)
 	defer teardownDBFailureRetry(db)
 
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
 
 	router := buildRealRouter(db, logger)
 	issue := createIssue(t, db)

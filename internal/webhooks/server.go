@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 const (
@@ -24,13 +23,13 @@ const (
 // Server represents the webhook server
 type Server struct {
 	router    *gin.Engine
-	logger    *zap.Logger
+	logger    *config.AppLogger
 	server    *http.Server
 	startTime time.Time
 }
 
 // setupRouter creates and configures the Gin router
-func setupRouter(logger *zap.Logger) *gin.Engine {
+func setupRouter(logger *config.AppLogger) *gin.Engine {
 	// Set Gin mode based on environment
 	env := config.GetEnv("ENV", "development")
 	if env == "production" {
@@ -47,7 +46,7 @@ func setupRouter(logger *zap.Logger) *gin.Engine {
 		handlers.SetAppGitHubClient(ghApp)
 	} else {
 		// Log error and continue; individual handlers will surface initialization errors
-		logger.Error("Failed to initialize GitHub App client at startup", zap.Error(err))
+		logger.Error("Failed to initialize GitHub App client at startup", config.Error(err))
 	}
 
 	// Apply global error handling middleware (before signature verification)
@@ -86,10 +85,10 @@ func handleHealth(c *gin.Context) {
 	db := config.GetDB()
 	sqlDB, err := db.DB()
 	if err != nil {
-		logger.Error("Failed to get database connection for health check", zap.Error(err))
+		logger.Error("Failed to get database connection for health check", config.Error(err))
 		dbStatus = "disconnected"
 	} else if err := sqlDB.Ping(); err != nil {
-		logger.Error("Database ping failed during health check", zap.Error(err))
+		logger.Error("Database ping failed during health check", config.Error(err))
 		dbStatus = "disconnected"
 	}
 
@@ -166,9 +165,9 @@ func handleGitHubWebhook(c *gin.Context) {
 
 		// Log the webhook event
 		logger.Info("Received unhandled GitHub webhook event",
-			zap.String("event_type", eventType),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("payload_size", len(payload.([]byte))),
+			config.String("event_type", eventType),
+			config.String("delivery_id", deliveryID),
+			config.Int("payload_size", len(payload.([]byte))),
 		)
 
 		// Return 200 OK to acknowledge receipt
@@ -219,10 +218,10 @@ func (s *Server) Start() error {
 		port = "3000"
 	}
 
-	s.logger.Info("Starting webhook server", zap.String("port", port))
+	s.logger.Info("Starting webhook server", config.String("port", port))
 
 	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		s.logger.Error("Failed to start server", zap.Error(err))
+		s.logger.Error("Failed to start server", config.Error(err))
 		return err
 	}
 
@@ -234,7 +233,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down webhook server")
 
 	if err := s.server.Shutdown(ctx); err != nil {
-		s.logger.Error("Error during server shutdown", zap.Error(err))
+		s.logger.Error("Error during server shutdown", config.Error(err))
 		return err
 	}
 

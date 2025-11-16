@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
 const signatureHeader = "X-Hub-Signature-256"
@@ -54,7 +53,7 @@ func VerifyWebhookSignature() gin.HandlerFunc {
 	secret, err := config.GetEnvRequired("GITHUB_WEBHOOK_SECRET")
 	if err != nil {
 		// This should be caught at server startup, but handle it here as well
-		logger.Fatal("GITHUB_WEBHOOK_SECRET environment variable is required", zap.Error(err))
+		logger.Fatal("GITHUB_WEBHOOK_SECRET environment variable is required", config.Error(err))
 	}
 
 	return func(c *gin.Context) {
@@ -69,7 +68,7 @@ func VerifyWebhookSignature() gin.HandlerFunc {
 		// Read request body
 		payload, err := c.GetRawData()
 		if err != nil {
-			logger.Warn("Failed to read request body for signature verification", zap.Error(err))
+			logger.Warn("Failed to read request body for signature verification", config.Error(err))
 			c.AbortWithStatusJSON(401, gin.H{"error": "failed to read request body"})
 			return
 		}

@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 	"context"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func newCheckRun(status, conclusion string) *github.CheckRun {
@@ -114,7 +114,7 @@ func (r *recordingSaver) CreateOrUpdate(ci *models.CIStatus) error {
 func TestAggregateAndStore_HeadSHAMatch_Persists(t *testing.T) {
 	gh := &fakeGH{headSHA: "abc"}
 	saver := &recordingSaver{}
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	agg := services.NewCIStatusAggregatorWithDeps(gh, saver, logger)
 	ci, err := agg.AggregateAndStore(context.Background(), "o", "r", 1, 10, 999, "abc")
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestAggregateAndStore_HeadSHAMatch_Persists(t *testing.T) {
 func TestAggregateAndStore_HeadSHAMismatch_Skips(t *testing.T) {
 	gh := &fakeGH{headSHA: "new"}
 	saver := &recordingSaver{}
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	agg := services.NewCIStatusAggregatorWithDeps(gh, saver, logger)
 	ci, err := agg.AggregateAndStore(context.Background(), "o", "r", 1, 10, 999, "old")
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestAggregateAndStore_Pending_StoredAsInProgress(t *testing.T) {
 	// queued run leads to pending aggregate
 	gh := &fakeGH{headSHA: "abc", runs: []*github.CheckRun{newCheckRun("queued", "")}}
 	saver := &recordingSaver{}
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	agg := services.NewCIStatusAggregatorWithDeps(gh, saver, logger)
 	ci, err := agg.AggregateAndStore(context.Background(), "o", "r", 1, 10, 999, "abc")
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestAggregateAndStore_Pending_StoredAsInProgress(t *testing.T) {
 func TestAggregateAndStore_Failure_StoredAsCompletedFailure(t *testing.T) {
 	gh := &fakeGH{headSHA: "abc", runs: []*github.CheckRun{newCheckRun("completed", "failure")}}
 	saver := &recordingSaver{}
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	agg := services.NewCIStatusAggregatorWithDeps(gh, saver, logger)
 	ci, err := agg.AggregateAndStore(context.Background(), "o", "r", 1, 10, 999, "abc")
 	require.NoError(t, err)

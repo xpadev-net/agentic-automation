@@ -4,11 +4,12 @@ import (
 	"context"
 	"testing"
 
+	"agentic-automation/internal/config"
 	appconfig "agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
-	"go.uber.org/zap"
+
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -23,7 +24,7 @@ func (f *fakeBuilder) BuildForIssue(ctx context.Context, owner, repo string, iss
 
 func TestDependencyValidator_AllClosed_Allows(t *testing.T) {
 
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	// initialize in-memory sqlite and inject into config
 	sdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
@@ -93,7 +94,7 @@ func TestDependencyValidator_AllClosed_Allows(t *testing.T) {
 
 func TestDependencyValidator_HasOpen_Block(t *testing.T) {
 
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	sdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)

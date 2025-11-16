@@ -9,8 +9,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	"go.uber.org/zap"
 )
 
 func main() {
@@ -18,18 +16,18 @@ func main() {
 	if err := config.InitConfig(); err != nil {
 		// If logger is not yet initialized, use standard log
 		logger := config.GetLogger()
-		logger.Fatal("Failed to initialize configuration", zap.Error(err))
+		logger.Fatal("Failed to initialize configuration", config.Error(err))
 	}
 
 	logger := config.GetLogger()
 
 	// Build information
-	logger.Info("Build info", zap.String("commit", version.Commit), zap.String("builtAt", version.BuiltAt))
+	logger.Info("Build info", config.String("commit", version.Commit), config.String("builtAt", version.BuiltAt))
 
 	// Create webhook server
 	server, err := webhooks.NewServer()
 	if err != nil {
-		logger.Fatal("Failed to create webhook server", zap.Error(err))
+		logger.Fatal("Failed to create webhook server", config.Error(err))
 	}
 
 	// Setup signal handling for graceful shutdown
@@ -51,9 +49,9 @@ func main() {
 	// Wait for interrupt signal or startup error
 	select {
 	case sig := <-sigChan:
-		logger.Info("Shutdown signal received", zap.String("signal", sig.String()))
+		logger.Info("Shutdown signal received", config.String("signal", sig.String()))
 	case err := <-errChan:
-		logger.Fatal("Server failed to start", zap.Error(err))
+		logger.Fatal("Server failed to start", config.Error(err))
 	}
 
 	// Create context with timeout for graceful shutdown
@@ -62,7 +60,7 @@ func main() {
 
 	// Shutdown server
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("Error during server shutdown", zap.Error(err))
+		logger.Error("Error during server shutdown", config.Error(err))
 		os.Exit(1)
 	}
 

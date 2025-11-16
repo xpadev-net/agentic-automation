@@ -10,9 +10,10 @@ import (
 	"time"
 
 	libclients "agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	libservices "agentic-automation/internal/services"
+
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 )
 
 // helper to create a GitHub client pointing to a test server
@@ -59,8 +60,8 @@ func TestDetect_NoConflict_Clean(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 1)
@@ -82,8 +83,8 @@ func TestDetect_HasConflict_Dirty(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 2)
@@ -105,8 +106,8 @@ func TestDetect_HasConflict_MergeableFalse(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 3)
@@ -131,8 +132,8 @@ func TestDetect_Unknown_WhenMergeableNilAfterRetries(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	// tighten context timeout to avoid long waits in CI
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -157,8 +158,8 @@ func TestDetect_NoConflict_StateBlocked(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 5)
@@ -180,8 +181,8 @@ func TestDetect_NoConflict_WhenMergeableFalse_Blocked(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 6)
@@ -203,8 +204,8 @@ func TestDetect_NoConflict_WhenMergeableFalse_Behind(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 7)
@@ -226,8 +227,8 @@ func TestDetect_NoConflict_WhenMergeableFalse_Draft(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 8)
@@ -249,8 +250,8 @@ func TestDetect_Unknown_WhenMergeableFalse_StateNil(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 9)
@@ -272,8 +273,8 @@ func TestDetect_Unknown_WhenMergeableFalse_StateUnknown(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 10)
@@ -295,8 +296,8 @@ func TestDetect_Unknown_WhenMergeableTrue_StateUnknown(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newGitHubClientForServer(t, srv)
-	wrapped := libclients.NewFromGitHub(ghc, zap.NewNop())
-	detector := libservices.NewMergeConflictDetector(wrapped, zap.NewNop())
+	wrapped := libclients.NewFromGitHub(ghc, config.NewNopLogger())
+	detector := libservices.NewMergeConflictDetector(wrapped, config.NewNopLogger())
 
 	ctx := context.Background()
 	status, err := detector.Detect(ctx, "o", "r", 11)

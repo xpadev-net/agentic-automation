@@ -26,7 +26,6 @@ import (
 	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -122,7 +121,7 @@ func (s *simpleIssueCtx) FormatPrompt(ic *services.IssueContext, userInstruction
 func TestIssueComment_BlockedDependencies_PreventsStart(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupIssueCommentDB(t)
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "sec")
@@ -211,7 +210,7 @@ func TestIssueComment_BlockedDependencies_CallsNotificationService(t *testing.T)
 	t.Skip("Skipping flaky dependency notification wiring test; covered by service tests")
 	gin.SetMode(gin.TestMode)
 	db := setupIssueCommentDB(t)
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "sec")
@@ -274,7 +273,7 @@ func TestIssueComment_BlockedDependencies_WithPR_CallsNotificationService(t *tes
 	t.Skip("Skipping flaky dependency notification wiring test; covered by service tests")
 	gin.SetMode(gin.TestMode)
 	db := setupIssueCommentDB(t)
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "sec")
@@ -362,7 +361,7 @@ func TestIssueComment_BlockedDependencies_NotificationFailure_StillReturnsError(
 	t.Skip("Skipping flaky dependency notification wiring test; covered by service tests")
 	gin.SetMode(gin.TestMode)
 	db := setupIssueCommentDB(t)
-	logger := zap.NewNop()
+	logger := config.NewNopLogger()
 	config.SetDBForTesting(db)
 	config.SetLoggerForTesting(logger)
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "sec")

@@ -14,7 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -46,7 +45,7 @@ type PullRequestReviewRepository struct {
 
 // PullRequestReviewDeps represents injectable dependencies for HandlePullRequestReview
 type PullRequestReviewDeps struct {
-	Logger                   *zap.Logger
+	Logger                   *config.AppLogger
 	GitHubClient             *clients.Client
 	CodexApprovalDetector    *services.CodexApprovalDetector
 	PullRequestRepository    *repositories.PullRequestRepository
@@ -73,7 +72,7 @@ func HandlePullRequestReview(c *gin.Context) {
 	if appGitHubClient == nil {
 		ghApp, err := clients.NewGitHubAppClient(logger)
 		if err != nil {
-			logger.Warn("GitHub App client not initialized", zap.Error(err))
+			logger.Warn("GitHub App client not initialized", config.Error(err))
 		} else {
 			appGitHubClient = ghApp
 		}
@@ -97,7 +96,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	deliveryID := c.GetHeader(deliveryHeader)
 	if deliveryID == "" {
 		logger.Warn("Missing X-GitHub-Delivery header",
-			zap.String("path", c.Request.URL.Path),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_MISSING_DELIVERY, "missing X-GitHub-Delivery header", nil))
 		return
@@ -107,8 +106,8 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	payloadData, exists := c.Get("webhook_payload")
 	if !exists {
 		logger.Error("Webhook payload not found in context",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_PAYLOAD_NOT_FOUND, "webhook payload not found in context", nil))
 		return
@@ -117,8 +116,8 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	payloadBytes, ok := payloadData.([]byte)
 	if !ok {
 		logger.Error("Invalid webhook payload type",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid webhook payload type", nil))
 		return
@@ -127,8 +126,8 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	var payload PullRequestReviewPayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		logger.Error("Failed to parse webhook payload",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
@@ -137,10 +136,10 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	// Step 4: Action 検証
 	if payload.Action != models.PullRequestReviewActionSubmitted {
 		logger.Info("Ignoring non-submitted action",
-			zap.String("action", payload.Action),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.String("action", payload.Action),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "ignored",
@@ -154,8 +153,8 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	repoParts := strings.Split(payload.Repository.FullName, "/")
 	if len(repoParts) != 2 {
 		logger.Error("Invalid repository full name format",
-			zap.String("full_name", payload.Repository.FullName),
-			zap.String("delivery_id", deliveryID),
+			config.String("full_name", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(errors.NewCodedError(errors.ERR_WEBHOOK_INVALID_PAYLOAD, "invalid repository full name format", nil))
 		return
@@ -176,9 +175,9 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 			// エラーを返さずにレビュー処理をスキップして成功を返す
 			// これにより、GitHubがwebhookをリトライしないようにする
 			logger.Info("PullRequest not found, ignoring review",
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_number", payload.PullRequest.Number),
-				zap.String("repo", payload.Repository.FullName),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_number", payload.PullRequest.Number),
+				config.String("repo", payload.Repository.FullName),
 			)
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "ignored",
@@ -188,10 +187,10 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 			return
 		}
 		logger.Error("Failed to find PullRequest record",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", payload.PullRequest.Number),
-			zap.String("repo", payload.Repository.FullName),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", payload.PullRequest.Number),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.Error(err)
 		return
@@ -203,7 +202,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	if githubClient == nil {
 		if appGitHubClient == nil {
 			logger.Error("GitHub App client not available",
-				zap.String("delivery_id", deliveryID),
+				config.String("delivery_id", deliveryID),
 			)
 			c.Error(errors.NewCodedError(errors.ERR_INTERNAL_SERVER_ERROR, "github client not provided", nil))
 			return
@@ -211,10 +210,10 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
 		if err != nil {
 			logger.Error("Failed to init per-repo GitHub client",
-				zap.Error(err),
-				zap.String("owner", owner),
-				zap.String("repo", repo),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.String("delivery_id", deliveryID),
 			)
 			c.Error(err)
 			return
@@ -227,9 +226,9 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	if githubClient != nil {
 		if prDetail, err := githubClient.GetPullRequest(ctx, owner, repo, payload.PullRequest.Number); err != nil {
 			logger.Warn("Failed to fetch pull request body, continuing without it",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_number", payload.PullRequest.Number),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_number", payload.PullRequest.Number),
 			)
 		} else if prDetail != nil && prDetail.Body != nil {
 			prBody = strings.TrimSpace(*prDetail.Body)
@@ -241,10 +240,10 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	reviewComments, err := githubClient.ListPullRequestCommentsForReview(ctx, owner, repo, payload.PullRequest.Number, reviewID)
 	if err != nil {
 		logger.Warn("Failed to fetch review comments, continuing with review body only",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int64("review_id", reviewID),
-			zap.Int("pr_number", payload.PullRequest.Number),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int64("review_id", reviewID),
+			config.Int("pr_number", payload.PullRequest.Number),
 		)
 		// Continue processing even if review comments fetch fails
 		reviewComments = []*github.PullRequestComment{}
@@ -280,12 +279,12 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	}
 
 	logger.Info("Review context built",
-		zap.String("delivery_id", deliveryID),
-		zap.Int64("review_id", reviewID),
-		zap.Int("pr_number", payload.PullRequest.Number),
-		zap.Int("review_comments_count", len(reviewComments)),
-		zap.Int("context_length", len(fullContext)),
-		zap.Int("pr_body_len", len(prBody)),
+		config.String("delivery_id", deliveryID),
+		config.Int64("review_id", reviewID),
+		config.Int("pr_number", payload.PullRequest.Number),
+		config.Int("review_comments_count", len(reviewComments)),
+		config.Int("context_length", len(fullContext)),
+		config.Int("pr_body_len", len(prBody)),
 	)
 
 	// Step 11: Codex approval 検出
@@ -301,10 +300,10 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 	)
 
 	logger.Info("Codex approval detection completed",
-		zap.Bool("approval_detected", approvalDetected),
-		zap.String("delivery_id", deliveryID),
-		zap.Int64("review_id", reviewID),
-		zap.String("reviewer", payload.Review.User.Login),
+		config.Bool("approval_detected", approvalDetected),
+		config.String("delivery_id", deliveryID),
+		config.Int64("review_id", reviewID),
+		config.String("reviewer", payload.Review.User.Login),
 	)
 
 	// Step 11: ReviewFeedback レコード作成/更新
@@ -321,33 +320,33 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		latest := list[0]
 		if err := reviewFeedbackRepo.UpdateToReceived(latest.ID, fullContext, approvalDetected, &reviewIDInt64); err != nil {
 			logger.Warn("Failed to update ReviewFeedback to received",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
-				zap.Int("feedback_id", latest.ID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
+				config.Int("feedback_id", latest.ID),
 			)
 		} else {
 			feedback = latest
 			logger.Info("ReviewFeedback updated to received",
-				zap.Int("feedback_id", latest.ID),
-				zap.Bool("approval_detected", approvalDetected),
-				zap.String("delivery_id", deliveryID),
+				config.Int("feedback_id", latest.ID),
+				config.Bool("approval_detected", approvalDetected),
+				config.String("delivery_id", deliveryID),
 			)
 		}
 	} else {
 		created, err := reviewFeedbackRepo.CreateReceivedReview(pr.ID, fullContext, approvalDetected, &reviewIDInt64)
 		if err != nil {
 			logger.Warn("Failed to create received ReviewFeedback",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
 			)
 		} else {
 			feedback = created
 			logger.Info("ReviewFeedback created as received",
-				zap.Int("feedback_id", created.ID),
-				zap.Bool("approval_detected", approvalDetected),
-				zap.String("delivery_id", deliveryID),
+				config.Int("feedback_id", created.ID),
+				config.Bool("approval_detected", approvalDetected),
+				config.String("delivery_id", deliveryID),
 			)
 		}
 	}
@@ -373,21 +372,21 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		res, err := checker.Check(ctx, owner, repo, pr.Number)
 		if err != nil {
 			logger.Error("merge condition check failed",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_number", pr.Number),
-				zap.String("repo", payload.Repository.FullName),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_number", pr.Number),
+				config.String("repo", payload.Repository.FullName),
 			)
 			c.Error(err)
 			return
 		}
 
 		logger.Info("merge condition evaluated",
-			zap.Bool("mergeable", res.Mergeable),
-			zap.String("ci_state", string(res.CIState)),
-			zap.String("conflict", string(res.Conflict)),
-			zap.Int("reasons_count", len(res.Reasons)),
-			zap.String("delivery_id", deliveryID),
+			config.Bool("mergeable", res.Mergeable),
+			config.String("ci_state", string(res.CIState)),
+			config.String("conflict", string(res.Conflict)),
+			config.Int("reasons_count", len(res.Reasons)),
+			config.String("delivery_id", deliveryID),
 		)
 
 		if res.Mergeable {
@@ -401,9 +400,9 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 
 			if am == nil {
 				logger.Info("auto-merge skipped (GitHub App client unavailable)",
-					zap.String("delivery_id", deliveryID),
-					zap.Int("pr_number", pr.Number),
-					zap.String("repo", payload.Repository.FullName),
+					config.String("delivery_id", deliveryID),
+					config.Int("pr_number", pr.Number),
+					config.String("repo", payload.Repository.FullName),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "mergeable_auto_merge_skipped",
@@ -416,8 +415,8 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 			mergeRes, mergeErr := am.AttemptAutoMerge(ctx, owner, repo, pr.Number)
 			if mergeErr != nil {
 				logger.Warn("auto-merge attempt returned error",
-					zap.Error(mergeErr),
-					zap.String("delivery_id", deliveryID),
+					config.Error(mergeErr),
+					config.String("delivery_id", deliveryID),
 				)
 				// Issue 情報取得（通知に使用）
 				var issue *models.Issue
@@ -425,7 +424,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 					if i, err := repositories.NewIssueRepository().FindByID(*pr.IssueID); err == nil {
 						issue = i
 					} else {
-						logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+						logger.Warn("failed to load issue for merge failure notification", config.Error(err))
 					}
 				}
 				// Discord: notify merge failure (best-effort)
@@ -454,7 +453,7 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 					if i, err := repositories.NewIssueRepository().FindByID(*pr.IssueID); err == nil {
 						issue = i
 					} else {
-						logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+						logger.Warn("failed to load issue for merge failure notification", config.Error(err))
 					}
 				}
 				// Discord: notify merge failure (best-effort)
@@ -480,9 +479,9 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 			// マージ成功
 			if mergeRes != nil && mergeRes.Merged {
 				logger.Info("Auto-merge succeeded",
-					zap.String("delivery_id", deliveryID),
-					zap.Int("pr_number", pr.Number),
-					zap.String("repo", payload.Repository.FullName),
+					config.String("delivery_id", deliveryID),
+					config.Int("pr_number", pr.Number),
+					config.String("repo", payload.Repository.FullName),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "merged",
@@ -527,10 +526,10 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 		)
 		if planErr != nil {
 			logger.Error("Failed to start plan creation from review body",
-				zap.Error(planErr),
-				zap.String("delivery_id", deliveryID),
-				zap.Int64("review_id", reviewID),
-				zap.Int("pr_number", payload.PullRequest.Number),
+				config.Error(planErr),
+				config.String("delivery_id", deliveryID),
+				config.Int64("review_id", reviewID),
+				config.Int("pr_number", payload.PullRequest.Number),
 			)
 			c.Error(planErr)
 			return
@@ -538,10 +537,10 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 
 		if planResult != nil {
 			logger.Info("Plan creation processing completed",
-				zap.String("status", planResult.Status),
-				zap.String("delivery_id", deliveryID),
-				zap.Int64("review_id", reviewID),
-				zap.Int("pr_number", payload.PullRequest.Number),
+				config.String("status", planResult.Status),
+				config.String("delivery_id", deliveryID),
+				config.Int64("review_id", reviewID),
+				config.Int("pr_number", payload.PullRequest.Number),
 			)
 		}
 	}

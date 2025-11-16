@@ -4,18 +4,16 @@ package services
 import (
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/utils"
-
-	"go.uber.org/zap"
 )
 
 // TriggerDetectionService detects trigger strings in GitHub issue comments.
 type TriggerDetectionService struct {
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 // NewTriggerDetectionService creates a new TriggerDetectionService instance.
 // If logger is nil, it uses config.GetLogger().
-func NewTriggerDetectionService(logger *zap.Logger) *TriggerDetectionService {
+func NewTriggerDetectionService(logger *config.AppLogger) *TriggerDetectionService {
 	if logger == nil {
 		logger = config.GetLogger()
 	}
@@ -41,9 +39,9 @@ func (s *TriggerDetectionService) DetectRunAgentTrigger(commentBody string) bool
 
 	// Log the detection result
 	s.logger.Info("Trigger detection result",
-		zap.Bool("trigger_detected", detected),
-		zap.String("comment_body_preview", preview),
-		zap.String("service", "trigger_detection"),
+		config.Bool("trigger_detected", detected),
+		config.String("comment_body_preview", preview),
+		config.String("service", "trigger_detection"),
 	)
 
 	return detected

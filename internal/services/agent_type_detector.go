@@ -8,8 +8,6 @@ import (
 
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
-
-	"go.uber.org/zap"
 )
 
 const (
@@ -29,12 +27,12 @@ const (
 
 // AgentTypeDetectorService detects agent type from Issue labels.
 type AgentTypeDetectorService struct {
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 // NewAgentTypeDetectorService creates a new AgentTypeDetectorService instance.
 // If logger is nil, it uses config.GetLogger().
-func NewAgentTypeDetectorService(logger *zap.Logger) *AgentTypeDetectorService {
+func NewAgentTypeDetectorService(logger *config.AppLogger) *AgentTypeDetectorService {
 	if logger == nil {
 		logger = config.GetLogger()
 	}
@@ -116,12 +114,12 @@ func (s *AgentTypeDetectorService) DetectAgentType(issue *models.Issue) string {
 				labelsPreview = labelsPreview[:100]
 			}
 			s.logger.Warn("Failed to parse issue labels JSON, falling back to environment variable",
-				zap.Error(err),
-				zap.String("labels_json", labelsPreview),
-				zap.Int("issue_id", issue.ID),
-				zap.String("repo", issue.Repo),
-				zap.Int("issue_number", issue.Number),
-				zap.String("service", "agent_type_detector"),
+				config.Error(err),
+				config.String("labels_json", labelsPreview),
+				config.Int("issue_id", issue.ID),
+				config.String("repo", issue.Repo),
+				config.Int("issue_number", issue.Number),
+				config.String("service", "agent_type_detector"),
 			)
 		} else {
 			// Search for agent label
@@ -137,13 +135,13 @@ func (s *AgentTypeDetectorService) DetectAgentType(issue *models.Issue) string {
 					}
 				}
 				s.logger.Info("Agent type detected from issue label",
-					zap.String("detection_source", "label"),
-					zap.String("detected_agent_type", agentType),
-					zap.String("matched_label", matchedLabel),
-					zap.Int("issue_id", issue.ID),
-					zap.String("repo", issue.Repo),
-					zap.Int("issue_number", issue.Number),
-					zap.String("service", "agent_type_detector"),
+					config.String("detection_source", "label"),
+					config.String("detected_agent_type", agentType),
+					config.String("matched_label", matchedLabel),
+					config.Int("issue_id", issue.ID),
+					config.String("repo", issue.Repo),
+					config.Int("issue_number", issue.Number),
+					config.String("service", "agent_type_detector"),
 				)
 				return agentType
 			}
@@ -154,12 +152,12 @@ func (s *AgentTypeDetectorService) DetectAgentType(issue *models.Issue) string {
 	envAgentType := config.GetEnv(EnvKeyAIAgentDefaultType, AgentTypeClaudeCode)
 	if isValidAgentType(envAgentType) {
 		s.logger.Info("Agent type detected from environment variable",
-			zap.String("detection_source", "env_var"),
-			zap.String("detected_agent_type", envAgentType),
-			zap.Int("issue_id", issue.ID),
-			zap.String("repo", issue.Repo),
-			zap.Int("issue_number", issue.Number),
-			zap.String("service", "agent_type_detector"),
+			config.String("detection_source", "env_var"),
+			config.String("detected_agent_type", envAgentType),
+			config.Int("issue_id", issue.ID),
+			config.String("repo", issue.Repo),
+			config.Int("issue_number", issue.Number),
+			config.String("service", "agent_type_detector"),
 		)
 		return envAgentType
 	}
@@ -167,24 +165,24 @@ func (s *AgentTypeDetectorService) DetectAgentType(issue *models.Issue) string {
 	// Log warning if environment variable has invalid value
 	if envAgentType != AgentTypeClaudeCode {
 		s.logger.Warn("Invalid agent type in environment variable, using default",
-			zap.String("invalid_env_value", envAgentType),
-			zap.String("env_key", EnvKeyAIAgentDefaultType),
-			zap.Int("issue_id", issue.ID),
-			zap.String("repo", issue.Repo),
-			zap.Int("issue_number", issue.Number),
-			zap.String("service", "agent_type_detector"),
+			config.String("invalid_env_value", envAgentType),
+			config.String("env_key", EnvKeyAIAgentDefaultType),
+			config.Int("issue_id", issue.ID),
+			config.String("repo", issue.Repo),
+			config.Int("issue_number", issue.Number),
+			config.String("service", "agent_type_detector"),
 		)
 	}
 
 	// Priority 3: Default
 	defaultAgentType := AgentTypeClaudeCode
 	s.logger.Info("Agent type using default value",
-		zap.String("detection_source", "default"),
-		zap.String("detected_agent_type", defaultAgentType),
-		zap.Int("issue_id", issue.ID),
-		zap.String("repo", issue.Repo),
-		zap.Int("issue_number", issue.Number),
-		zap.String("service", "agent_type_detector"),
+		config.String("detection_source", "default"),
+		config.String("detected_agent_type", defaultAgentType),
+		config.Int("issue_id", issue.ID),
+		config.String("repo", issue.Repo),
+		config.Int("issue_number", issue.Number),
+		config.String("service", "agent_type_detector"),
 	)
 	return defaultAgentType
 }

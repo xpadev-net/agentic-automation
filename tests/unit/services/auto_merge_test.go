@@ -11,11 +11,12 @@ import (
 	"time"
 
 	libclients "agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	libservices "agentic-automation/internal/services"
+
 	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 // installationResp is the response for installation endpoint
@@ -37,7 +38,7 @@ func newGitHubAppClientForServer(t *testing.T, srv *httptest.Server) *libclients
 	t.Setenv("GITHUB_APP_ID", "1")
 	t.Setenv("GITHUB_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nMIIB...test...\n-----END PRIVATE KEY-----\n")
 
-	appClient, err := libclients.NewGitHubAppClient(zap.NewNop())
+	appClient, err := libclients.NewGitHubAppClient(config.NewNopLogger())
 	require.NoError(t, err)
 
 	// Inject test server URL and HTTP client
@@ -144,7 +145,7 @@ func deleteRefHandler(t *testing.T, shouldSucceed bool) http.HandlerFunc {
 // ============================================================================
 
 func TestAttemptAutoMerge_InvalidInput_EmptyOwner(t *testing.T) {
-	service := libservices.NewAutoMergeService(nil, zap.NewNop())
+	service := libservices.NewAutoMergeService(nil, config.NewNopLogger())
 	result, err := service.AttemptAutoMerge(context.Background(), "", "repo", 1)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -152,7 +153,7 @@ func TestAttemptAutoMerge_InvalidInput_EmptyOwner(t *testing.T) {
 }
 
 func TestAttemptAutoMerge_InvalidInput_EmptyRepo(t *testing.T) {
-	service := libservices.NewAutoMergeService(nil, zap.NewNop())
+	service := libservices.NewAutoMergeService(nil, config.NewNopLogger())
 	result, err := service.AttemptAutoMerge(context.Background(), "owner", "", 1)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -160,7 +161,7 @@ func TestAttemptAutoMerge_InvalidInput_EmptyRepo(t *testing.T) {
 }
 
 func TestAttemptAutoMerge_InvalidInput_ZeroPRNumber(t *testing.T) {
-	service := libservices.NewAutoMergeService(nil, zap.NewNop())
+	service := libservices.NewAutoMergeService(nil, config.NewNopLogger())
 	result, err := service.AttemptAutoMerge(context.Background(), "owner", "repo", 0)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -168,7 +169,7 @@ func TestAttemptAutoMerge_InvalidInput_ZeroPRNumber(t *testing.T) {
 }
 
 func TestAttemptAutoMerge_InvalidInput_NegativePRNumber(t *testing.T) {
-	service := libservices.NewAutoMergeService(nil, zap.NewNop())
+	service := libservices.NewAutoMergeService(nil, config.NewNopLogger())
 	result, err := service.AttemptAutoMerge(context.Background(), "owner", "repo", -1)
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -293,7 +294,7 @@ func TestAttemptAutoMerge_Success(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -331,7 +332,7 @@ func TestAttemptAutoMerge_Conflict409(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -365,7 +366,7 @@ func TestAttemptAutoMerge_Unprocessable422(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -399,7 +400,7 @@ func TestAttemptAutoMerge_RateLimited429(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -433,7 +434,7 @@ func TestAttemptAutoMerge_ServerError500(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -467,7 +468,7 @@ func TestAttemptAutoMerge_OtherError(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -520,7 +521,7 @@ func TestAttemptAutoMerge_AlreadyMerged(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -575,7 +576,7 @@ func TestAttemptAutoMerge_BranchDeleted_Success(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -625,7 +626,7 @@ func TestAttemptAutoMerge_BranchDeleted_SkipFork(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -675,7 +676,7 @@ func TestAttemptAutoMerge_BranchDeleted_SkipMain(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -725,7 +726,7 @@ func TestAttemptAutoMerge_BranchDeleted_SkipMaster(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -768,7 +769,7 @@ func TestAttemptAutoMerge_BranchDeleted_GetPRFailed(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)
@@ -813,7 +814,7 @@ func TestAttemptAutoMerge_BranchDeleted_DeleteFailed(t *testing.T) {
 	defer srv.Close()
 
 	ghClient := newGitHubAppClientForServer(t, srv)
-	service := libservices.NewAutoMergeService(ghClient, zap.NewNop())
+	service := libservices.NewAutoMergeService(ghClient, config.NewNopLogger())
 
 	result, err := service.AttemptAutoMerge(context.Background(), owner, repo, prNumber)
 	require.NoError(t, err)

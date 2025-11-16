@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"agentic-automation/internal/config"
 	appconfig "agentic-automation/internal/config"
 
-	"go.uber.org/zap"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -46,7 +46,7 @@ type JobConfig struct {
 type KubernetesClient struct {
 	clientset kubernetes.Interface
 	namespace string
-	logger    *zap.Logger
+	logger    *config.AppLogger
 }
 
 const (
@@ -56,7 +56,7 @@ const (
 
 // getNamespaceFromKubeconfig reads the namespace from kubeconfig's current context
 // It handles both single file paths and multi-file KUBECONFIG (colon-separated paths)
-func getNamespaceFromKubeconfig(kubeConfigPath string, logger *zap.Logger) string {
+func getNamespaceFromKubeconfig(kubeConfigPath string, logger *config.AppLogger) string {
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 
 	// Only set ExplicitPath if:
@@ -68,16 +68,16 @@ func getNamespaceFromKubeconfig(kubeConfigPath string, logger *zap.Logger) strin
 		loadingRules.ExplicitPath = kubeConfigPath
 	}
 
-	config := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+	clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		loadingRules,
 		&clientcmd.ConfigOverrides{},
 	)
 
-	ns, _, err := config.Namespace()
+	ns, _, err := clientConfig.Namespace()
 	if err != nil {
 		logger.Debug("Failed to read namespace from kubeconfig",
-			zap.String("path", kubeConfigPath),
-			zap.Error(err),
+			config.String("path", kubeConfigPath),
+			config.Error(err),
 		)
 		return ""
 	}
@@ -92,8 +92,8 @@ func getNamespaceFromKubeconfig(kubeConfigPath string, logger *zap.Logger) strin
 			}
 		}
 		logger.Info("Using namespace from kubeconfig",
-			zap.String("namespace", ns),
-			zap.String("path", actualPath),
+			config.String("namespace", ns),
+			config.String("path", actualPath),
 		)
 		return ns
 	}
@@ -107,11 +107,11 @@ func getNamespaceFromKubeconfig(kubeConfigPath string, logger *zap.Logger) strin
 // 2. kubeconfig's current context namespace (when using kubeconfig)
 // 3. Service account namespace file (when running in-cluster)
 // 4. "default" (fallback)
-func getNamespace(kubeConfigPath string, logger *zap.Logger) string {
+func getNamespace(kubeConfigPath string, logger *config.AppLogger) string {
 	// 1. Check environment variable first
 	if ns := os.Getenv("KUBERNETES_NAMESPACE"); ns != "" {
 		logger.Info("Using namespace from environment variable",
-			zap.String("namespace", ns),
+			config.String("namespace", ns),
 		)
 		return ns
 	}
@@ -130,19 +130,19 @@ func getNamespace(kubeConfigPath string, logger *zap.Logger) string {
 		ns := strings.TrimSpace(string(nsBytes))
 		if ns != "" {
 			logger.Info("Using namespace from service account file",
-				zap.String("namespace", ns),
-				zap.String("file", ServiceAccountNamespaceFile),
+				config.String("namespace", ns),
+				config.String("file", ServiceAccountNamespaceFile),
 			)
 			return ns
 		}
 		logger.Warn("Service account namespace file is empty",
-			zap.String("file", ServiceAccountNamespaceFile),
+			config.String("file", ServiceAccountNamespaceFile),
 		)
 	} else if !os.IsNotExist(err) {
 		// Log error only if it's not "file not found" (which is expected when using kubeconfig)
 		logger.Warn("Failed to read service account namespace file",
-			zap.String("file", ServiceAccountNamespaceFile),
-			zap.Error(err),
+			config.String("file", ServiceAccountNamespaceFile),
+			config.Error(err),
 		)
 	}
 
@@ -157,7 +157,7 @@ func getNamespace(kubeConfigPath string, logger *zap.Logger) string {
 // 1. KUBE_CONFIG_PATH environment variable (explicit custom path)
 // 2. KUBECONFIG environment variable or ~/.kube/config (standard kubeconfig)
 // 3. rest.InClusterConfig() (when running inside a Pod)
-func NewKubernetesClient(logger *zap.Logger) (*KubernetesClient, error) {
+func NewKubernetesClient(logger *config.AppLogger) (*KubernetesClient, error) {
 	var err error
 	var k8sConfig *rest.Config
 	var kubeConfigPath string
@@ -165,7 +165,7 @@ func NewKubernetesClient(logger *zap.Logger) (*KubernetesClient, error) {
 	// 1. Check if KUBE_CONFIG_PATH is set (explicit custom path)
 	kubeConfigPath = appconfig.GetEnv("KUBE_CONFIG_PATH", "")
 	if kubeConfigPath != "" {
-		logger.Info("Using kubeconfig from KUBE_CONFIG_PATH", zap.String("path", kubeConfigPath))
+		logger.Info("Using kubeconfig from KUBE_CONFIG_PATH", config.String("path", kubeConfigPath))
 		k8sConfig, err = clientcmd.BuildConfigFromFlags("", kubeConfigPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build config from kubeconfig path: %w", err)
@@ -190,7 +190,7 @@ func NewKubernetesClient(logger *zap.Logger) (*KubernetesClient, error) {
 			if envKubeconfig := os.Getenv("KUBECONFIG"); envKubeconfig != "" {
 				actualPath = envKubeconfig
 			}
-			logger.Info("Using kubeconfig", zap.String("path", actualPath))
+			logger.Info("Using kubeconfig", config.String("path", actualPath))
 			kubeConfigPath = actualPath
 		}
 	}
@@ -222,7 +222,7 @@ func (c *KubernetesClient) GeneratePlanCreationJobName(agentRunID int, reviewFee
 }
 
 // buildEnvVars builds environment variables for the Job container
-func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
+func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{
 		// Kubernetes namespace - injected via Downward API
 		{
@@ -245,11 +245,11 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 		},
 		{
 			Name:  "AGENT_RUN_ID",
-			Value: strconv.Itoa(config.AgentRunID),
+			Value: strconv.Itoa(jobCfg.AgentRunID),
 		},
 		{
 			Name:  "AGENT_TYPE",
-			Value: config.AgentType,
+			Value: jobCfg.AgentType,
 		},
 		{
 			Name:  "WORKSPACE_DIR",
@@ -277,19 +277,19 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 		},
 		{
 			Name:  "RETRY_COUNT",
-			Value: strconv.Itoa(config.RetryCount),
+			Value: strconv.Itoa(jobCfg.RetryCount),
 		},
 		{
 			Name:  "CURSOR_ALLOW_WRITE",
-			Value: strconv.FormatBool(config.CursorAllowWrite),
+			Value: strconv.FormatBool(jobCfg.CursorAllowWrite),
 		},
 	}
 
 	// Add existing branch name if specified (for continuing work on existing PR)
-	if config.BranchName != "" {
+	if jobCfg.BranchName != "" {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "EXISTING_BRANCH_NAME",
-			Value: config.BranchName,
+			Value: jobCfg.BranchName,
 		})
 	}
 
@@ -363,7 +363,7 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 	}...)
 
 	// Add agent-specific API key based on agent type
-	if config.AgentType == "claude-code" {
+	if jobCfg.AgentType == "claude-code" {
 		envVars = append(envVars, corev1.EnvVar{
 			Name: "ANTHROPIC_API_KEY",
 			ValueFrom: &corev1.EnvVarSource{
@@ -375,7 +375,7 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 				},
 			},
 		})
-	} else if config.AgentType == "cursor-agent" {
+	} else if jobCfg.AgentType == "cursor-agent" {
 		envVars = append(envVars, corev1.EnvVar{
 			Name: "CURSOR_API_KEY",
 			ValueFrom: &corev1.EnvVarSource{
@@ -390,8 +390,8 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 	}
 
 	// Inject repository owner/name for token acquisition inside the pod
-	if config.Repo != "" {
-		parts := strings.SplitN(config.Repo, "/", 2)
+	if jobCfg.Repo != "" {
+		parts := strings.SplitN(jobCfg.Repo, "/", 2)
 		if len(parts) == 2 {
 			envVars = append(envVars,
 				corev1.EnvVar{Name: "REPO_OWNER", Value: parts[0]},
@@ -404,26 +404,26 @@ func (c *KubernetesClient) buildEnvVars(config *JobConfig) []corev1.EnvVar {
 }
 
 // BuildJobSpec builds a Kubernetes Job specification from JobConfig
-func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
+func (c *KubernetesClient) BuildJobSpec(jobCfg *JobConfig) *batchv1.JobSpec {
 	// Get service account name from environment variable
 	serviceAccountName := appconfig.GetEnv("KUBERNETES_SERVICE_ACCOUNT", "agent-automation")
 
 	// Build container args
-	mode := strings.TrimSpace(config.ExecutionMode)
+	mode := strings.TrimSpace(jobCfg.ExecutionMode)
 	if mode == "" {
 		mode = "normal"
 	}
 	args := []string{
-		fmt.Sprintf("--issue-id=%d", config.IssueID),
-		fmt.Sprintf("--repo=%s", config.Repo),
-		fmt.Sprintf("--prompt=%s", config.Prompt),
+		fmt.Sprintf("--issue-id=%d", jobCfg.IssueID),
+		fmt.Sprintf("--repo=%s", jobCfg.Repo),
+		fmt.Sprintf("--prompt=%s", jobCfg.Prompt),
 		fmt.Sprintf("--execution-mode=%s", mode),
 	}
-	if config.PreviousAttempts != "" {
-		args = append(args, fmt.Sprintf("--previous-attempts=%s", config.PreviousAttempts))
+	if jobCfg.PreviousAttempts != "" {
+		args = append(args, fmt.Sprintf("--previous-attempts=%s", jobCfg.PreviousAttempts))
 	}
-	if config.CILogs != "" {
-		args = append(args, fmt.Sprintf("--ci-logs=%s", config.CILogs))
+	if jobCfg.CILogs != "" {
+		args = append(args, fmt.Sprintf("--ci-logs=%s", jobCfg.CILogs))
 	}
 
 	// Default resource limits
@@ -440,8 +440,8 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 			ObjectMeta: metav1.ObjectMeta{
 				Labels: map[string]string{
 					"app":          "agent-runner",
-					"agent-run-id": strconv.Itoa(config.AgentRunID),
-					"issue-id":     strconv.Itoa(config.IssueID),
+					"agent-run-id": strconv.Itoa(jobCfg.AgentRunID),
+					"issue-id":     strconv.Itoa(jobCfg.IssueID),
 				},
 			},
 			Spec: corev1.PodSpec{
@@ -450,10 +450,10 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 				Containers: []corev1.Container{
 					{
 						Name:    "agent-runner",
-						Image:   config.AgentRunnerImage,
+						Image:   jobCfg.AgentRunnerImage,
 						Command: []string{"agent-runner"},
 						Args:    args,
-						Env:     c.buildEnvVars(config),
+						Env:     c.buildEnvVars(jobCfg),
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
 								corev1.ResourceMemory: parseQuantity(memoryRequest),
@@ -491,8 +491,8 @@ func (c *KubernetesClient) BuildJobSpec(config *JobConfig) *batchv1.JobSpec {
 
 	// Only set ActiveDeadlineSeconds if TimeoutMinutes is positive
 	// Kubernetes API validates this field as strictly positive integer
-	if config.TimeoutMinutes > 0 {
-		jobSpec.ActiveDeadlineSeconds = int64Ptr(int64(config.TimeoutMinutes * 60))
+	if jobCfg.TimeoutMinutes > 0 {
+		jobSpec.ActiveDeadlineSeconds = int64Ptr(int64(jobCfg.TimeoutMinutes * 60))
 	}
 
 	return jobSpec
@@ -534,17 +534,17 @@ func (c *KubernetesClient) GetOperatorPod(ctx context.Context) (*corev1.Pod, err
 	pod, err := c.clientset.CoreV1().Pods(c.namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		c.logger.Error("Failed to get Operator Pod",
-			zap.String("pod_name", podName),
-			zap.String("namespace", c.namespace),
-			zap.Error(err),
+			config.String("pod_name", podName),
+			config.String("namespace", c.namespace),
+			config.Error(err),
 		)
 		return nil, fmt.Errorf("failed to get operator pod %s: %w", podName, err)
 	}
 
 	c.logger.Info("Retrieved Operator Pod information",
-		zap.String("pod_name", podName),
-		zap.String("namespace", c.namespace),
-		zap.String("uid", string(pod.UID)),
+		config.String("pod_name", podName),
+		config.String("namespace", c.namespace),
+		config.String("uid", string(pod.UID)),
 	)
 
 	return pod, nil
@@ -565,15 +565,15 @@ func (c *KubernetesClient) GetOwnerReferenceFromPod(ctx context.Context, pod *co
 			_, err := c.clientset.AppsV1().Deployments(c.namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
 			if err != nil {
 				c.logger.Warn("Deployment owner reference found but deployment does not exist",
-					zap.String("deployment", ownerRef.Name),
-					zap.Error(err),
+					config.String("deployment", ownerRef.Name),
+					config.Error(err),
 				)
 				continue
 			}
 
 			c.logger.Info("Using Deployment as OwnerReference",
-				zap.String("deployment", ownerRef.Name),
-				zap.String("uid", string(ownerRef.UID)),
+				config.String("deployment", ownerRef.Name),
+				config.String("uid", string(ownerRef.UID)),
 			)
 
 			return &ownerRef, nil
@@ -584,15 +584,15 @@ func (c *KubernetesClient) GetOwnerReferenceFromPod(ctx context.Context, pod *co
 			_, err := c.clientset.AppsV1().StatefulSets(c.namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
 			if err != nil {
 				c.logger.Warn("StatefulSet owner reference found but statefulset does not exist",
-					zap.String("statefulset", ownerRef.Name),
-					zap.Error(err),
+					config.String("statefulset", ownerRef.Name),
+					config.Error(err),
 				)
 				continue
 			}
 
 			c.logger.Info("Using StatefulSet as OwnerReference",
-				zap.String("statefulset", ownerRef.Name),
-				zap.String("uid", string(ownerRef.UID)),
+				config.String("statefulset", ownerRef.Name),
+				config.String("uid", string(ownerRef.UID)),
 			)
 
 			return &ownerRef, nil
@@ -603,15 +603,15 @@ func (c *KubernetesClient) GetOwnerReferenceFromPod(ctx context.Context, pod *co
 			_, err := c.clientset.AppsV1().ReplicaSets(c.namespace).Get(ctx, ownerRef.Name, metav1.GetOptions{})
 			if err != nil {
 				c.logger.Warn("ReplicaSet owner reference found but replicaset does not exist",
-					zap.String("replicaset", ownerRef.Name),
-					zap.Error(err),
+					config.String("replicaset", ownerRef.Name),
+					config.Error(err),
 				)
 				continue
 			}
 
 			c.logger.Info("Using ReplicaSet as OwnerReference",
-				zap.String("replicaset", ownerRef.Name),
-				zap.String("uid", string(ownerRef.UID)),
+				config.String("replicaset", ownerRef.Name),
+				config.String("uid", string(ownerRef.UID)),
 			)
 
 			return &ownerRef, nil
@@ -620,8 +620,8 @@ func (c *KubernetesClient) GetOwnerReferenceFromPod(ctx context.Context, pod *co
 
 	// No suitable OwnerReference found, use Pod itself
 	c.logger.Info("No suitable OwnerReference found, using Pod itself",
-		zap.String("pod_name", pod.Name),
-		zap.String("pod_uid", string(pod.UID)),
+		config.String("pod_name", pod.Name),
+		config.String("pod_uid", string(pod.UID)),
 	)
 
 	return &metav1.OwnerReference{
@@ -639,8 +639,8 @@ func boolPtr(b bool) *bool {
 }
 
 // CreateJob creates a Kubernetes Job
-func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config *JobConfig) (*batchv1.Job, error) {
-	jobSpec := c.BuildJobSpec(config)
+func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, jobCfg *JobConfig) (*batchv1.Job, error) {
+	jobSpec := c.BuildJobSpec(jobCfg)
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -648,8 +648,8 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 			Namespace: c.namespace,
 			Labels: map[string]string{
 				"app":          "agent-runner",
-				"agent-run-id": strconv.Itoa(config.AgentRunID),
-				"issue-id":     strconv.Itoa(config.IssueID),
+				"agent-run-id": strconv.Itoa(jobCfg.AgentRunID),
+				"issue-id":     strconv.Itoa(jobCfg.IssueID),
 			},
 		},
 		Spec: *jobSpec,
@@ -666,8 +666,8 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 
 	const maxInlineContentSize = 900 * 1024
 
-	if config.ExecutionMode == "plan_creation" {
-		reviewContent := strings.TrimSpace(config.ReviewFeedbackContent)
+	if jobCfg.ExecutionMode == "plan_creation" {
+		reviewContent := strings.TrimSpace(jobCfg.ReviewFeedbackContent)
 		if reviewContent != "" {
 			if len(reviewContent) > maxInlineContentSize {
 				configMapName, err := c.createConfigMapForReviewContent(ctx, jobName, reviewContent)
@@ -702,20 +702,20 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 		}
 	}
 
-	if config.ExecutionMode == "plan_execution" {
-		planContent := strings.TrimSpace(config.PlanContent)
+	if jobCfg.ExecutionMode == "plan_execution" {
+		planContent := strings.TrimSpace(jobCfg.PlanContent)
 		c.logger.Info("Processing plan content for plan_execution mode",
-			zap.String("job_name", jobName),
-			zap.Int("plan_content_length", len(config.PlanContent)),
-			zap.Int("plan_content_length_trimmed", len(planContent)),
-			zap.Bool("plan_content_empty", planContent == ""),
+			config.String("job_name", jobName),
+			config.Int("plan_content_length", len(jobCfg.PlanContent)),
+			config.Int("plan_content_length_trimmed", len(planContent)),
+			config.Bool("plan_content_empty", planContent == ""),
 		)
 		if planContent != "" {
 			if len(planContent) > maxInlineContentSize {
 				c.logger.Info("Plan content exceeds max inline size, using ConfigMap",
-					zap.String("job_name", jobName),
-					zap.Int("plan_content_length", len(planContent)),
-					zap.Int("max_inline_size", maxInlineContentSize),
+					config.String("job_name", jobName),
+					config.Int("plan_content_length", len(planContent)),
+					config.Int("max_inline_size", maxInlineContentSize),
 				)
 				configMapName, err := c.createConfigMapForPlanContent(ctx, jobName, planContent)
 				if err != nil {
@@ -741,9 +741,9 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 					Value: "/config/plan/plan_content.txt",
 				})
 				c.logger.Info("Plan content environment variable set (file)",
-					zap.String("job_name", jobName),
-					zap.String("env_var", "PLAN_CONTENT_FILE"),
-					zap.String("value", "/config/plan/plan_content.txt"),
+					config.String("job_name", jobName),
+					config.String("env_var", "PLAN_CONTENT_FILE"),
+					config.String("value", "/config/plan/plan_content.txt"),
 				)
 			} else {
 				env = append(env, corev1.EnvVar{
@@ -751,15 +751,15 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 					Value: planContent,
 				})
 				c.logger.Info("Plan content environment variable set (inline)",
-					zap.String("job_name", jobName),
-					zap.String("env_var", "PLAN_CONTENT"),
-					zap.Int("value_length", len(planContent)),
+					config.String("job_name", jobName),
+					config.String("env_var", "PLAN_CONTENT"),
+					config.Int("value_length", len(planContent)),
 				)
 			}
 		} else {
 			c.logger.Warn("Plan content is empty for plan_execution mode",
-				zap.String("job_name", jobName),
-				zap.Int("original_length", len(config.PlanContent)),
+				config.String("job_name", jobName),
+				config.Int("original_length", len(jobCfg.PlanContent)),
 			)
 		}
 	}
@@ -774,8 +774,8 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 		// Log warning but continue without OwnerReference
 		// This is not a fatal error - the Job can still be created
 		c.logger.Warn("Failed to get Operator Pod for OwnerReference, creating Job without OwnerReference",
-			zap.String("job_name", jobName),
-			zap.Error(err),
+			config.String("job_name", jobName),
+			config.Error(err),
 		)
 	} else {
 		// Get OwnerReference from Operator Pod
@@ -783,39 +783,39 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, config
 		if err != nil {
 			// Log warning but continue without OwnerReference
 			c.logger.Warn("Failed to get OwnerReference from Operator Pod, creating Job without OwnerReference",
-				zap.String("job_name", jobName),
-				zap.Error(err),
+				config.String("job_name", jobName),
+				config.Error(err),
 			)
 		} else {
 			// Set OwnerReference on Job
 			job.OwnerReferences = []metav1.OwnerReference{*ownerRef}
 			c.logger.Info("Set OwnerReference on Job",
-				zap.String("job_name", jobName),
-				zap.String("owner_kind", ownerRef.Kind),
-				zap.String("owner_name", ownerRef.Name),
-				zap.String("owner_uid", string(ownerRef.UID)),
+				config.String("job_name", jobName),
+				config.String("owner_kind", ownerRef.Kind),
+				config.String("owner_name", ownerRef.Name),
+				config.String("owner_uid", string(ownerRef.UID)),
 			)
 		}
 	}
 
 	c.logger.Info("Creating Kubernetes Job",
-		zap.String("name", jobName),
-		zap.String("namespace", c.namespace),
-		zap.Int("agentRunID", config.AgentRunID),
+		config.String("name", jobName),
+		config.String("namespace", c.namespace),
+		config.Int("agentRunID", jobCfg.AgentRunID),
 	)
 
 	createdJob, err := c.clientset.BatchV1().Jobs(c.namespace).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		c.logger.Error("Failed to create Job",
-			zap.String("name", jobName),
-			zap.Error(err),
+			config.String("name", jobName),
+			config.Error(err),
 		)
 		return nil, fmt.Errorf("failed to create job: %w", err)
 	}
 
 	c.logger.Info("Job created successfully",
-		zap.String("name", jobName),
-		zap.String("uid", string(createdJob.UID)),
+		config.String("name", jobName),
+		config.String("uid", string(createdJob.UID)),
 	)
 
 	return createdJob, nil
@@ -835,8 +835,8 @@ func (c *KubernetesClient) createConfigMapForReviewContent(ctx context.Context, 
 
 	if _, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Create(ctx, configMap, metav1.CreateOptions{}); err != nil {
 		c.logger.Error("Failed to create review content ConfigMap",
-			zap.String("configmap", configMapName),
-			zap.Error(err),
+			config.String("configmap", configMapName),
+			config.Error(err),
 		)
 		return "", err
 	}
@@ -858,8 +858,8 @@ func (c *KubernetesClient) createConfigMapForPlanContent(ctx context.Context, jo
 
 	if _, err := c.clientset.CoreV1().ConfigMaps(c.namespace).Create(ctx, configMap, metav1.CreateOptions{}); err != nil {
 		c.logger.Error("Failed to create plan content ConfigMap",
-			zap.String("configmap", configMapName),
-			zap.Error(err),
+			config.String("configmap", configMapName),
+			config.Error(err),
 		)
 		return "", err
 	}
@@ -947,8 +947,8 @@ func (c *KubernetesClient) IsJobFailed(ctx context.Context, jobName string) (boo
 // DeleteJob deletes a Kubernetes Job
 func (c *KubernetesClient) DeleteJob(ctx context.Context, jobName string) error {
 	c.logger.Info("Deleting Kubernetes Job",
-		zap.String("name", jobName),
-		zap.String("namespace", c.namespace),
+		config.String("name", jobName),
+		config.String("namespace", c.namespace),
 	)
 
 	propagationPolicy := metav1.DeletePropagationForeground
@@ -958,19 +958,19 @@ func (c *KubernetesClient) DeleteJob(ctx context.Context, jobName string) error 
 	if err != nil {
 		if errors.IsNotFound(err) {
 			c.logger.Warn("Job not found during deletion",
-				zap.String("name", jobName),
+				config.String("name", jobName),
 			)
 			return nil // Not an error if already deleted
 		}
 		c.logger.Error("Failed to delete Job",
-			zap.String("name", jobName),
-			zap.Error(err),
+			config.String("name", jobName),
+			config.Error(err),
 		)
 		return fmt.Errorf("failed to delete job: %w", err)
 	}
 
 	c.logger.Info("Job deleted successfully",
-		zap.String("name", jobName),
+		config.String("name", jobName),
 	)
 
 	return nil
@@ -993,8 +993,8 @@ func (c *KubernetesClient) WaitForJobDeletion(ctx context.Context, jobName strin
 		case <-ticker.C:
 			if time.Now().After(deadline) {
 				c.logger.Warn("Job deletion wait timeout",
-					zap.String("job_name", jobName),
-					zap.Duration("timeout", timeout),
+					config.String("job_name", jobName),
+					config.Duration("timeout", timeout),
 				)
 				return fmt.Errorf("job deletion wait timeout: %s", jobName)
 			}
@@ -1004,14 +1004,14 @@ func (c *KubernetesClient) WaitForJobDeletion(ctx context.Context, jobName strin
 				if errors.IsNotFound(err) {
 					// Job削除完了
 					c.logger.Info("Job deletion confirmed",
-						zap.String("job_name", jobName),
+						config.String("job_name", jobName),
 					)
 					return nil
 				}
 				// その他のエラーは無視して継続（一時的なAPIエラーの可能性）
 				c.logger.Debug("Error checking job existence during deletion wait",
-					zap.String("job_name", jobName),
-					zap.Error(err),
+					config.String("job_name", jobName),
+					config.Error(err),
 				)
 			}
 		}
@@ -1097,8 +1097,8 @@ func (c *KubernetesClient) GetActiveJobsCount(ctx context.Context, labelSelector
 		status, err := c.GetJobStatus(ctx, job.Name)
 		if err != nil {
 			c.logger.Warn("Failed to get job status for count",
-				zap.String("job", job.Name),
-				zap.Error(err),
+				config.String("job", job.Name),
+				config.Error(err),
 			)
 			continue
 		}

@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 	"context"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
 )
 
 // mockReviewFeedbackRepository is a mock implementation of ReviewFeedbackRepository for testing
@@ -50,7 +50,7 @@ func TestNewFeedbackAggregator(t *testing.T) {
 	})
 
 	t.Run("valid arguments", func(t *testing.T) {
-		logger := zaptest.NewLogger(t)
+		logger := config.NewNopLogger()
 		repo := newMockReviewFeedbackRepository()
 		aggregator := services.NewFeedbackAggregator(repo, logger)
 		require.NotNil(t, aggregator)
@@ -60,7 +60,7 @@ func TestNewFeedbackAggregator(t *testing.T) {
 // TestFeedbackAggregator_AggregateFeedback tests the main aggregation method
 func TestFeedbackAggregator_AggregateFeedback(t *testing.T) {
 	ctx := context.Background()
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 
 	t.Run("both review and CI failure exist", func(t *testing.T) {
 		repo := newMockReviewFeedbackRepository()
@@ -1093,7 +1093,7 @@ func TestFeedbackAggregator_AggregateFeedback(t *testing.T) {
 // Since the function is not exported, we test it through the public API
 func TestCombineReviewComments_Indirect(t *testing.T) {
 	ctx := context.Background()
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 
 	t.Run("multiple reviews are combined", func(t *testing.T) {
 		repo := newMockReviewFeedbackRepository()
@@ -1187,7 +1187,7 @@ func TestCombineReviewComments_Indirect(t *testing.T) {
 // Note: This tests the function indirectly through AggregateFeedback
 func TestBuildErrorMessage_Indirect(t *testing.T) {
 	ctx := context.Background()
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 
 	t.Run("review only", func(t *testing.T) {
 		repo := newMockReviewFeedbackRepository()

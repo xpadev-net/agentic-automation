@@ -13,10 +13,11 @@ import (
 	"time"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
+
 	"github.com/google/go-github/v76/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
 )
 
 // --- Helpers ---
@@ -68,13 +69,13 @@ func newWrappedGitHubClient(t *testing.T, base string) *clients.Client {
 	u, err := url.Parse(base)
 	require.NoError(t, err)
 	gh.BaseURL = u
-	return clients.NewFromGitHub(gh, zaptest.NewLogger(t))
+	return clients.NewFromGitHub(gh, config.NewNopLogger())
 }
 
 // --- Constructor tests ---
 
 func TestNewIssueDependencyFetcher_Success(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	svc := NewIssueDependencyFetcher(githubClient, logger)
 	require.NotNil(t, svc)
@@ -87,7 +88,7 @@ func TestNewIssueDependencyFetcher_NilLogger(t *testing.T) {
 }
 
 func TestNewIssueDependencyFetcher_PanicOnNilClient(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	assert.Panics(t, func() { NewIssueDependencyFetcher(nil, logger) })
 }
 
@@ -138,7 +139,7 @@ func TestListBlockedBy_SinglePage_Success(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newWrappedGitHubClient(t, srv.URL)
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	svc := NewIssueDependencyFetcher(ghc, logger)
 
 	ctx := context.Background()
@@ -204,7 +205,7 @@ func TestListBlocking_Pagination_Success(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newWrappedGitHubClient(t, srv.URL)
-	svc := NewIssueDependencyFetcher(ghc, zaptest.NewLogger(t))
+	svc := NewIssueDependencyFetcher(ghc, config.NewNopLogger())
 
 	ctx := context.Background()
 	res, err := svc.ListBlocking(ctx, "o", "r", 1)
@@ -230,7 +231,7 @@ func TestListBlocking_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newWrappedGitHubClient(t, srv.URL)
-	svc := NewIssueDependencyFetcher(ghc, zaptest.NewLogger(t))
+	svc := NewIssueDependencyFetcher(ghc, config.NewNopLogger())
 
 	ctx := context.Background()
 	_, err := svc.ListBlocking(ctx, "o", "r", 1)
@@ -247,7 +248,7 @@ func TestListBlocking_InvalidJSON(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newWrappedGitHubClient(t, srv.URL)
-	svc := NewIssueDependencyFetcher(ghc, zaptest.NewLogger(t))
+	svc := NewIssueDependencyFetcher(ghc, config.NewNopLogger())
 
 	ctx := context.Background()
 	_, err := svc.ListBlocking(ctx, "o", "r", 1)
@@ -265,7 +266,7 @@ func TestListBlocking_ContextTimeout(t *testing.T) {
 	defer srv.Close()
 
 	ghc := newWrappedGitHubClient(t, srv.URL)
-	svc := NewIssueDependencyFetcher(ghc, zaptest.NewLogger(t))
+	svc := NewIssueDependencyFetcher(ghc, config.NewNopLogger())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()

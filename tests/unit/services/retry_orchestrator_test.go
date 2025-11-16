@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 	"context"
@@ -11,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
 	batchv1 "k8s.io/api/batch/v1"
 )
 
@@ -116,7 +116,7 @@ func (m *mockKubernetesJobService) CreateJobForPlanExecution(ctx context.Context
 // We use real instances in tests, full integration tests are in tests/integration/
 
 func TestNewRetryOrchestrator(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
 
@@ -177,7 +177,7 @@ func TestNewRetryOrchestrator(t *testing.T) {
 }
 
 func TestRetryOrchestrator_ShouldRetry(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
 
@@ -240,7 +240,7 @@ func TestRetryOrchestrator_TriggerRetry_Skipped(t *testing.T) {
 }
 
 func TestRetryOrchestrator_HandleMaxRetriesExceeded(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{} // Dummy client for IssueContextService
 	issueContextService := services.NewIssueContextService(githubClient, logger)
 
@@ -301,7 +301,7 @@ func TestRetryOrchestrator_HandleMaxRetriesExceeded(t *testing.T) {
 }
 
 func TestRetryOrchestrator_IncrementRetryCount(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	githubClient := &clients.Client{}
 	issueContextService := services.NewIssueContextService(githubClient, logger)
 	ctx := context.Background()
@@ -493,7 +493,7 @@ func TestRetryOrchestrator_IncrementRetryCount(t *testing.T) {
 }
 
 func TestRetryOrchestrator_IsMaxRetriesReached(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
 	githubClient := &clients.Client{}
@@ -543,7 +543,7 @@ func TestRetryOrchestrator_IsMaxRetriesReached(t *testing.T) {
 }
 
 func TestRetryOrchestrator_GetRemainingRetries(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
 	githubClient := &clients.Client{}
@@ -602,7 +602,7 @@ func TestRetryOrchestrator_GetRemainingRetries(t *testing.T) {
 }
 
 func TestRetryOrchestrator_ValidateRetryCount(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
 	githubClient := &clients.Client{}
@@ -663,7 +663,7 @@ func TestRetryOrchestrator_ValidateRetryCount(t *testing.T) {
 }
 
 func TestRetryOrchestrator_GetRetryCount(t *testing.T) {
-	logger := zaptest.NewLogger(t)
+	logger := config.NewNopLogger()
 	agentRunRepo := new(mockAgentRunRepository)
 	jobService := new(mockKubernetesJobService)
 	githubClient := &clients.Client{}

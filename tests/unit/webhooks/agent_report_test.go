@@ -17,7 +17,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/datatypes"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -124,7 +123,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 }
 
 // setupTestRouter creates a Gin router with Bearer token middleware
-func setupTestRouter(db *gorm.DB, logger *zap.Logger) *gin.Engine {
+func setupTestRouter(db *gorm.DB, logger *config.AppLogger) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
@@ -229,8 +228,7 @@ func setupTest(t *testing.T) (*gorm.DB, *gin.Engine) {
 	db.Exec("DELETE FROM agent_runs")
 
 	// Initialize logger for testing
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+	logger := config.NewNopLogger()
 
 	// Setup router with middleware
 	router := setupTestRouter(db, logger)

@@ -9,8 +9,6 @@ import (
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
-
-	"go.uber.org/zap"
 )
 
 // previousAttempt represents a previous retry attempt in agent-runner format
@@ -38,7 +36,7 @@ type ReviewFeedbackRepositoryInterface interface {
 // FeedbackAggregator aggregates review feedback and CI failure results
 type FeedbackAggregator struct {
 	reviewFeedbackRepo ReviewFeedbackRepositoryInterface
-	logger             *zap.Logger
+	logger             *config.AppLogger
 }
 
 // NewFeedbackAggregator creates a new FeedbackAggregator instance
@@ -48,7 +46,7 @@ type FeedbackAggregator struct {
 //
 // Returns:
 //   - *FeedbackAggregator: Initialized aggregator
-func NewFeedbackAggregator(reviewFeedbackRepo ReviewFeedbackRepositoryInterface, logger *zap.Logger) *FeedbackAggregator {
+func NewFeedbackAggregator(reviewFeedbackRepo ReviewFeedbackRepositoryInterface, logger *config.AppLogger) *FeedbackAggregator {
 	if reviewFeedbackRepo == nil {
 		reviewFeedbackRepo = repositories.NewReviewFeedbackRepository()
 	}
@@ -150,19 +148,19 @@ func (a *FeedbackAggregator) AggregateFeedback(ctx context.Context, prID int, ci
 
 	// Log aggregation start
 	a.logger.Info("Starting feedback aggregation",
-		zap.Int("pr_id", prID),
-		zap.Int("retry_count", retryCount),
-		zap.Bool("has_ci_failure", ciResult != nil),
-		zap.String("service", "feedback_aggregator"),
+		config.Int("pr_id", prID),
+		config.Int("retry_count", retryCount),
+		config.Bool("has_ci_failure", ciResult != nil),
+		config.String("service", "feedback_aggregator"),
 	)
 
 	// Get all review feedbacks for PR
 	allFeedbacks, err := a.reviewFeedbackRepo.FindByPRID(prID)
 	if err != nil {
 		a.logger.Error("Failed to aggregate feedback",
-			zap.Int("pr_id", prID),
-			zap.Error(err),
-			zap.String("service", "feedback_aggregator"),
+			config.Int("pr_id", prID),
+			config.Error(err),
+			config.String("service", "feedback_aggregator"),
 		)
 		return nil, fmt.Errorf("failed to get review feedbacks: %w", err)
 	}
@@ -183,10 +181,10 @@ func (a *FeedbackAggregator) AggregateFeedback(ctx context.Context, prID int, ci
 
 	// Log feedback retrieval
 	a.logger.Debug("Review feedbacks retrieved",
-		zap.Int("pr_id", prID),
-		zap.Int("total_feedbacks", len(allFeedbacks)),
-		zap.Int("filtered_feedbacks", len(filteredFeedbacks)),
-		zap.String("service", "feedback_aggregator"),
+		config.Int("pr_id", prID),
+		config.Int("total_feedbacks", len(allFeedbacks)),
+		config.Int("filtered_feedbacks", len(filteredFeedbacks)),
+		config.String("service", "feedback_aggregator"),
 	)
 
 	// Combine review comments
@@ -221,9 +219,9 @@ func (a *FeedbackAggregator) AggregateFeedback(ctx context.Context, prID int, ci
 	previousAttemptsJSON, err := json.Marshal(attempts)
 	if err != nil {
 		a.logger.Error("Failed to aggregate feedback",
-			zap.Int("pr_id", prID),
-			zap.Error(err),
-			zap.String("service", "feedback_aggregator"),
+			config.Int("pr_id", prID),
+			config.Error(err),
+			config.String("service", "feedback_aggregator"),
 		)
 		return nil, fmt.Errorf("failed to marshal previous attempts: %w", err)
 	}
@@ -237,12 +235,12 @@ func (a *FeedbackAggregator) AggregateFeedback(ctx context.Context, prID int, ci
 
 	// Log aggregation completion
 	a.logger.Info("Feedback aggregation completed",
-		zap.Int("pr_id", prID),
-		zap.Bool("has_review_feedback", result.HasReviewFeedback),
-		zap.Bool("has_ci_failure", result.HasCIFailure),
-		zap.Int("previous_attempts_length", len(previousAttemptsJSON)),
-		zap.Int("ci_logs_length", len(result.CILogs)),
-		zap.String("service", "feedback_aggregator"),
+		config.Int("pr_id", prID),
+		config.Bool("has_review_feedback", result.HasReviewFeedback),
+		config.Bool("has_ci_failure", result.HasCIFailure),
+		config.Int("previous_attempts_length", len(previousAttemptsJSON)),
+		config.Int("ci_logs_length", len(result.CILogs)),
+		config.String("service", "feedback_aggregator"),
 	)
 
 	return result, nil

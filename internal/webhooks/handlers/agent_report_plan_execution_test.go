@@ -13,7 +13,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -26,7 +25,7 @@ func setupPlanExecutionTestFixtures(t *testing.T) (*gorm.DB, *models.AgentRun, *
 	require.NoError(t, err)
 
 	config.SetDBForTesting(db)
-	config.SetLoggerForTesting(zap.NewNop())
+	config.SetLoggerForTesting(config.NewNopLogger())
 	t.Cleanup(func() {
 		config.ResetDBForTesting()
 		config.ResetLoggerForTesting()

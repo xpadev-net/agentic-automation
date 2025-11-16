@@ -24,7 +24,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -116,7 +115,7 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 		os.Unsetenv("AGENT_RUNNER_TIMEOUT_MINUTES")
 	})
 
-	logger, _ := zap.NewDevelopment()
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 
 	// DB
@@ -257,7 +256,7 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 func Test_IssueComment_NoTrigger(t *testing.T) {
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
 	t.Cleanup(func() { os.Unsetenv("GITHUB_WEBHOOK_SECRET") })
-	logger, _ := zap.NewDevelopment()
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 	db := setupDB(t)
 	config.SetDBForTesting(db)
@@ -299,7 +298,7 @@ func Test_IssueComment_NoTrigger(t *testing.T) {
 func Test_IssueComment_PermissionDenied(t *testing.T) {
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
 	t.Cleanup(func() { os.Unsetenv("GITHUB_WEBHOOK_SECRET") })
-	logger, _ := zap.NewDevelopment()
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 	db := setupDB(t)
 	config.SetDBForTesting(db)
@@ -341,7 +340,7 @@ func Test_IssueComment_PermissionDenied(t *testing.T) {
 func Test_IssueComment_ClosedIssue(t *testing.T) {
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
 	t.Cleanup(func() { os.Unsetenv("GITHUB_WEBHOOK_SECRET") })
-	logger, _ := zap.NewDevelopment()
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 	db := setupDB(t)
 	config.SetDBForTesting(db)
@@ -392,7 +391,7 @@ func Test_IssueComment_K8sFailure_RollbackQueued(t *testing.T) {
 		os.Unsetenv("OPERATOR_SERVICE_NAME")
 		os.Unsetenv("OPERATOR_SERVICE_PORT")
 	})
-	logger, _ := zap.NewDevelopment()
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 	db := setupDB(t)
 	config.SetDBForTesting(db)
@@ -445,7 +444,7 @@ func Test_IssueComment_Idempotency_SecondIsNoop(t *testing.T) {
 		os.Unsetenv("OPERATOR_SERVICE_NAME")
 		os.Unsetenv("OPERATOR_SERVICE_PORT")
 	})
-	logger, _ := zap.NewDevelopment()
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 	db := setupDB(t)
 	config.SetDBForTesting(db)

@@ -9,11 +9,11 @@ import (
 	"strings"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/services"
 
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -291,5 +291,5 @@ func NewDummyGitHubHTTPClient() *http.Client {
 func NewDummyGitHubClient() *clients.Client {
 	httpClient := NewDummyGitHubHTTPClient()
 	gh := github.NewClient(httpClient)
-	return clients.NewFromGitHub(gh, zap.NewNop())
+	return clients.NewFromGitHub(gh, config.NewNopLogger())
 }

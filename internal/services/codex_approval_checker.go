@@ -1,21 +1,20 @@
 package services
 
 import (
+	"agentic-automation/internal/config"
 	"agentic-automation/internal/repositories"
 	"context"
-
-	"go.uber.org/zap"
 )
 
 type codexApprovalChecker struct {
 	reviewRepo *repositories.ReviewFeedbackRepository
 	prRepo     *repositories.PullRequestRepository
-	logger     *zap.Logger
+	logger     *config.AppLogger
 }
 
-func NewCodexApprovalChecker(reviewRepo *repositories.ReviewFeedbackRepository, prRepo *repositories.PullRequestRepository, logger *zap.Logger) CodexApprovalChecker {
+func NewCodexApprovalChecker(reviewRepo *repositories.ReviewFeedbackRepository, prRepo *repositories.PullRequestRepository, logger *config.AppLogger) CodexApprovalChecker {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &codexApprovalChecker{reviewRepo: reviewRepo, prRepo: prRepo, logger: logger}
 }

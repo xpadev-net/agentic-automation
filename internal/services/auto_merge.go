@@ -6,8 +6,9 @@ import (
 	"fmt"
 
 	"agentic-automation/internal/clients"
+	"agentic-automation/internal/config"
+
 	"github.com/google/go-github/v76/github"
-	"go.uber.org/zap"
 )
 
 // AutoMergeService はPR自動マージを担うサービス
@@ -18,7 +19,7 @@ type AutoMergeService interface {
 // 実装構造体
 type autoMergeService struct {
 	ghApp  *clients.GitHubClient
-	logger *zap.Logger
+	logger *config.AppLogger
 }
 
 // AutoMergeResult は自動マージの結果を表す
@@ -31,9 +32,9 @@ type AutoMergeResult struct {
 }
 
 // NewAutoMergeService は AutoMergeService のコンストラクタ
-func NewAutoMergeService(ghApp *clients.GitHubClient, logger *zap.Logger) AutoMergeService {
+func NewAutoMergeService(ghApp *clients.GitHubClient, logger *config.AppLogger) AutoMergeService {
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 	return &autoMergeService{ghApp: ghApp, logger: logger}
 }
@@ -67,7 +68,7 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 		})
 		if isMerged {
 			s.logger.Info("merge succeeded but initial response failed; treating as success",
-				zap.String("owner", owner), zap.String("repo", repo), zap.Int("pr_number", prNumber))
+				config.String("owner", owner), config.String("repo", repo), config.Int("pr_number", prNumber))
 			// 成功扱いにしてブランチ削除へ進む
 			mergeResult = &github.PullRequestMergeResult{}
 		} else {
@@ -93,7 +94,7 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 	_ = s.ghApp.DoWithClientRetry(ctx, owner, repo, func(c *github.Client) (*github.Response, error) {
 		pr, resp, err := c.PullRequests.Get(ctx, owner, repo, prNumber)
 		if err != nil {
-			s.logger.Warn("failed to fetch PR after merge", zap.Error(err))
+			s.logger.Warn("failed to fetch PR after merge", config.Error(err))
 			return resp, err
 		}
 		if pr == nil || pr.Head == nil || pr.Head.Ref == nil {
@@ -115,8 +116,8 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 		}
 		if !isSameRepo {
 			s.logger.Info("skip branch delete: head repo differs (likely fork)",
-				zap.String("base", baseFullName),
-				zap.String("head_full_name", func() string {
+				config.String("base", baseFullName),
+				config.String("head_full_name", func() string {
 					if headRepo != nil {
 						return headRepo.GetFullName()
 					}
@@ -129,16 +130,16 @@ func (s *autoMergeService) AttemptAutoMerge(ctx context.Context, owner, repo str
 		// Extra safety: never delete protected branch names
 		headRef := head.GetRef()
 		if headRef == "main" || headRef == "master" {
-			s.logger.Info("skip branch delete: protected branch name", zap.String("ref", headRef))
+			s.logger.Info("skip branch delete: protected branch name", config.String("ref", headRef))
 			return resp, nil
 		}
 
 		ref := fmt.Sprintf("heads/%s", headRef)
 		delResp, delErr := c.Git.DeleteRef(ctx, owner, repo, ref)
 		if delErr != nil {
-			s.logger.Warn("branch delete failed", zap.String("ref", ref), zap.Error(delErr))
+			s.logger.Warn("branch delete failed", config.String("ref", ref), config.Error(delErr))
 		} else {
-			s.logger.Info("branch deleted", zap.String("ref", ref))
+			s.logger.Info("branch deleted", config.String("ref", ref))
 		}
 		return delResp, delErr
 	})

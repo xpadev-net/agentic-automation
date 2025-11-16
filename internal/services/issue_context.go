@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"agentic-automation/internal/clients"
-	"go.uber.org/zap"
+	"agentic-automation/internal/config"
 )
 
 // IssueContext represents collected information about a GitHub Issue
@@ -34,7 +34,7 @@ type Comment struct {
 // then formats them for use by the agent-runner.
 type IssueContextService struct {
 	githubClient *clients.Client
-	logger       *zap.Logger
+	logger       *config.AppLogger
 }
 
 // NewIssueContextService creates a new IssueContextService instance.
@@ -42,18 +42,18 @@ type IssueContextService struct {
 //
 // Parameters:
 //   - githubClient: GitHub API client (must not be nil, will panic if nil)
-//   - logger: Structured logger instance (if nil, uses zap.NewNop())
+//   - logger: Structured logger instance (if nil, uses config.NewNopLogger())
 //
 // Returns:
 //   - *IssueContextService: Initialized service instance
-func NewIssueContextService(githubClient *clients.Client, logger *zap.Logger) *IssueContextService {
+func NewIssueContextService(githubClient *clients.Client, logger *config.AppLogger) *IssueContextService {
 	if githubClient == nil {
 		panic("githubClient is required for IssueContextService")
 	}
 
-	// Use zap.NewNop() if logger is nil to prevent nil pointer dereference
+	// Use config.NewNopLogger() if logger is nil to prevent nil pointer dereference
 	if logger == nil {
-		logger = zap.NewNop()
+		logger = config.NewNopLogger()
 	}
 
 	return &IssueContextService{
@@ -82,34 +82,34 @@ func NewIssueContextService(githubClient *clients.Client, logger *zap.Logger) *I
 //   - error: GitHub API error if any step fails
 func (s *IssueContextService) CollectIssueContext(ctx context.Context, owner, repo string, issueNumber int) (*IssueContext, error) {
 	s.logger.Info("Collecting Issue context",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
 	)
 
 	// Fetch Issue details
 	s.logger.Debug("Fetching Issue details from GitHub API",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
 	)
 
 	issue, err := s.githubClient.GetIssue(ctx, owner, repo, issueNumber)
 	if err != nil {
 		s.logger.Error("Failed to fetch Issue from GitHub API",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
-			zap.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
+			config.Error(err),
 		)
 		return nil, fmt.Errorf("failed to get issue: %w", err)
 	}
 
 	if issue == nil {
 		s.logger.Error("GitHub API returned nil issue",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
 		)
 		return nil, fmt.Errorf("issue not found: issue number %d", issueNumber)
 	}
@@ -128,9 +128,9 @@ func (s *IssueContextService) CollectIssueContext(ctx context.Context, owner, re
 	number := issue.GetNumber()
 	if number == 0 {
 		s.logger.Error("Issue number is zero",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
 		)
 		return nil, fmt.Errorf("invalid issue number: %d", number)
 	}
@@ -149,26 +149,26 @@ func (s *IssueContextService) CollectIssueContext(ctx context.Context, owner, re
 	// Log warnings for empty data
 	if body == "" {
 		s.logger.Warn("Issue body is empty",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
 		)
 	}
 
 	// Fetch Issue comments
 	s.logger.Debug("Fetching Issue comments from GitHub API",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
 	)
 
 	comments, err := s.githubClient.ListIssueComments(ctx, owner, repo, issueNumber)
 	if err != nil {
 		s.logger.Error("Failed to fetch Issue comments from GitHub API",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
-			zap.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
+			config.Error(err),
 		)
 		return nil, fmt.Errorf("failed to list issue comments: %w", err)
 	}
@@ -207,9 +207,9 @@ func (s *IssueContextService) CollectIssueContext(ctx context.Context, owner, re
 
 	if len(convertedComments) == 0 {
 		s.logger.Warn("No comments found for Issue",
-			zap.String("owner", owner),
-			zap.String("repo", repo),
-			zap.Int("issue_number", issueNumber),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("issue_number", issueNumber),
 		)
 	}
 
@@ -223,12 +223,12 @@ func (s *IssueContextService) CollectIssueContext(ctx context.Context, owner, re
 	}
 
 	s.logger.Info("Issue context collected successfully",
-		zap.String("owner", owner),
-		zap.String("repo", repo),
-		zap.Int("issue_number", issueNumber),
-		zap.Int("comments_count", len(convertedComments)),
-		zap.Int("labels_count", len(labels)),
-		zap.Bool("has_body", body != ""),
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", issueNumber),
+		config.Int("comments_count", len(convertedComments)),
+		config.Int("labels_count", len(labels)),
+		config.Bool("has_body", body != ""),
 	)
 
 	return issueCtx, nil

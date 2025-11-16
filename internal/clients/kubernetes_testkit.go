@@ -1,14 +1,15 @@
 package clients
 
 import (
-	"go.uber.org/zap"
+	"agentic-automation/internal/config"
+
 	"k8s.io/client-go/kubernetes/fake"
 )
 
 // NewKubernetesClientWithClientset constructs a KubernetesClient using a provided fake clientset (test only).
-func NewKubernetesClientWithClientset(logger *zap.Logger) *KubernetesClient {
+func NewKubernetesClientWithClientset(logger *config.AppLogger) *KubernetesClient {
 	if logger == nil {
-		logger, _ = zap.NewDevelopment()
+		logger = config.NewNopLogger()
 	}
 	return &KubernetesClient{
 		clientset: fake.NewSimpleClientset(),

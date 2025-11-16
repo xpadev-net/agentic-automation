@@ -15,7 +15,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -65,9 +64,8 @@ func postReport(t *testing.T, router *gin.Engine, id int, token string, body han
 }
 
 // configure test logger/db placeholders (DB will be set in following tests)
-func mustTestLogger(t *testing.T) *zap.Logger {
-	logger, err := zap.NewDevelopment()
-	require.NoError(t, err)
+func mustTestLogger(t *testing.T) *config.AppLogger {
+	logger := config.NewNopLogger()
 	config.SetLoggerForTesting(logger)
 	return logger
 }

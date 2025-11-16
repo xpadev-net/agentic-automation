@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -51,7 +50,7 @@ type CheckSuiteRepository struct {
 
 // CheckSuiteDeps represents injectable dependencies for HandleCheckSuite
 type CheckSuiteDeps struct {
-	Logger                     *zap.Logger
+	Logger                     *config.AppLogger
 	GitHubClient               *clients.Client
 	PullRequestRepository      *repositories.PullRequestRepository
 	CIStatusRepository         *repositories.CIStatusRepository
@@ -84,7 +83,7 @@ func HandleCheckSuite(c *gin.Context) {
 	if appGitHubClient == nil {
 		ghApp, err := clients.NewGitHubAppClient(logger)
 		if err != nil {
-			logger.Warn("GitHub App client not initialized", zap.Error(err))
+			logger.Warn("GitHub App client not initialized", config.Error(err))
 		} else {
 			appGitHubClient = ghApp
 		}
@@ -99,7 +98,7 @@ func HandleCheckSuite(c *gin.Context) {
 	// Initialize Kubernetes client
 	k8sClient, err := clients.NewKubernetesClient(logger)
 	if err != nil {
-		logger.Error("Failed to initialize Kubernetes client", zap.Error(err))
+		logger.Error("Failed to initialize Kubernetes client", config.Error(err))
 		c.Error(err)
 		return
 	}
@@ -123,7 +122,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	deliveryID := c.GetHeader(deliveryHeader)
 	if deliveryID == "" {
 		logger.Warn("Missing X-GitHub-Delivery header",
-			zap.String("path", c.Request.URL.Path),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("missing X-GitHub-Delivery header"))
 		return
@@ -133,8 +132,8 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	payloadData, exists := c.Get("webhook_payload")
 	if !exists {
 		logger.Error("Webhook payload not found in context",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("webhook payload not found in context"))
 		return
@@ -143,8 +142,8 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	payloadBytes, ok := payloadData.([]byte)
 	if !ok {
 		logger.Error("Invalid webhook payload type",
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(errors.New("invalid webhook payload type"))
 		return
@@ -153,28 +152,28 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	var payload CheckSuitePayload
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		logger.Error("Failed to parse webhook payload",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.String("path", c.Request.URL.Path),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.String("path", c.Request.URL.Path),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("Received check_suite webhook",
-		zap.String("delivery_id", deliveryID),
-		zap.String("action", payload.Action),
-		zap.Int64("check_suite_id", payload.CheckSuite.ID),
-		zap.String("repo", payload.Repository.FullName),
+		config.String("delivery_id", deliveryID),
+		config.String("action", payload.Action),
+		config.Int64("check_suite_id", payload.CheckSuite.ID),
+		config.String("repo", payload.Repository.FullName),
 	)
 
 	// Step 4: アクション検証
 	if payload.Action != models.CheckSuiteActionCompleted {
 		logger.Info("Ignoring non-completed action",
-			zap.String("action", payload.Action),
-			zap.String("delivery_id", deliveryID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
-			zap.String("repo", payload.Repository.FullName),
+			config.String("action", payload.Action),
+			config.String("delivery_id", deliveryID),
+			config.Int64("check_suite_id", payload.CheckSuite.ID),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "ignored",
@@ -188,8 +187,8 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	repoParts := strings.Split(payload.Repository.FullName, "/")
 	if len(repoParts) != 2 {
 		logger.Error("Invalid repository full name format",
-			zap.String("full_name", payload.Repository.FullName),
-			zap.String("delivery_id", deliveryID),
+			config.String("full_name", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
 		)
 		c.Error(errors.New("invalid repository full name format"))
 		return
@@ -200,9 +199,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	// Step 6: PullRequest取得
 	if len(payload.CheckSuite.PullRequests) == 0 {
 		logger.Info("No pull requests in check_suite, skipping",
-			zap.String("delivery_id", deliveryID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
-			zap.String("repo", payload.Repository.FullName),
+			config.String("delivery_id", deliveryID),
+			config.Int64("check_suite_id", payload.CheckSuite.ID),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "no_pr",
@@ -222,9 +221,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			logger.Warn("PullRequest not found",
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_number", prNumber),
-				zap.String("repo", payload.Repository.FullName),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_number", prNumber),
+				config.String("repo", payload.Repository.FullName),
 			)
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "pr_not_found",
@@ -234,20 +233,20 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			return
 		}
 		logger.Error("Failed to get PullRequest",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_number", prNumber),
-			zap.String("repo", payload.Repository.FullName),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_number", prNumber),
+			config.String("repo", payload.Repository.FullName),
 		)
 		c.Error(err)
 		return
 	}
 
 	logger.Info("PullRequest retrieved",
-		zap.Int("pr_id", pr.ID),
-		zap.Int("pr_number", pr.Number),
-		zap.String("repo", pr.Repo),
-		zap.String("delivery_id", deliveryID),
+		config.Int("pr_id", pr.ID),
+		config.Int("pr_number", pr.Number),
+		config.String("repo", pr.Repo),
+		config.String("delivery_id", deliveryID),
 	)
 
 	// Prepare repositories/services
@@ -283,17 +282,17 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 
 	if err := ciStatusRepo.CreateOrUpdate(ciStatus); err != nil {
 		logger.Error("Failed to create or update CIStatus",
-			zap.Error(err),
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_id", pr.ID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
+			config.Error(err),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 		// Continue processing even if CIStatus update fails
 	} else {
 		logger.Info("CIStatus created or updated",
-			zap.Int("ci_status_id", ciStatus.ID),
-			zap.Int("pr_id", pr.ID),
-			zap.String("delivery_id", deliveryID),
+			config.Int("ci_status_id", ciStatus.ID),
+			config.Int("pr_id", pr.ID),
+			config.String("delivery_id", deliveryID),
 		)
 	}
 
@@ -305,26 +304,26 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		}
 		if _, err := aggregator.AggregateAndStore(ctx, owner, repo, pr.ID, pr.Number, payload.CheckSuite.ID, payload.CheckSuite.HeadSHA); err != nil {
 			logger.Warn("Failed to aggregate CI status",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
-				zap.Int64("check_suite_id", payload.CheckSuite.ID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
+				config.Int64("check_suite_id", payload.CheckSuite.ID),
 			)
 			// non-fatal
 		}
 	} else {
 		logger.Info("Skipping CI aggregation (GitHub client unavailable)",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_id", pr.ID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 	}
 
 	// Step 8: 結論判定
 	if conclusion == nil {
 		logger.Warn("Check suite conclusion is nil, skipping processing",
-			zap.String("delivery_id", deliveryID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
+			config.String("delivery_id", deliveryID),
+			config.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 		c.JSON(http.StatusOK, gin.H{
 			"status":      "no_conclusion",
@@ -336,9 +335,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	// Step 8a: CI失敗時の処理
 	if *conclusion == models.CheckSuiteConclusionFailure {
 		logger.Info("CI failure detected, processing retry",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_id", pr.ID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 
 		// Initialize GitHub client if needed
@@ -347,7 +346,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			if appGitHubClient == nil {
 				// Fallback: skip re-evaluation (legacy-compatible minimal response)
 				logger.Info("GitHub App client not available; skipping re-evaluation",
-					zap.String("delivery_id", deliveryID),
+					config.String("delivery_id", deliveryID),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "processed",
@@ -361,10 +360,10 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			if err != nil {
 				// Fallback: skip re-evaluation
 				logger.Info("Failed to init per-repo GitHub client; skipping re-evaluation",
-					zap.Error(err),
-					zap.String("owner", owner),
-					zap.String("repo", repo),
-					zap.String("delivery_id", deliveryID),
+					config.Error(err),
+					config.String("owner", owner),
+					config.String("repo", repo),
+					config.String("delivery_id", deliveryID),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "processed",
@@ -387,9 +386,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		ciResult, err := ciAnalyzer.AnalyzeCIFailure(ctx, owner, repo, payload.CheckSuite.ID)
 		if err != nil {
 			logger.Error("Failed to analyze CI failure",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int64("check_suite_id", payload.CheckSuite.ID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int64("check_suite_id", payload.CheckSuite.ID),
 			)
 			// Continue with retry even if analysis fails
 			ciResult = nil
@@ -404,9 +403,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		agentRuns, err := agentRunRepo.GetByPRID(pr.ID)
 		if err != nil {
 			logger.Error("Failed to get AgentRuns for PR",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
 			)
 			c.Error(err)
 			return
@@ -424,8 +423,8 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 
 		if agentRun == nil {
 			logger.Warn("No suitable AgentRun found for retry",
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
 			)
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "no_agent_run",
@@ -435,10 +434,10 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		}
 
 		logger.Info("AgentRun found for retry",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("retry_count", agentRun.RetryCount),
-			zap.String("state", agentRun.State),
-			zap.String("delivery_id", deliveryID),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("retry_count", agentRun.RetryCount),
+			config.String("state", agentRun.State),
+			config.String("delivery_id", deliveryID),
 		)
 
 		// Initialize FeedbackAggregator
@@ -451,9 +450,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		aggregatedFeedback, err := feedbackAggregator.AggregateFeedback(ctx, pr.ID, ciResult, agentRun.RetryCount)
 		if err != nil {
 			logger.Error("Failed to aggregate feedback",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
 			)
 			c.Error(err)
 			return
@@ -477,15 +476,15 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		// Check if retry is allowed
 		if !retryOrchestrator.ShouldRetry(agentRun) {
 			logger.Warn("Max retry count exceeded",
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("retry_count", agentRun.RetryCount),
-				zap.String("delivery_id", deliveryID),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("retry_count", agentRun.RetryCount),
+				config.String("delivery_id", deliveryID),
 			)
 			if err := retryOrchestrator.HandleMaxRetriesExceeded(agentRun); err != nil {
 				logger.Error("Failed to handle max retries exceeded",
-					zap.Error(err),
-					zap.Int("agent_run_id", agentRun.ID),
-					zap.String("delivery_id", deliveryID),
+					config.Error(err),
+					config.Int("agent_run_id", agentRun.ID),
+					config.String("delivery_id", deliveryID),
 				)
 				c.Error(err)
 				return
@@ -507,10 +506,10 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		issue, err := issueRepo.FindByID(agentRun.IssueID)
 		if err != nil {
 			logger.Error("Failed to get Issue for retry",
-				zap.Error(err),
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.Int("issue_id", agentRun.IssueID),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("issue_id", agentRun.IssueID),
+				config.String("delivery_id", deliveryID),
 			)
 			c.Error(err)
 			return
@@ -519,18 +518,18 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		// Trigger retry
 		if err := retryOrchestrator.TriggerRetry(ctx, agentRun, issue, aggregatedFeedback); err != nil {
 			logger.Error("Failed to trigger retry",
-				zap.Error(err),
-				zap.Int("agent_run_id", agentRun.ID),
-				zap.String("delivery_id", deliveryID),
+				config.Error(err),
+				config.Int("agent_run_id", agentRun.ID),
+				config.String("delivery_id", deliveryID),
 			)
 			c.Error(err)
 			return
 		}
 
 		logger.Info("Retry triggered successfully",
-			zap.Int("agent_run_id", agentRun.ID),
-			zap.Int("new_retry_count", agentRun.RetryCount),
-			zap.String("delivery_id", deliveryID),
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("new_retry_count", agentRun.RetryCount),
+			config.String("delivery_id", deliveryID),
 		)
 
 		c.JSON(http.StatusOK, gin.H{
@@ -545,9 +544,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 	// Step 8b: CI成功時の処理（マージ条件再評価 + 自動マージ）
 	if *conclusion == models.CheckSuiteConclusionSuccess {
 		logger.Info("CI success detected",
-			zap.String("delivery_id", deliveryID),
-			zap.Int("pr_id", pr.ID),
-			zap.Int64("check_suite_id", payload.CheckSuite.ID),
+			config.String("delivery_id", deliveryID),
+			config.Int("pr_id", pr.ID),
+			config.Int64("check_suite_id", payload.CheckSuite.ID),
 		)
 
 		// GitHub client（競合検出・自動マージ用）
@@ -556,7 +555,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			if appGitHubClient == nil {
 				// テスト/資格情報なし環境では従来レスポンスで終了
 				logger.Info("GitHub App client unavailable; skipping re-evaluation",
-					zap.String("delivery_id", deliveryID),
+					config.String("delivery_id", deliveryID),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "processed",
@@ -569,10 +568,10 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			raw, err := appGitHubClient.ForRepo(ctx, owner, repo)
 			if err != nil {
 				logger.Info("Failed to init per-repo GitHub client; skipping re-evaluation",
-					zap.Error(err),
-					zap.String("owner", owner),
-					zap.String("repo", repo),
-					zap.String("delivery_id", deliveryID),
+					config.Error(err),
+					config.String("owner", owner),
+					config.String("repo", repo),
+					config.String("delivery_id", deliveryID),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "processed",
@@ -606,20 +605,20 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		result, err := checker.Check(ctx, owner, repo, pr.Number)
 		if err != nil {
 			logger.Error("merge condition check failed",
-				zap.Error(err),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
+				config.Error(err),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
 			)
 			c.Error(err)
 			return
 		}
 
 		logger.Info("merge condition evaluated",
-			zap.String("ci_state", string(result.CIState)),
-			zap.Bool("codex_approved", result.CodexApproved),
-			zap.String("conflict", string(result.Conflict)),
-			zap.Bool("mergeable", result.Mergeable),
-			zap.String("delivery_id", deliveryID),
+			config.String("ci_state", string(result.CIState)),
+			config.Bool("codex_approved", result.CodexApproved),
+			config.String("conflict", string(result.Conflict)),
+			config.Bool("mergeable", result.Mergeable),
+			config.String("delivery_id", deliveryID),
 		)
 
 		if !result.Mergeable {
@@ -641,7 +640,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		if autoMergeSvc == nil {
 			if appGitHubClient == nil {
 				logger.Info("Skipping auto-merge: GitHub App client unavailable",
-					zap.String("delivery_id", deliveryID),
+					config.String("delivery_id", deliveryID),
 				)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "processed",
@@ -659,9 +658,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		if mergeErr != nil {
 			// 予期しないエラー（通常はAutoMergeResultで返却される）
 			logger.Error("auto-merge service returned error",
-				zap.Error(mergeErr),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
+				config.Error(mergeErr),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
 			)
 			// Discord: notify merge failure (best-effort)
 			func() {
@@ -709,7 +708,7 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				if i, err := deps.IssueRepository.FindByID(*pr.IssueID); err == nil {
 					issueNumber = i.Number
 				} else {
-					logger.Warn("failed to load issue for merge failure notification", zap.Error(err))
+					logger.Warn("failed to load issue for merge failure notification", config.Error(err))
 				}
 			}
 
@@ -751,10 +750,10 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			}()
 
 			logger.Warn("auto-merge failed",
-				zap.String("error_type", mergeRes.ErrorType),
-				zap.String("error_message", mergeRes.ErrorMessage),
-				zap.String("delivery_id", deliveryID),
-				zap.Int("pr_id", pr.ID),
+				config.String("error_type", mergeRes.ErrorType),
+				config.String("error_message", mergeRes.ErrorMessage),
+				config.String("delivery_id", deliveryID),
+				config.Int("pr_id", pr.ID),
 			)
 			c.JSON(http.StatusOK, gin.H{
 				"status":      "processed",
@@ -768,14 +767,14 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		}
 
 		logger.Info("auto-merge succeeded",
-			zap.Bool("merged", mergeRes != nil && mergeRes.Merged),
-			zap.String("merge_sha", func() string {
+			config.Bool("merged", mergeRes != nil && mergeRes.Merged),
+			config.String("merge_sha", func() string {
 				if mergeRes != nil {
 					return mergeRes.MergeSHA
 				}
 				return ""
 			}()),
-			zap.String("delivery_id", deliveryID),
+			config.String("delivery_id", deliveryID),
 		)
 		// Discord: notify merge success (best-effort)
 		func() {
@@ -818,9 +817,9 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 
 	// Other conclusions (cancelled, skipped, neutral) - just acknowledge
 	logger.Info("Check suite completed with other conclusion",
-		zap.String("delivery_id", deliveryID),
-		zap.String("conclusion", *conclusion),
-		zap.Int64("check_suite_id", payload.CheckSuite.ID),
+		config.String("delivery_id", deliveryID),
+		config.String("conclusion", *conclusion),
+		config.Int64("check_suite_id", payload.CheckSuite.ID),
 	)
 
 	c.JSON(http.StatusOK, gin.H{
