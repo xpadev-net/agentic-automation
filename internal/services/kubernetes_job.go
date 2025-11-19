@@ -618,12 +618,23 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 		config.String("service", "kubernetes_job"),
 	)
 
+	// Extract prompt from AgentRun.Input if available
+	prompt := fmt.Sprintf("Plan execution for issue #%d", issue.Number)
+	if len(agentRun.Input) > 0 {
+		var inputMap map[string]interface{}
+		if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
+			if p, ok := inputMap["prompt"].(string); ok && strings.TrimSpace(p) != "" {
+				prompt = strings.TrimSpace(p)
+			}
+		}
+	}
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
 		IssueID:          issue.Number,
 		Repo:             issue.Repo,
-		Prompt:           fmt.Sprintf("Plan execution for issue #%d", issue.Number),
+		Prompt:           prompt,
 		PreviousAttempts: extractPreviousAttemptsJSON(agentRun, s.logger),
 		CILogs:           "",
 		AgentType:        agentRun.AgentType,
