@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -118,5 +119,144 @@ func TestDifferentSessionsDotsManagedIndependently(t *testing.T) {
 	}
 	if strings.Count(out, "[THINKING] completed") != 2 {
 		t.Fatalf("expected 2 completed logs, got %d:\n%s", strings.Count(out, "[THINKING] completed"), out)
+	}
+}
+
+func TestGetShellCommand_StringArray(t *testing.T) {
+	entry := &ToolCallEntry{
+		ToolCall: map[string]interface{}{
+			"shellToolCall": map[string]interface{}{
+				"args": map[string]interface{}{
+					"command": []interface{}{"ls", "-la", "/tmp"},
+				},
+			},
+		},
+	}
+
+	command := entry.GetShellCommand()
+	expected := "ls -la /tmp"
+	if command != expected {
+		t.Errorf("expected %q, got %q", expected, command)
+	}
+}
+
+func TestGetShellCommand_String(t *testing.T) {
+	entry := &ToolCallEntry{
+		ToolCall: map[string]interface{}{
+			"shellToolCall": map[string]interface{}{
+				"args": map[string]interface{}{
+					"command": "ls -la",
+				},
+			},
+		},
+	}
+
+	command := entry.GetShellCommand()
+	expected := "ls -la"
+	if command != expected {
+		t.Errorf("expected %q, got %q", expected, command)
+	}
+}
+
+func TestGetShellCommand_NoCommand(t *testing.T) {
+	entry := &ToolCallEntry{
+		ToolCall: map[string]interface{}{
+			"shellToolCall": map[string]interface{}{
+				"args": map[string]interface{}{},
+			},
+		},
+	}
+
+	command := entry.GetShellCommand()
+	if command != "" {
+		t.Errorf("expected empty string, got %q", command)
+	}
+}
+
+func TestGetShellCommand_NonShellToolCall(t *testing.T) {
+	entry := &ToolCallEntry{
+		ToolCall: map[string]interface{}{
+			"otherTool": map[string]interface{}{
+				"args": map[string]interface{}{
+					"command": "some command",
+				},
+			},
+		},
+	}
+
+	command := entry.GetShellCommand()
+	if command != "" {
+		t.Errorf("expected empty string for non-shellToolCall, got %q", command)
+	}
+}
+
+func TestGetShellCommand_NilToolCall(t *testing.T) {
+	entry := &ToolCallEntry{
+		ToolCall: nil,
+	}
+
+	command := entry.GetShellCommand()
+	if command != "" {
+		t.Errorf("expected empty string for nil ToolCall, got %q", command)
+	}
+}
+
+func TestFormat_ShellToolCallWithCommand(t *testing.T) {
+	entry := &ToolCallEntry{
+		Subtype: "started",
+		CallID:  "abc123",
+		ToolCall: map[string]interface{}{
+			"shellToolCall": map[string]interface{}{
+				"args": map[string]interface{}{
+					"command": "ls -la",
+				},
+			},
+		},
+	}
+
+	formatted := entry.Format()
+	expected := `[TOOL] shellToolCall started (id: abc123) command: "ls -la"`
+	if formatted != expected {
+		t.Errorf("expected %q, got %q", expected, formatted)
+	}
+}
+
+func TestFormat_ShellToolCallWithLongCommand(t *testing.T) {
+	longCommand := strings.Repeat("a", 250)
+	entry := &ToolCallEntry{
+		Subtype: "started",
+		CallID:  "abc123",
+		ToolCall: map[string]interface{}{
+			"shellToolCall": map[string]interface{}{
+				"args": map[string]interface{}{
+					"command": longCommand,
+				},
+			},
+		},
+	}
+
+	formatted := entry.Format()
+	expectedTruncated := longCommand[:200] + "..."
+	expected := fmt.Sprintf(`[TOOL] shellToolCall started (id: abc123) command: %q`, expectedTruncated)
+	if formatted != expected {
+		t.Errorf("expected %q, got %q", expected, formatted)
+	}
+}
+
+func TestFormat_NonShellToolCall(t *testing.T) {
+	entry := &ToolCallEntry{
+		Subtype: "started",
+		CallID:  "abc123",
+		ToolCall: map[string]interface{}{
+			"otherTool": map[string]interface{}{
+				"args": map[string]interface{}{},
+			},
+		},
+	}
+
+	formatted := entry.Format()
+	expected := "[TOOL] otherTool started (id: abc123)"
+	if formatted != expected {
+		t.Errorf("expected %q, got %q", expected, formatted)
 	}
 }

@@ -134,8 +134,22 @@ func (e *ToolCallEntry) GetType() string      { return e.Type }
 func (e *ToolCallEntry) GetSessionID() string { return e.SessionID }
 func (e *ToolCallEntry) Format() string {
 	toolName := e.GetToolName()
+	command := e.GetShellCommand()
+
+	// Truncate long commands
+	if len(command) > 200 {
+		command = command[:200] + "..."
+	}
+
 	if toolName != "" {
+		if command != "" {
+			return fmt.Sprintf("[TOOL] %s %s (id: %s) command: %q", toolName, e.Subtype, e.CallID, command)
+		}
 		return fmt.Sprintf("[TOOL] %s %s (id: %s)", toolName, e.Subtype, e.CallID)
+	}
+
+	if command != "" {
+		return fmt.Sprintf("[TOOL] %s (id: %s) command: %q", e.Subtype, e.CallID, command)
 	}
 	return fmt.Sprintf("[TOOL] %s (id: %s)", e.Subtype, e.CallID)
 }
@@ -149,6 +163,58 @@ func (e *ToolCallEntry) GetToolName() string {
 	for key := range e.ToolCall {
 		return key
 	}
+	return ""
+}
+
+// GetShellCommand returns the command string for shellToolCall, or empty string otherwise.
+func (e *ToolCallEntry) GetShellCommand() string {
+	if e.ToolCall == nil {
+		return ""
+	}
+
+	// Check if this is a shellToolCall
+	shellToolCall, ok := e.ToolCall["shellToolCall"]
+	if !ok {
+		return ""
+	}
+
+	// shellToolCall should be a map with args.command
+	shellMap, ok := shellToolCall.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	args, ok := shellMap["args"]
+	if !ok {
+		return ""
+	}
+
+	argsMap, ok := args.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	command, ok := argsMap["command"]
+	if !ok {
+		return ""
+	}
+
+	// Handle string array case
+	if cmdArray, ok := command.([]interface{}); ok {
+		var cmdParts []string
+		for _, part := range cmdArray {
+			if str, ok := part.(string); ok {
+				cmdParts = append(cmdParts, str)
+			}
+		}
+		return strings.Join(cmdParts, " ")
+	}
+
+	// Handle string case
+	if cmdStr, ok := command.(string); ok {
+		return cmdStr
+	}
+
 	return ""
 }
 
