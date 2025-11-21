@@ -45,22 +45,53 @@ func NewGitHubNotificationService(githubClient *clients.Client, logger *config.A
 	}
 }
 
-// formatExecutionStartMessage formats a message for agent execution start notification.
-// It creates a markdown-formatted message with agent type and run ID.
-//
-// Parameters:
-//   - agentType: Agent type (e.g., "claude-code" or "cursor-agent")
-//   - agentRunID: AgentRun ID (integer)
-//
-// Returns:
-//   - string: Formatted message string
+const (
+	executionStartMarkerPrefix = "<!-- agent:execution-start:"
+
+	planCreationStageCreating  = "creating"
+	planCreationStageCompleted = "completed"
+
+	planExecutionStageStarted   = "started"
+	planExecutionStageSucceeded = "succeeded"
+	planExecutionStageFailed    = "failed"
+)
+
+// formatExecutionStartMessage is kept for backward compatibility and now delegates
+// to formatPlanCreationProgressMessage with "creating" stage.
 func formatExecutionStartMessage(agentType string, agentRunID int) string {
-	return fmt.Sprintf(`🤖 Agent execution started
+	return formatPlanCreationProgressMessage(planCreationStageCreating, agentType, agentRunID)
+}
+
+func formatPlanCreationProgressMessage(stage string, agentType string, agentRunID int) string {
+	statusLine := "🤖 Agent execution in progress"
+	switch stage {
+	case planCreationStageCreating:
+		statusLine = "🤖 Agent execution started - Creating plan..."
+	case planCreationStageCompleted:
+		statusLine = "✅ Plan created - Starting execution..."
+	}
+
+	return fmt.Sprintf(`%s
 
 **Agent Type**: %s
-**Run ID**: %d
+**Run ID**: %d`, statusLine, agentType, agentRunID)
+}
 
-Processing your request...`, agentType, agentRunID)
+func formatPlanExecutionProgressMessage(stage string, agentType string, planAgentRunID int) string {
+	statusLine := "🚀 Plan execution in progress"
+	switch stage {
+	case planExecutionStageStarted:
+		statusLine = "🚀 Plan execution started..."
+	case planExecutionStageSucceeded:
+		statusLine = "✅ Plan execution completed"
+	case planExecutionStageFailed:
+		statusLine = "❌ Plan execution failed"
+	}
+
+	return fmt.Sprintf(`%s
+
+**Agent Type**: %s
+**Run ID**: %d`, statusLine, agentType, planAgentRunID)
 }
 
 // getErrorMessageForNotification returns the error message for notification,
@@ -329,12 +360,9 @@ func (s *GitHubNotificationService) PostExecutionStartComment(ctx context.Contex
 		config.Int("agent_run_id", agentRunID),
 	)
 
-	// Format the message
-	message := formatExecutionStartMessage(agentType, agentRunID)
+	message := formatPlanCreationProgressMessage(planCreationStageCreating, agentType, agentRunID)
 
-	// Post comment via GitHub API
-	_, err := s.githubClient.CreateIssueComment(ctx, owner, repo, issueNumber, message)
-	if err != nil {
+	if err := s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, agentRunID, message); err != nil {
 		s.logger.Error("Failed to post GitHub execution start comment",
 			config.Error(err),
 			config.String("owner", owner),
@@ -355,6 +383,80 @@ func (s *GitHubNotificationService) PostExecutionStartComment(ctx context.Contex
 	)
 
 	return nil
+}
+
+func makeExecutionStartMarker(agentRunID int) string {
+	return fmt.Sprintf("%s%d -->", executionStartMarkerPrefix, agentRunID)
+}
+
+func (s *GitHubNotificationService) upsertExecutionProgressComment(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber int,
+	agentRunID int,
+	message string,
+) error {
+	if issueNumber <= 0 {
+		return fmt.Errorf("issueNumber must be > 0")
+	}
+
+	marker := makeExecutionStartMarker(agentRunID)
+	body := marker + "\n" + message
+
+	commentID, found, err := s.FindCommentWithMarker(ctx, owner, repo, issueNumber, marker)
+	if err != nil {
+		return err
+	}
+
+	if found && commentID != nil {
+		return s.updateComment(ctx, owner, repo, *commentID, body)
+	}
+
+	return s.postComment(ctx, owner, repo, issueNumber, body)
+}
+
+// UpdatePlanCreationCompletedComment updates the execution start comment to show
+// that plan creation has completed.
+func (s *GitHubNotificationService) UpdatePlanCreationCompletedComment(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber int,
+	agentType string,
+	agentRunID int,
+) error {
+	message := formatPlanCreationProgressMessage(planCreationStageCompleted, agentType, agentRunID)
+	return s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, agentRunID, message)
+}
+
+// UpdatePlanExecutionStartedComment updates the execution start comment when plan
+// execution begins.
+func (s *GitHubNotificationService) UpdatePlanExecutionStartedComment(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber int,
+	agentType string,
+	planAgentRunID int,
+) error {
+	message := formatPlanExecutionProgressMessage(planExecutionStageStarted, agentType, planAgentRunID)
+	return s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, planAgentRunID, message)
+}
+
+// UpdatePlanExecutionCompletedComment updates the execution start comment when plan
+// execution completes (success or failure).
+func (s *GitHubNotificationService) UpdatePlanExecutionCompletedComment(
+	ctx context.Context,
+	owner, repo string,
+	issueNumber int,
+	agentType string,
+	planAgentRunID int,
+	succeeded bool,
+) error {
+	stage := planExecutionStageFailed
+	if succeeded {
+		stage = planExecutionStageSucceeded
+	}
+	message := formatPlanExecutionProgressMessage(stage, agentType, planAgentRunID)
+	return s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, planAgentRunID, message)
 }
 
 // -----------------------------------------------------------------------------

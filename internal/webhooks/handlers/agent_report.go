@@ -625,6 +625,100 @@ func HandleAgentReport(c *gin.Context) {
 		}
 	}
 
+	if agentRun.ExecutionMode == "plan_execution" && (req.Status == "succeeded" || req.Status == "failed") {
+		issueRepo := repositories.NewIssueRepository()
+		issue, err := issueRepo.FindByID(agentRun.IssueID)
+		if err != nil {
+			logger.Warn("Failed to load Issue for plan execution progress comment",
+				config.Error(err),
+				config.Int("issue_id", agentRun.IssueID),
+				config.Int("agent_run_id", agentRunID),
+			)
+		} else {
+			owner := ""
+			repo := ""
+			if parts := strings.SplitN(issue.Repo, "/", 2); len(parts) == 2 {
+				owner, repo = parts[0], parts[1]
+			} else {
+				logger.Warn("Invalid repo format for plan execution progress comment",
+					config.String("repo", issue.Repo),
+					config.Int("issue_number", issue.Number),
+					config.Int("agent_run_id", agentRunID),
+				)
+			}
+
+			planRunID := agentRun.PlanAgentRunID
+			if planRunID == nil && agentRun.ReviewFeedbackID != nil {
+				reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
+				reviewFeedback, rfErr := reviewFeedbackRepo.FindByID(*agentRun.ReviewFeedbackID)
+				if rfErr != nil {
+					logger.Warn("Failed to load ReviewFeedback for plan execution progress comment",
+						config.Error(rfErr),
+						config.Int("review_feedback_id", *agentRun.ReviewFeedbackID),
+						config.Int("agent_run_id", agentRunID),
+					)
+				} else if reviewFeedback != nil && reviewFeedback.PlanAgentRunID != nil {
+					planRunID = reviewFeedback.PlanAgentRunID
+				}
+			}
+
+			if owner != "" && repo != "" && planRunID != nil {
+				if appGitHubClient == nil {
+					if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+						appGitHubClient = ghApp
+					} else {
+						logger.Warn("Failed to init GitHub App client for plan execution progress comment", config.Error(err))
+					}
+				}
+
+				if appGitHubClient != nil {
+					rawClient, err := appGitHubClient.ForRepo(c.Request.Context(), owner, repo)
+					if err != nil {
+						logger.Warn("Failed to init per-repo GitHub client for plan execution progress comment",
+							config.Error(err),
+							config.String("owner", owner),
+							config.String("repo", repo),
+						)
+					} else {
+						githubClient := clients.NewFromGitHub(rawClient, logger)
+						githubNotification := services.NewGitHubNotificationService(githubClient, logger)
+						if err := githubNotification.UpdatePlanExecutionCompletedComment(
+							c.Request.Context(),
+							owner,
+							repo,
+							issue.Number,
+							req.AgentType,
+							*planRunID,
+							req.Status == "succeeded",
+						); err != nil {
+							logger.Warn("Failed to update plan execution completion comment",
+								config.Error(err),
+								config.String("owner", owner),
+								config.String("repo", repo),
+								config.Int("issue_number", issue.Number),
+								config.Int("plan_agent_run_id", *planRunID),
+								config.String("execution_state", req.Status),
+							)
+						} else {
+							logger.Info("Updated plan execution completion comment",
+								config.String("owner", owner),
+								config.String("repo", repo),
+								config.Int("issue_number", issue.Number),
+								config.Int("plan_agent_run_id", *planRunID),
+								config.String("execution_state", req.Status),
+							)
+						}
+					}
+				}
+			} else if planRunID == nil {
+				logger.Warn("Plan execution run missing PlanAgentRunID; skip progress comment update",
+					config.Int("agent_run_id", agentRunID),
+					config.String("execution_state", req.Status),
+				)
+			}
+		}
+	}
+
 	// ------------------------------------------------------------------
 	// Retry progress notification (US3 T102)
 	// Post retry progress comment on failure when retry_count < 50
@@ -1381,6 +1475,108 @@ func handlePlanCreated(
 		return
 	}
 
+	owner, repoName := "", ""
+	if parts := strings.SplitN(issue.Repo, "/", 2); len(parts) == 2 {
+		owner, repoName = parts[0], parts[1]
+	} else {
+		logger.Warn("Invalid repo format for plan progress comment",
+			config.String("repo", issue.Repo),
+			config.Int("issue_id", issue.ID),
+		)
+	}
+
+	var planProgressNotifier *services.GitHubNotificationService
+	ensurePlanProgressNotifier := func() *services.GitHubNotificationService {
+		if planProgressNotifier != nil {
+			return planProgressNotifier
+		}
+		if owner == "" || repoName == "" {
+			return nil
+		}
+		if appGitHubClient == nil {
+			ghApp, err := clients.NewGitHubAppClient(logger)
+			if err != nil {
+				logger.Warn("Failed to init GitHub App client for plan progress comment",
+					config.Error(err),
+					config.Int("plan_agent_run_id", agentRunID),
+					config.Int("issue_number", issue.Number),
+				)
+				return nil
+			}
+			appGitHubClient = ghApp
+		}
+		rawClient, err := appGitHubClient.ForRepo(ctx, owner, repoName)
+		if err != nil {
+			logger.Warn("Failed to init per-repo GitHub client for plan progress comment",
+				config.Error(err),
+				config.String("owner", owner),
+				config.String("repo", repoName),
+				config.Int("plan_agent_run_id", agentRunID),
+			)
+			return nil
+		}
+		githubClient := clients.NewFromGitHub(rawClient, logger)
+		planProgressNotifier = services.NewGitHubNotificationService(githubClient, logger)
+		return planProgressNotifier
+	}
+
+	planCreationProgressNotified := false
+	planExecutionStartNotified := false
+
+	notifyPlanCreationCompleted := func() {
+		if planCreationProgressNotified {
+			return
+		}
+		notifier := ensurePlanProgressNotifier()
+		if notifier == nil {
+			return
+		}
+		if err := notifier.UpdatePlanCreationCompletedComment(ctx, owner, repoName, issue.Number, agentRun.AgentType, agentRunID); err != nil {
+			logger.Warn("Failed to update plan creation progress comment",
+				config.Error(err),
+				config.String("owner", owner),
+				config.String("repo", repoName),
+				config.Int("issue_number", issue.Number),
+				config.Int("plan_agent_run_id", agentRunID),
+			)
+			return
+		}
+		planCreationProgressNotified = true
+		logger.Info("Updated plan creation progress comment",
+			config.String("owner", owner),
+			config.String("repo", repoName),
+			config.Int("issue_number", issue.Number),
+			config.Int("plan_agent_run_id", agentRunID),
+		)
+	}
+
+	notifyPlanExecutionStarted := func(agentType string) {
+		if planExecutionStartNotified {
+			return
+		}
+		notifier := ensurePlanProgressNotifier()
+		if notifier == nil {
+			return
+		}
+		if err := notifier.UpdatePlanExecutionStartedComment(ctx, owner, repoName, issue.Number, agentType, agentRunID); err != nil {
+			logger.Warn("Failed to update plan execution start comment",
+				config.Error(err),
+				config.String("owner", owner),
+				config.String("repo", repoName),
+				config.Int("issue_number", issue.Number),
+				config.Int("plan_agent_run_id", agentRunID),
+			)
+			return
+		}
+		planExecutionStartNotified = true
+		logger.Info("Updated plan execution start comment",
+			config.String("owner", owner),
+			config.String("repo", repoName),
+			config.Int("issue_number", issue.Number),
+			config.Int("plan_agent_run_id", agentRunID),
+		)
+	}
+
 	// Handle review-triggered plan creation (with ReviewFeedback)
 	if reviewFeedback != nil && reviewFeedbackRepo != nil {
 		prRepo := repositories.NewPullRequestRepository(db)
@@ -1643,6 +1839,9 @@ func handlePlanCreated(
 			config.Int("review_feedback_id", reviewFeedback.ID),
 			config.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 		)
+
+		notifyPlanCreationCompleted()
+		notifyPlanExecutionStarted(executionRun.AgentType)
 
 		c.JSON(http.StatusOK, gin.H{
 			"message":      "Plan created and execution job started",
@@ -2056,6 +2255,7 @@ func handlePlanCreated(
 	// Note: execution run and plan creation run state transition are already committed in transaction
 	// If this fails, execution run exists and can be retried
 	stateMachine := services.NewAgentRunStateMachine(agentRunRepo, logger)
+	notifyPlanCreationCompleted()
 	if err := stateMachine.TransitionToStarted(executionRun.ID); err != nil {
 		logger.Error("Failed to transition plan execution AgentRun to started state",
 			config.Error(err),
@@ -2139,6 +2339,7 @@ func handlePlanCreated(
 		config.Int("execution_agent_run_id", executionRun.ID),
 		config.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 	)
+	notifyPlanExecutionStarted(executionRun.AgentType)
 
 	// Note: Plan creation job deletion is handled by defer function defined earlier
 	// This ensures cleanup happens even if early return occurs due to new reviews
