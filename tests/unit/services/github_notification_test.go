@@ -209,6 +209,57 @@ func TestNotifyPRCreated_NoIssueNumber_PROnly(t *testing.T) {
 	require.Equal(t, 20, posts[0].Number)
 }
 
+func TestPostExecutionStartComment_UsesMarkerAndUpdates(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	ctx := context.Background()
+	const (
+		owner     = "org"
+		repo      = "repo"
+		issueNum  = 10
+		agentType = "claude-code"
+		runID     = 101
+	)
+
+	require.NoError(t, svc.PostExecutionStartComment(ctx, owner, repo, issueNum, agentType, runID))
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Contains(t, posts[0].Body, "<!-- agent:execution-start:101 -->")
+	require.Contains(t, posts[0].Body, "🤖 Agent execution started - Creating plan...")
+
+	require.NoError(t, svc.UpdatePlanCreationCompletedComment(ctx, owner, repo, issueNum, agentType, runID))
+
+	updates := mock.Updates()
+	require.Len(t, updates, 1)
+	require.Contains(t, updates[0].Body, "<!-- agent:execution-start:101 -->")
+	require.Contains(t, updates[0].Body, "✅ Plan created - Starting execution...")
+	require.Len(t, mock.Posts(), 1) // still a single comment (updated, not duplicated)
+}
+
+func TestUpdatePlanExecutionStartedComment_CreatesWhenMissing(t *testing.T) {
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	ctx := context.Background()
+	err := svc.UpdatePlanExecutionStartedComment(ctx, "org", "repo", 42, "cursor-agent", 555)
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Contains(t, posts[0].Body, "<!-- agent:execution-start:555 -->")
+	require.Contains(t, posts[0].Body, "🚀 Plan execution started...")
+}
+
 // -----------------------------------------------------------------------------
 // Retry Progress Notification Tests (US3 T102)
 // -----------------------------------------------------------------------------
