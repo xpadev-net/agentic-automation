@@ -21,30 +21,43 @@ func TestCreateJobForPlanExecution_UsesPromptFromInput(t *testing.T) {
 	jobService := services.NewKubernetesJobService(k8sClient, logger)
 
 	// Define test cases
+	detailedBody := "Detailed issue body"
+
 	tests := []struct {
 		name           string
 		inputJSON      string
+		issueBody      *string
 		expectedPrompt string
 	}{
 		{
 			name:           "Input has prompt",
 			inputJSON:      `{"prompt": "Original task description", "schema_version": "1"}`,
+			issueBody:      &detailedBody,
 			expectedPrompt: "Original task description",
 		},
 		{
 			name:           "Input has empty prompt",
 			inputJSON:      `{"prompt": "", "schema_version": "1"}`,
-			expectedPrompt: "Plan execution for issue #123", // Default fallback
+			issueBody:      &detailedBody,
+			expectedPrompt: "Test Issue\n\nDetailed issue body",
 		},
 		{
 			name:           "Input missing prompt field",
 			inputJSON:      `{"schema_version": "1"}`,
-			expectedPrompt: "Plan execution for issue #123", // Default fallback
+			issueBody:      &detailedBody,
+			expectedPrompt: "Test Issue\n\nDetailed issue body",
 		},
 		{
 			name:           "Input is empty",
 			inputJSON:      "",
-			expectedPrompt: "Plan execution for issue #123", // Default fallback
+			issueBody:      &detailedBody,
+			expectedPrompt: "Test Issue\n\nDetailed issue body",
+		},
+		{
+			name:           "Issue body is nil",
+			inputJSON:      `{"schema_version": "1"}`,
+			issueBody:      nil,
+			expectedPrompt: "Test Issue",
 		},
 	}
 
@@ -67,6 +80,7 @@ func TestCreateJobForPlanExecution_UsesPromptFromInput(t *testing.T) {
 				Number: 123,
 				Repo:   "owner/repo",
 				Title:  "Test Issue",
+				Body:   tc.issueBody,
 			}
 
 			// Execute
