@@ -20,6 +20,10 @@ const (
 	webhookPath    = "/webhooks/github"
 )
 
+var (
+	statusEventHandler = handlers.HandleStatus
+)
+
 // Server represents the webhook server
 type Server struct {
 	router    *gin.Engine
@@ -65,7 +69,7 @@ func setupRouter(logger *config.AppLogger) *gin.Engine {
 	router.POST("/webhooks/status",
 		middleware.VerifyWebhookSignature(),
 		middleware.IdempotencyMiddleware(),
-		handlers.HandleStatus)
+		statusEventHandler)
 
 	// APIルート (Bearer認証)
 	router.POST("/api/agent-runs/:id/report",
@@ -148,6 +152,9 @@ func handleGitHubWebhook(c *gin.Context) {
 		return
 	case models.EventTypeCheckSuite:
 		handlers.HandleCheckSuite(c)
+		return
+	case models.EventTypeStatus:
+		statusEventHandler(c)
 		return
 	default:
 		// For unhandled event types, log and return 200 OK

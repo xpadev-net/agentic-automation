@@ -102,6 +102,24 @@ func (r *ReviewFeedbackRepository) FindByApprovalDetected(prID int, approvalDete
 	return feedbacks, nil
 }
 
+// FindLatestResponseByPRID returns the most recent review feedback for a PR whose status is not 'requested'.
+// This represents the latest Codex response (approval / rejection) rather than a pending request.
+func (r *ReviewFeedbackRepository) FindLatestResponseByPRID(prID int) (*models.ReviewFeedback, error) {
+	if prID <= 0 {
+		return nil, errors.New("prID must be greater than 0")
+	}
+
+	var feedback models.ReviewFeedback
+	err := r.db.Where("pr_id = ? AND status != ?", prID, "requested").Order("created_at DESC").First(&feedback).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &feedback, nil
+}
+
 // FindLatestByPRID finds the most recent review feedback for a PR
 func (r *ReviewFeedbackRepository) FindLatestByPRID(prID int) (*models.ReviewFeedback, error) {
 	if prID <= 0 {

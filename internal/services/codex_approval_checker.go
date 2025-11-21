@@ -26,14 +26,12 @@ func (c *codexApprovalChecker) IsApproved(ctx context.Context, owner, repo strin
 		return false, err
 	}
 
-	feedbacks, err := c.reviewRepo.FindByPRID(pr.ID)
+	latestFeedback, err := c.reviewRepo.FindLatestResponseByPRID(pr.ID)
 	if err != nil {
 		return false, err
 	}
-	for _, fb := range feedbacks {
-		if fb != nil && fb.ApprovalDetected {
-			return true, nil
-		}
+	if latestFeedback == nil {
+		return false, nil
 	}
-	return false, nil
+	return latestFeedback.ApprovalDetected, nil
 }
