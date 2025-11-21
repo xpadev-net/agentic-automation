@@ -619,7 +619,7 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 	)
 
 	// Extract prompt from AgentRun.Input if available
-	prompt := fmt.Sprintf("Plan execution for issue #%d", issue.Number)
+	prompt := ""
 	if len(agentRun.Input) > 0 {
 		var inputMap map[string]interface{}
 		if err := json.Unmarshal(agentRun.Input, &inputMap); err == nil {
@@ -627,6 +627,9 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 				prompt = strings.TrimSpace(p)
 			}
 		}
+	}
+	if prompt == "" {
+		prompt = buildPlanExecutionPrompt(issue)
 	}
 
 	jobConfig := &clients.JobConfig{
@@ -670,4 +673,29 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 	)
 
 	return job, nil
+}
+
+// buildPlanExecutionPrompt constructs the prompt for plan execution jobs using Issue context.
+// Body is optional; when provided it is separated from the title by an empty line to preserve readability.
+func buildPlanExecutionPrompt(issue *models.Issue) string {
+	if issue == nil {
+		return ""
+	}
+
+	title := strings.TrimSpace(issue.Title)
+
+	var body string
+	if issue.Body != nil {
+		body = strings.TrimSpace(*issue.Body)
+	}
+
+	if title == "" {
+		return body
+	}
+
+	if body == "" {
+		return title
+	}
+
+	return fmt.Sprintf("%s\n\n%s", title, body)
 }
