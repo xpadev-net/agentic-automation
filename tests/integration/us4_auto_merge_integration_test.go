@@ -400,11 +400,14 @@ func (c *dbCodexCheckerForTest) IsApproved(ctx context.Context, owner, repo stri
 	if err != nil || pr == nil {
 		return false, err
 	}
-	fbs, err := c.rfRepo.FindByApprovalDetected(pr.ID, true)
+	fb, err := c.rfRepo.FindLatestResponseByPRID(pr.ID)
 	if err != nil {
 		return false, err
 	}
-	return len(fbs) > 0, nil
+	if fb == nil {
+		return false, nil
+	}
+	return fb.ApprovalDetected, nil
 }
 
 // sendCheckSuiteWebhook sends a check_suite webhook to the router

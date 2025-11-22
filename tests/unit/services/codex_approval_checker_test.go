@@ -1,10 +1,11 @@
 package services
 
 import (
+	"testing"
+
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
-	"testing"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
@@ -45,7 +46,7 @@ func setupTestDBForCodexApproval(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestCodexApprovalChecker_IsApproved(t *testing.T) {
+func TestCodexApprovalChecker_IsApprovedUsesLatestNonRequestedResponse(t *testing.T) {
 	db := setupTestDBForCodexApproval(t)
 	prRepo := repositories.NewPullRequestRepository(db)
 	reviewRepo := repositories.NewReviewFeedbackRepositoryWithDB(db)
@@ -53,17 +54,45 @@ func TestCodexApprovalChecker_IsApproved(t *testing.T) {
 	pr := &models.PullRequest{Repo: "o/r", Number: 10, Status: "open"}
 	require.NoError(t, db.Create(pr).Error)
 
-	// not approved initially
 	checker := services.NewCodexApprovalChecker(reviewRepo, prRepo, nil)
+
+	// no feedbacks -> false
 	ok, err := checker.IsApproved(nil, "o", "r", 10)
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	// create approval record
-	fb := &models.ReviewFeedback{PRID: pr.ID, Source: "Codex", Status: "received", ApprovalDetected: true}
-	require.NoError(t, db.Create(fb).Error)
-
-	ok2, err := checker.IsApproved(nil, "o", "r", 10)
+	// requested entry alone should be ignored
+	requested := &models.ReviewFeedback{PRID: pr.ID, Source: "Codex", Status: "requested", ApprovalDetected: false}
+	require.NoError(t, db.Create(requested).Error)
+	ok, err = checker.IsApproved(nil, "o", "r", 10)
 	require.NoError(t, err)
-	require.True(t, ok2)
+	require.False(t, ok)
+
+	// received approval -> true
+	approved := &models.ReviewFeedback{PRID: pr.ID, Source: "Codex", Status: "received", ApprovalDetected: true}
+	require.NoError(t, db.Create(approved).Error)
+	ok, err = checker.IsApproved(nil, "o", "r", 10)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// later non-approval response should override previous approval
+	rejection := &models.ReviewFeedback{PRID: pr.ID, Source: "Codex", Status: "commented", ApprovalDetected: false}
+	require.NoError(t, db.Create(rejection).Error)
+	ok, err = checker.IsApproved(nil, "o", "r", 10)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// newest entry re-approves -> true
+	latestApprove := &models.ReviewFeedback{PRID: pr.ID, Source: "Codex", Status: "commented", ApprovalDetected: true}
+	require.NoError(t, db.Create(latestApprove).Error)
+	ok, err = checker.IsApproved(nil, "o", "r", 10)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	// adding a requested entry after latest response should not change result
+	newRequest := &models.ReviewFeedback{PRID: pr.ID, Source: "Codex", Status: "requested", ApprovalDetected: false}
+	require.NoError(t, db.Create(newRequest).Error)
+	ok, err = checker.IsApproved(nil, "o", "r", 10)
+	require.NoError(t, err)
+	require.True(t, ok)
 }

@@ -94,11 +94,14 @@ func (c *dbCodexChecker) IsApproved(ctx context.Context, owner, repo string, prN
 	if err != nil || pr == nil {
 		return false, err
 	}
-	fbs, err := c.rfRepo.FindByApprovalDetected(pr.ID, true)
+	fb, err := c.rfRepo.FindLatestResponseByPRID(pr.ID)
 	if err != nil {
 		return false, err
 	}
-	return len(fbs) > 0, nil
+	if fb == nil {
+		return false, nil
+	}
+	return fb.ApprovalDetected, nil
 }
 
 // StatusPayload represents GitHub status event payload (subset used by our handler)
