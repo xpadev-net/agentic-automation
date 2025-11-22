@@ -41,6 +41,7 @@ type JobConfig struct {
 	PlanContent           string
 	ReviewFeedbackContent string
 	CursorAllowWrite      bool
+	JobName               string // Kubernetes Job name (injected as JOB_NAME environment variable)
 }
 
 // KubernetesClient wraps Kubernetes API client functionality
@@ -315,6 +316,14 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 			Name:  "CURSOR_ALLOW_WRITE",
 			Value: strconv.FormatBool(jobCfg.CursorAllowWrite),
 		},
+	}
+
+	// Add Job name if specified (for agent-runner to report back the correct job name)
+	if jobCfg.JobName != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "JOB_NAME",
+			Value: jobCfg.JobName,
+		})
 	}
 
 	// Add existing branch name if specified (for continuing work on existing PR)

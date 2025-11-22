@@ -26,13 +26,14 @@ import (
 
 // ReportRequest represents the request body for agent execution report
 type ReportRequest struct {
-	Status       string `json:"status" binding:"required,oneof=succeeded failed"`
-	AgentType    string `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
-	PRNumber     *int   `json:"pr_number,omitempty"`
-	Branch       string `json:"branch,omitempty"`
-	CommitSHA    string `json:"commit_sha,omitempty"`
-	ErrorMessage string `json:"error_message,omitempty"`
-	Logs         string `json:"logs,omitempty"`
+	Status       string  `json:"status" binding:"required,oneof=succeeded failed"`
+	AgentType    string  `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
+	PRNumber     *int    `json:"pr_number,omitempty"`
+	Branch       string  `json:"branch,omitempty"`
+	CommitSHA    string  `json:"commit_sha,omitempty"`
+	ErrorMessage string  `json:"error_message,omitempty"`
+	Logs         string  `json:"logs,omitempty"`
+	JobName      *string `json:"job_name,omitempty"`
 }
 
 // ReportResponse represents the response for successful report
@@ -44,11 +45,12 @@ type ReportResponse struct {
 
 // PlanReportRequest represents the request body for plan creation/execution reports.
 type PlanReportRequest struct {
-	Status          string `json:"status" binding:"required,oneof=plan_created plan_rejected"`
-	AgentType       string `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
-	PlanContent     string `json:"plan_content,omitempty"`
-	RejectionReason string `json:"rejection_reason,omitempty"`
-	Logs            string `json:"logs,omitempty"`
+	Status          string  `json:"status" binding:"required,oneof=plan_created plan_rejected"`
+	AgentType       string  `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
+	PlanContent     string  `json:"plan_content,omitempty"`
+	RejectionReason string  `json:"rejection_reason,omitempty"`
+	Logs            string  `json:"logs,omitempty"`
+	JobName         *string `json:"job_name,omitempty"`
 }
 
 const planPreviewLogLimit = 100
@@ -859,12 +861,24 @@ func HandleAgentReport(c *gin.Context) {
 			)
 		} else {
 			var jobName string
-			// Reuse actual job name if available, otherwise fallback to generation
-			if agentRun.JobName != nil && *agentRun.JobName != "" {
+			var jobNameSource string
+			// Priority: 1) req.JobName (from reporting attempt), 2) agentRun.JobName (stored), 3) FindJobByAgentRunID (fallback)
+			if req.JobName != nil && *req.JobName != "" {
+				jobName = *req.JobName
+				jobNameSource = "request"
+				logger.Info("Using job name from request for cleanup",
+					config.Int("agent_run_id", agentRunID),
+					config.String("job_name", jobName),
+					config.String("job_name_source", jobNameSource),
+					config.String("execution_mode", agentRun.ExecutionMode),
+				)
+			} else if agentRun.JobName != nil && *agentRun.JobName != "" {
 				jobName = *agentRun.JobName
+				jobNameSource = "stored"
 				logger.Info("Using stored job name for cleanup",
 					config.Int("agent_run_id", agentRunID),
 					config.String("job_name", jobName),
+					config.String("job_name_source", jobNameSource),
 					config.String("execution_mode", agentRun.ExecutionMode),
 				)
 			} else {
@@ -879,9 +893,11 @@ func HandleAgentReport(c *gin.Context) {
 					// Continue without deleting job (non-blocking - job may already be deleted)
 				} else {
 					jobName = job.Name
+					jobNameSource = "fallback"
 					logger.Info("Found job by agent-run-id for cleanup (fallback)",
 						config.Int("agent_run_id", agentRunID),
 						config.String("job_name", jobName),
+						config.String("job_name_source", jobNameSource),
 						config.String("execution_mode", agentRun.ExecutionMode),
 					)
 				}
@@ -1228,6 +1244,11 @@ func handlePlanCreated(
 	originalState string,
 ) {
 	logger := config.GetLogger()
+	// Save job name from request for deferred cleanup (if provided)
+	var planCreationJobNameFromRequest string
+	if req.JobName != nil && *req.JobName != "" {
+		planCreationJobNameFromRequest = *req.JobName
+	}
 	planContent := strings.TrimSpace(req.PlanContent)
 	if planContent == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -1439,13 +1460,28 @@ func handlePlanCreated(
 			// Reload agentRun to get the actual job name
 			reloadedAgentRun, reloadErr := agentRunRepo.GetByID(agentRunID)
 			var planCreationJobName string
+			var jobNameSource string
 
-			// Reuse actual job name if available, otherwise fallback to generation
-			if reloadErr == nil && reloadedAgentRun != nil && reloadedAgentRun.JobName != nil && *reloadedAgentRun.JobName != "" {
-				planCreationJobName = *reloadedAgentRun.JobName
+			// Priority: 1) planCreationJobNameFromRequest (from reporting attempt), 2) reloadedAgentRun.JobName (stored), 3) FindJobByAgentRunID (fallback)
+			if planCreationJobNameFromRequest != "" {
+				planCreationJobName = planCreationJobNameFromRequest
+				jobNameSource = "request"
 				logFields := []config.Field{
 					config.Int("plan_agent_run_id", agentRunID),
 					config.String("job_name", planCreationJobName),
+					config.String("job_name_source", jobNameSource),
+				}
+				if reviewFeedback != nil {
+					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
+				}
+				logger.Info("Using job name from request for plan creation cleanup", logFields...)
+			} else if reloadErr == nil && reloadedAgentRun != nil && reloadedAgentRun.JobName != nil && *reloadedAgentRun.JobName != "" {
+				planCreationJobName = *reloadedAgentRun.JobName
+				jobNameSource = "stored"
+				logFields := []config.Field{
+					config.Int("plan_agent_run_id", agentRunID),
+					config.String("job_name", planCreationJobName),
+					config.String("job_name_source", jobNameSource),
 				}
 				if reviewFeedback != nil {
 					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
@@ -1468,9 +1504,11 @@ func handlePlanCreated(
 				}
 
 				planCreationJobName = job.Name
+				jobNameSource = "fallback"
 				logFields := []config.Field{
 					config.Int("plan_agent_run_id", agentRunID),
 					config.String("job_name", planCreationJobName),
+					config.String("job_name_source", jobNameSource),
 				}
 				if reviewFeedback != nil {
 					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))

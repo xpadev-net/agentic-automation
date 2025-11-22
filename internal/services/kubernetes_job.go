@@ -249,6 +249,17 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 	// Build JobConfig
 	executionMode := resolveExecutionMode(agentRun)
 
+	// Generate job name
+	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	if err != nil {
+		s.logger.Error("Failed to generate job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate job name: %w", err)
+	}
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
@@ -263,17 +274,7 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		BranchName:       branchName,
 		ExecutionMode:    executionMode,
 		CursorAllowWrite: true,
-	}
-
-	// Generate job name
-	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
-	if err != nil {
-		s.logger.Error("Failed to generate job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate job name: %w", err)
+		JobName:          jobName,
 	}
 
 	// Create Kubernetes Job
@@ -391,6 +392,17 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 	// Build JobConfig
 	executionMode := resolveExecutionMode(agentRun)
 
+	// Generate job name
+	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	if err != nil {
+		s.logger.Error("Failed to generate job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate job name: %w", err)
+	}
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
@@ -405,17 +417,7 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		BranchName:       branchName,
 		ExecutionMode:    executionMode,
 		CursorAllowWrite: true,
-	}
-
-	// Generate job name
-	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
-	if err != nil {
-		s.logger.Error("Failed to generate job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate job name: %w", err)
+		JobName:          jobName,
 	}
 
 	// Create Kubernetes Job
@@ -543,6 +545,17 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		config.String("service", "kubernetes_job"),
 	)
 
+	jobName, err := s.kubernetesClient.GeneratePlanCreationJobName(agentRun.ID, reviewFeedbackID)
+	if err != nil {
+		s.logger.Error("Failed to generate plan creation job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("review_feedback_id", reviewFeedbackID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate plan creation job name: %w", err)
+	}
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:            agentRun.ID,
 		RetryCount:            agentRun.RetryCount,
@@ -558,17 +571,7 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		ExecutionMode:         "plan_creation",
 		ReviewFeedbackContent: planContent,
 		CursorAllowWrite:      false,
-	}
-
-	jobName, err := s.kubernetesClient.GeneratePlanCreationJobName(agentRun.ID, reviewFeedbackID)
-	if err != nil {
-		s.logger.Error("Failed to generate plan creation job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Int("review_feedback_id", reviewFeedbackID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate plan creation job name: %w", err)
+		JobName:               jobName,
 	}
 
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
@@ -666,6 +669,17 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 		prompt = buildPlanExecutionPrompt(issue)
 	}
 
+	// Generate job name
+	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	if err != nil {
+		s.logger.Error("Failed to generate job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate job name: %w", err)
+	}
+
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
 		RetryCount:       agentRun.RetryCount,
@@ -681,17 +695,7 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 		ExecutionMode:    "plan_execution",
 		PlanContent:      planContent,
 		CursorAllowWrite: true,
-	}
-
-	// Generate job name
-	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
-	if err != nil {
-		s.logger.Error("Failed to generate job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate job name: %w", err)
+		JobName:          jobName,
 	}
 
 	// Create Kubernetes Job
