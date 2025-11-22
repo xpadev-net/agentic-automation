@@ -3,6 +3,7 @@ package clients
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"os"
@@ -209,16 +210,47 @@ func NewKubernetesClient(logger *config.AppLogger) (*KubernetesClient, error) {
 	}, nil
 }
 
-// GenerateJobName generates a job name from agentRunID
-func (c *KubernetesClient) GenerateJobName(agentRunID int) string {
-	return fmt.Sprintf("agent-runner-%d", agentRunID)
+// generateRandomSuffix generates a 6-character random suffix using crypto/rand
+// for secure random generation. The suffix consists of lowercase alphanumeric
+// characters (a-z, 0-9) to comply with Kubernetes DNS subdomain name constraints.
+func generateRandomSuffix() (string, error) {
+	const (
+		charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+		length  = 6
+	)
+
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate random suffix: %w", err)
+	}
+
+	for i := range bytes {
+		bytes[i] = charset[bytes[i]%byte(len(charset))]
+	}
+
+	return string(bytes), nil
+}
+
+// GenerateJobName generates a job name from agentRunID with a random suffix
+// to prevent naming conflicts when multiple jobs are created for the same agentRunID.
+// Format: agent-runner-{agentRunID}-{randomSuffix}
+func (c *KubernetesClient) GenerateJobName(agentRunID int) (string, error) {
+	suffix, err := generateRandomSuffix()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate job name: %w", err)
+	}
+	return fmt.Sprintf("agent-runner-%d-%s", agentRunID, suffix), nil
 }
 
 // GeneratePlanCreationJobName generates a unique job name for plan creation
-// by including review_feedback_id to ensure uniqueness when the same agentRunID
-// is used for multiple plan creation attempts
-func (c *KubernetesClient) GeneratePlanCreationJobName(agentRunID int, reviewFeedbackID int) string {
-	return fmt.Sprintf("agent-runner-%d-plan-%d", agentRunID, reviewFeedbackID)
+// by including review_feedback_id and a random suffix to ensure uniqueness.
+// Format: agent-runner-{agentRunID}-plan-{reviewFeedbackID}-{randomSuffix}
+func (c *KubernetesClient) GeneratePlanCreationJobName(agentRunID int, reviewFeedbackID int) (string, error) {
+	suffix, err := generateRandomSuffix()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate plan creation job name: %w", err)
+	}
+	return fmt.Sprintf("agent-runner-%d-plan-%d-%s", agentRunID, reviewFeedbackID, suffix), nil
 }
 
 // buildEnvVars builds environment variables for the Job container

@@ -266,7 +266,15 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 	}
 
 	// Generate job name
-	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	if err != nil {
+		s.logger.Error("Failed to generate job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate job name: %w", err)
+	}
 
 	// Create Kubernetes Job
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
@@ -397,7 +405,15 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 	}
 
 	// Generate job name
-	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	if err != nil {
+		s.logger.Error("Failed to generate job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate job name: %w", err)
+	}
 
 	// Create Kubernetes Job
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
@@ -538,7 +554,16 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		CursorAllowWrite:      false,
 	}
 
-	jobName := s.kubernetesClient.GeneratePlanCreationJobName(agentRun.ID, reviewFeedbackID)
+	jobName, err := s.kubernetesClient.GeneratePlanCreationJobName(agentRun.ID, reviewFeedbackID)
+	if err != nil {
+		s.logger.Error("Failed to generate plan creation job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Int("review_feedback_id", reviewFeedbackID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate plan creation job name: %w", err)
+	}
 
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)
 	if err != nil {
@@ -650,7 +675,15 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 	}
 
 	// Generate job name
-	jobName := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
+	if err != nil {
+		s.logger.Error("Failed to generate job name",
+			config.Int("agent_run_id", agentRun.ID),
+			config.Error(err),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, fmt.Errorf("failed to generate job name: %w", err)
+	}
 
 	// Create Kubernetes Job
 	job, err := s.kubernetesClient.CreateJob(ctx, jobName, jobConfig)

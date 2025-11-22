@@ -859,37 +859,47 @@ func HandleAgentReport(c *gin.Context) {
 			)
 		} else {
 			var jobName string
+			var err error
 			// Generate job name based on execution mode
 			if agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
 				// Plan creation jobs use a different naming scheme
-				jobName = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
+				jobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
 			} else {
 				// Normal jobs and plan execution jobs use standard naming
-				jobName = kubernetesClient.GenerateJobName(agentRunID)
+				jobName, err = kubernetesClient.GenerateJobName(agentRunID)
 			}
 
-			// Delete job (non-blocking - log errors but don't fail the response)
-			if err := kubernetesClient.DeleteJob(c.Request.Context(), jobName); err != nil {
-				logger.Warn("Failed to delete Kubernetes Job after successful execution",
+			if err != nil {
+				logger.Warn("Failed to generate job name for deletion",
 					config.Error(err),
 					config.Int("agent_run_id", agentRunID),
-					config.String("job_name", jobName),
 					config.String("execution_mode", agentRun.ExecutionMode),
 				)
+				// Continue without deleting job (non-blocking)
 			} else {
-				logger.Info("Successfully deleted Kubernetes Job after successful execution",
-					config.Int("agent_run_id", agentRunID),
-					config.String("job_name", jobName),
-					config.String("execution_mode", agentRun.ExecutionMode),
-				)
-				// Wait for job deletion to complete
-				if err := kubernetesClient.WaitForJobDeletion(c.Request.Context(), jobName); err != nil {
-					logger.Warn("Failed to wait for Kubernetes Job deletion",
+				// Delete job (non-blocking - log errors but don't fail the response)
+				if err := kubernetesClient.DeleteJob(c.Request.Context(), jobName); err != nil {
+					logger.Warn("Failed to delete Kubernetes Job after successful execution",
 						config.Error(err),
 						config.Int("agent_run_id", agentRunID),
 						config.String("job_name", jobName),
 						config.String("execution_mode", agentRun.ExecutionMode),
 					)
+				} else {
+					logger.Info("Successfully deleted Kubernetes Job after successful execution",
+						config.Int("agent_run_id", agentRunID),
+						config.String("job_name", jobName),
+						config.String("execution_mode", agentRun.ExecutionMode),
+					)
+					// Wait for job deletion to complete
+					if err := kubernetesClient.WaitForJobDeletion(c.Request.Context(), jobName); err != nil {
+						logger.Warn("Failed to wait for Kubernetes Job deletion",
+							config.Error(err),
+							config.Int("agent_run_id", agentRunID),
+							config.String("job_name", jobName),
+							config.String("execution_mode", agentRun.ExecutionMode),
+						)
+					}
 				}
 			}
 		}
@@ -1416,12 +1426,26 @@ func handlePlanCreated(
 	defer func() {
 		if kubernetesClient != nil && agentRunID > 0 {
 			var planCreationJobName string
+			var err error
 			if reviewFeedback != nil {
 				// Review-triggered: use GeneratePlanCreationJobName
-				planCreationJobName = kubernetesClient.GeneratePlanCreationJobName(agentRunID, reviewFeedback.ID)
+				planCreationJobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, reviewFeedback.ID)
 			} else {
 				// Issue-triggered: use GenerateJobName
-				planCreationJobName = kubernetesClient.GenerateJobName(agentRunID)
+				planCreationJobName, err = kubernetesClient.GenerateJobName(agentRunID)
+			}
+
+			if err != nil {
+				logFields := []config.Field{
+					config.Error(err),
+					config.Int("plan_agent_run_id", agentRunID),
+				}
+				if reviewFeedback != nil {
+					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
+				}
+				logger.Warn("Failed to generate plan creation job name for deletion", logFields...)
+				// Continue without deleting job (non-blocking)
+				return
 			}
 
 			if err := kubernetesClient.DeleteJob(ctx, planCreationJobName); err != nil {
