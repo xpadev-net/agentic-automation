@@ -859,7 +859,6 @@ func HandleAgentReport(c *gin.Context) {
 			)
 		} else {
 			var jobName string
-			var err error
 			// Reuse actual job name if available, otherwise fallback to generation
 			if agentRun.JobName != nil && *agentRun.JobName != "" {
 				jobName = *agentRun.JobName
@@ -869,24 +868,18 @@ func HandleAgentReport(c *gin.Context) {
 					config.String("execution_mode", agentRun.ExecutionMode),
 				)
 			} else {
-				// Fallback: Generate job name based on execution mode (for backward compatibility)
-				if agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
-					// Plan creation jobs use a different naming scheme
-					jobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
-				} else {
-					// Normal jobs and plan execution jobs use standard naming
-					jobName, err = kubernetesClient.GenerateJobName(agentRunID)
-				}
-
-				if err != nil {
-					logger.Warn("Failed to generate job name for deletion",
-						config.Error(err),
+				// Fallback: Find job by agent-run-id label (for backward compatibility when JobName is not stored)
+				job, findErr := kubernetesClient.FindJobByAgentRunID(c.Request.Context(), agentRunID)
+				if findErr != nil {
+					logger.Warn("Failed to find job by agent-run-id for deletion (job may already be deleted)",
+						config.Error(findErr),
 						config.Int("agent_run_id", agentRunID),
 						config.String("execution_mode", agentRun.ExecutionMode),
 					)
-					// Continue without deleting job (non-blocking)
+					// Continue without deleting job (non-blocking - job may already be deleted)
 				} else {
-					logger.Info("Generated job name for cleanup (fallback)",
+					jobName = job.Name
+					logger.Info("Found job by agent-run-id for cleanup (fallback)",
 						config.Int("agent_run_id", agentRunID),
 						config.String("job_name", jobName),
 						config.String("execution_mode", agentRun.ExecutionMode),
@@ -1446,7 +1439,6 @@ func handlePlanCreated(
 			// Reload agentRun to get the actual job name
 			reloadedAgentRun, reloadErr := agentRunRepo.GetByID(agentRunID)
 			var planCreationJobName string
-			var err error
 
 			// Reuse actual job name if available, otherwise fallback to generation
 			if reloadErr == nil && reloadedAgentRun != nil && reloadedAgentRun.JobName != nil && *reloadedAgentRun.JobName != "" {
@@ -1460,28 +1452,22 @@ func handlePlanCreated(
 				}
 				logger.Info("Using stored job name for plan creation cleanup", logFields...)
 			} else {
-				// Fallback: Generate job name based on execution mode (for backward compatibility)
-				if reviewFeedback != nil {
-					// Review-triggered: use GeneratePlanCreationJobName
-					planCreationJobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, reviewFeedback.ID)
-				} else {
-					// Issue-triggered: use GenerateJobName
-					planCreationJobName, err = kubernetesClient.GenerateJobName(agentRunID)
-				}
-
-				if err != nil {
+				// Fallback: Find job by agent-run-id label (for backward compatibility when JobName is not stored)
+				job, findErr := kubernetesClient.FindJobByAgentRunID(ctx, agentRunID)
+				if findErr != nil {
 					logFields := []config.Field{
-						config.Error(err),
+						config.Error(findErr),
 						config.Int("plan_agent_run_id", agentRunID),
 					}
 					if reviewFeedback != nil {
 						logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
 					}
-					logger.Warn("Failed to generate plan creation job name for deletion", logFields...)
-					// Continue without deleting job (non-blocking)
+					logger.Warn("Failed to find plan creation job by agent-run-id for deletion (job may already be deleted)", logFields...)
+					// Continue without deleting job (non-blocking - job may already be deleted)
 					return
 				}
 
+				planCreationJobName = job.Name
 				logFields := []config.Field{
 					config.Int("plan_agent_run_id", agentRunID),
 					config.String("job_name", planCreationJobName),
@@ -1489,7 +1475,7 @@ func handlePlanCreated(
 				if reviewFeedback != nil {
 					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
 				}
-				logger.Info("Generated job name for plan creation cleanup (fallback)", logFields...)
+				logger.Info("Found plan creation job by agent-run-id for cleanup (fallback)", logFields...)
 			}
 
 			if planCreationJobName == "" {

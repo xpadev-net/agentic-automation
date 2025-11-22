@@ -925,6 +925,33 @@ func (c *KubernetesClient) ListJobs(ctx context.Context, labelSelector string) (
 	return jobs, nil
 }
 
+// FindJobByAgentRunID finds a Kubernetes Job by agent-run-id label
+// This is used as a fallback when JobName is not stored in the database.
+// Returns the first matching Job if multiple are found (should not happen in normal operation).
+func (c *KubernetesClient) FindJobByAgentRunID(ctx context.Context, agentRunID int) (*batchv1.Job, error) {
+	labelSelector := fmt.Sprintf("agent-run-id=%d", agentRunID)
+	jobs, err := c.ListJobs(ctx, labelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find job by agent-run-id %d: %w", agentRunID, err)
+	}
+
+	if len(jobs.Items) == 0 {
+		return nil, fmt.Errorf("no job found with agent-run-id=%d", agentRunID)
+	}
+
+	// Return the first matching job (normally there should be only one)
+	job := &jobs.Items[0]
+	if len(jobs.Items) > 1 {
+		c.logger.Warn("Multiple jobs found with same agent-run-id, using first one",
+			config.Int("agent_run_id", agentRunID),
+			config.Int("job_count", len(jobs.Items)),
+			config.String("selected_job", job.Name),
+		)
+	}
+
+	return job, nil
+}
+
 // GetJobStatus returns the status of a Job as a string
 func (c *KubernetesClient) GetJobStatus(ctx context.Context, jobName string) (string, error) {
 	job, err := c.GetJob(ctx, jobName)
