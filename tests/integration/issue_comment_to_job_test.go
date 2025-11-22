@@ -209,7 +209,7 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, jobs.Items, 1, "expected exactly one job")
 	job := &jobs.Items[0]
-	
+
 	// Verify job name format: agent-runner-{agentRunID}-plan-{reviewFeedbackID}-{randomSuffix}
 	expectedPrefix := fmt.Sprintf("agent-runner-%d-plan-0-", run.ID)
 	assert.True(t, strings.HasPrefix(job.Name, expectedPrefix),
