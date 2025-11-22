@@ -202,11 +202,19 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	assert.Equal(t, "started", run.State)
 
 	// Verify K8s Job created with expected name
-	// For plan creation, job name includes reviewFeedbackID (0 for issue-triggered)
-	expectedJobName := fmt.Sprintf("agent-runner-%d-plan-0", run.ID)
-	job, err := k8s.GetJob(req.Context(), expectedJobName)
+	// For plan creation, job name includes reviewFeedbackID (0 for issue-triggered) and random suffix
+	// Use label selector to find the job since the name now includes a random suffix
+	labelSelector := fmt.Sprintf("agent-run-id=%d", run.ID)
+	jobs, err := k8s.ListJobs(req.Context(), labelSelector)
 	require.NoError(t, err)
-	assert.Equal(t, expectedJobName, job.Name)
+	require.Len(t, jobs.Items, 1, "expected exactly one job")
+	job := &jobs.Items[0]
+	
+	// Verify job name format: agent-runner-{agentRunID}-plan-{reviewFeedbackID}-{randomSuffix}
+	expectedPrefix := fmt.Sprintf("agent-runner-%d-plan-0-", run.ID)
+	assert.True(t, strings.HasPrefix(job.Name, expectedPrefix),
+		"job name should start with %s, got: %s", expectedPrefix, job.Name)
+	assert.Len(t, job.Name, len(expectedPrefix)+6, "job name should have 6-character random suffix")
 	assert.Equal(t, "default", job.Namespace)
 
 	// Verify labels
