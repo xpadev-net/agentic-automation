@@ -766,14 +766,25 @@ func startPlanCreationIfNeeded(
 			config.Int("review_feedback_id", reviewFeedback.ID),
 			config.String("delivery_id", deliveryID),
 		)
-		planAgentRun.AgentType = agentType
-		planAgentRun.ExecutionMode = "plan_creation"
-		planAgentRun.ReviewFeedbackID = &reviewFeedback.ID
-		if err := agentRunRepo.Update(planAgentRun); err != nil {
-			logger.Warn("Failed to update existing plan creation agent run",
+		// Reload agentRun from database to ensure we have the latest state
+		reloadedPlanAgentRun, err := agentRunRepo.GetByID(planAgentRun.ID)
+		if err != nil {
+			logger.Warn("Failed to reload existing plan creation agent run",
 				config.Error(err),
 				config.Int("agent_run_id", planAgentRun.ID),
 			)
+		} else {
+			reloadedPlanAgentRun.AgentType = agentType
+			reloadedPlanAgentRun.ExecutionMode = "plan_creation"
+			reloadedPlanAgentRun.ReviewFeedbackID = &reviewFeedback.ID
+			if err := agentRunRepo.Update(reloadedPlanAgentRun); err != nil {
+				logger.Warn("Failed to update existing plan creation agent run",
+					config.Error(err),
+					config.Int("agent_run_id", reloadedPlanAgentRun.ID),
+				)
+			} else {
+				planAgentRun = reloadedPlanAgentRun
+			}
 		}
 	}
 
@@ -919,14 +930,27 @@ func startPlanCreationIfNeeded(
 		config.Bool("job_created", job != nil),
 	)
 
-	// Update AgentRun with job name for cleanup
-	if err := agentRunRepo.Update(planAgentRun); err != nil {
-		logger.Warn("Failed to update AgentRun with job name",
+	// Reload agentRun from database to preserve started_at and other fields
+	// that may have been set by TransitionToStarted (if called elsewhere)
+	reloadedPlanAgentRun, err := agentRunRepo.GetByID(planAgentRun.ID)
+	if err != nil {
+		logger.Warn("Failed to reload AgentRun before updating job name",
 			config.Error(err),
 			config.Int("agent_run_id", planAgentRun.ID),
 			config.String("delivery_id", deliveryID),
 		)
-		// Non-blocking: continue even if update fails
+		// Non-blocking: continue even if reload fails
+	} else {
+		// Update AgentRun with job name for cleanup
+		reloadedPlanAgentRun.JobName = &job.Name
+		if err := agentRunRepo.Update(reloadedPlanAgentRun); err != nil {
+			logger.Warn("Failed to update AgentRun with job name",
+				config.Error(err),
+				config.Int("agent_run_id", reloadedPlanAgentRun.ID),
+				config.String("delivery_id", deliveryID),
+			)
+			// Non-blocking: continue even if update fails
+		}
 	}
 
 	result := &planCreationResult{
