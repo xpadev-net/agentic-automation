@@ -860,23 +860,41 @@ func HandleAgentReport(c *gin.Context) {
 		} else {
 			var jobName string
 			var err error
-			// Generate job name based on execution mode
-			if agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
-				// Plan creation jobs use a different naming scheme
-				jobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
-			} else {
-				// Normal jobs and plan execution jobs use standard naming
-				jobName, err = kubernetesClient.GenerateJobName(agentRunID)
-			}
-
-			if err != nil {
-				logger.Warn("Failed to generate job name for deletion",
-					config.Error(err),
+			// Reuse actual job name if available, otherwise fallback to generation
+			if agentRun.JobName != nil && *agentRun.JobName != "" {
+				jobName = *agentRun.JobName
+				logger.Info("Using stored job name for cleanup",
 					config.Int("agent_run_id", agentRunID),
+					config.String("job_name", jobName),
 					config.String("execution_mode", agentRun.ExecutionMode),
 				)
-				// Continue without deleting job (non-blocking)
 			} else {
+				// Fallback: Generate job name based on execution mode (for backward compatibility)
+				if agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
+					// Plan creation jobs use a different naming scheme
+					jobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, *agentRun.ReviewFeedbackID)
+				} else {
+					// Normal jobs and plan execution jobs use standard naming
+					jobName, err = kubernetesClient.GenerateJobName(agentRunID)
+				}
+
+				if err != nil {
+					logger.Warn("Failed to generate job name for deletion",
+						config.Error(err),
+						config.Int("agent_run_id", agentRunID),
+						config.String("execution_mode", agentRun.ExecutionMode),
+					)
+					// Continue without deleting job (non-blocking)
+				} else {
+					logger.Info("Generated job name for cleanup (fallback)",
+						config.Int("agent_run_id", agentRunID),
+						config.String("job_name", jobName),
+						config.String("execution_mode", agentRun.ExecutionMode),
+					)
+				}
+			}
+
+			if jobName != "" {
 				// Delete job (non-blocking - log errors but don't fail the response)
 				if err := kubernetesClient.DeleteJob(c.Request.Context(), jobName); err != nil {
 					logger.Warn("Failed to delete Kubernetes Job after successful execution",
@@ -1425,26 +1443,56 @@ func handlePlanCreated(
 	// This handles early returns when new reviews invalidate the plan
 	defer func() {
 		if kubernetesClient != nil && agentRunID > 0 {
+			// Reload agentRun to get the actual job name
+			reloadedAgentRun, reloadErr := agentRunRepo.GetByID(agentRunID)
 			var planCreationJobName string
 			var err error
-			if reviewFeedback != nil {
-				// Review-triggered: use GeneratePlanCreationJobName
-				planCreationJobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, reviewFeedback.ID)
-			} else {
-				// Issue-triggered: use GenerateJobName
-				planCreationJobName, err = kubernetesClient.GenerateJobName(agentRunID)
-			}
 
-			if err != nil {
+			// Reuse actual job name if available, otherwise fallback to generation
+			if reloadErr == nil && reloadedAgentRun != nil && reloadedAgentRun.JobName != nil && *reloadedAgentRun.JobName != "" {
+				planCreationJobName = *reloadedAgentRun.JobName
 				logFields := []config.Field{
-					config.Error(err),
 					config.Int("plan_agent_run_id", agentRunID),
+					config.String("job_name", planCreationJobName),
 				}
 				if reviewFeedback != nil {
 					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
 				}
-				logger.Warn("Failed to generate plan creation job name for deletion", logFields...)
-				// Continue without deleting job (non-blocking)
+				logger.Info("Using stored job name for plan creation cleanup", logFields...)
+			} else {
+				// Fallback: Generate job name based on execution mode (for backward compatibility)
+				if reviewFeedback != nil {
+					// Review-triggered: use GeneratePlanCreationJobName
+					planCreationJobName, err = kubernetesClient.GeneratePlanCreationJobName(agentRunID, reviewFeedback.ID)
+				} else {
+					// Issue-triggered: use GenerateJobName
+					planCreationJobName, err = kubernetesClient.GenerateJobName(agentRunID)
+				}
+
+				if err != nil {
+					logFields := []config.Field{
+						config.Error(err),
+						config.Int("plan_agent_run_id", agentRunID),
+					}
+					if reviewFeedback != nil {
+						logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
+					}
+					logger.Warn("Failed to generate plan creation job name for deletion", logFields...)
+					// Continue without deleting job (non-blocking)
+					return
+				}
+
+				logFields := []config.Field{
+					config.Int("plan_agent_run_id", agentRunID),
+					config.String("job_name", planCreationJobName),
+				}
+				if reviewFeedback != nil {
+					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
+				}
+				logger.Info("Generated job name for plan creation cleanup (fallback)", logFields...)
+			}
+
+			if planCreationJobName == "" {
 				return
 			}
 
@@ -1841,6 +1889,15 @@ func handlePlanCreated(
 				"message": "Failed to create plan execution job",
 			})
 			return
+		}
+
+		// Update execution AgentRun with job name for cleanup
+		if err := agentRunRepo.Update(executionRun); err != nil {
+			logger.Warn("Failed to update execution AgentRun with job name",
+				config.Error(err),
+				config.Int("execution_agent_run_id", executionRun.ID),
+			)
+			// Non-blocking: continue even if update fails
 		}
 
 		reviewFeedback.PlanCreationStatus = "created"
@@ -2356,6 +2413,15 @@ func handlePlanCreated(
 			"message": "Failed to create plan execution job",
 		})
 		return
+	}
+
+	// Update execution AgentRun with job name for cleanup
+	if err := agentRunRepo.Update(executionRun); err != nil {
+		logger.Warn("Failed to update execution AgentRun with job name",
+			config.Error(err),
+			config.Int("execution_agent_run_id", executionRun.ID),
+		)
+		// Non-blocking: continue even if update fails
 	}
 
 	logger.Info("Plan created and plan execution job started",

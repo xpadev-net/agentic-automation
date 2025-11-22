@@ -919,6 +919,16 @@ func startPlanCreationIfNeeded(
 		config.Bool("job_created", job != nil),
 	)
 
+	// Update AgentRun with job name for cleanup
+	if err := agentRunRepo.Update(planAgentRun); err != nil {
+		logger.Warn("Failed to update AgentRun with job name",
+			config.Error(err),
+			config.Int("agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
+		)
+		// Non-blocking: continue even if update fails
+	}
+
 	result := &planCreationResult{
 		Status:            "started",
 		ReviewFeedbackID:  reviewFeedback.ID,

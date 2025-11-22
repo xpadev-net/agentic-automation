@@ -360,6 +360,9 @@ func TriggerJobsForUnblockedTasks(
 			return fmt.Errorf("failed to transition run %d to started: %w", agentRun.ID, err)
 		}
 
+		// Update agentRun state in memory to match database
+		agentRun.State = "started"
+
 		// Create Job
 		if job, err := jobService.CreateJobForAgentRun(ctx, agentRun, &updatedIssue, prompt, ""); err != nil {
 			// If a job with same name already exists, treat as success (another handler created it)
@@ -385,6 +388,15 @@ func TriggerJobsForUnblockedTasks(
 				config.Int("taskId", is.ID),
 				config.String("jobName", job.Name),
 			)
+			// Update AgentRun with job name for cleanup
+			if err := agents.Update(agentRun); err != nil {
+				logger.Warn("blocked_task.failed_to_update_job_name",
+					config.Error(err),
+					config.Int("agentRunId", agentRun.ID),
+					config.Int("taskId", is.ID),
+				)
+				// Non-blocking: continue even if update fails
+			}
 		}
 	}
 

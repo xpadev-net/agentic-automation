@@ -288,6 +288,9 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 		return nil, fmt.Errorf("failed to create kubernetes job: %w", err)
 	}
 
+	// Store job name in AgentRun for cleanup
+	agentRun.JobName = &jobName
+
 	// Log successful job creation
 	s.logger.Info("Kubernetes Job created successfully",
 		config.Int("agent_run_id", agentRun.ID),
@@ -426,6 +429,9 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 		)
 		return nil, fmt.Errorf("failed to create kubernetes job: %w", err)
 	}
+
+	// Store job name in AgentRun for cleanup
+	agentRun.JobName = &jobName
 
 	// Log successful job creation
 	s.logger.Info("Kubernetes Job created successfully with feedback",
@@ -578,6 +584,9 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		return nil, fmt.Errorf("failed to create plan creation kubernetes job: %w", err)
 	}
 
+	// Store job name in AgentRun for cleanup
+	agentRun.JobName = &jobName
+
 	s.logger.Info("Plan creation job created successfully",
 		config.Int("agent_run_id", agentRun.ID),
 		config.String("content_source", contentSource),
@@ -696,6 +705,9 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 		)
 		return nil, fmt.Errorf("failed to create plan execution kubernetes job: %w", err)
 	}
+
+	// Store job name in AgentRun for cleanup
+	agentRun.JobName = &jobName
 
 	s.logger.Info("Plan execution job created successfully",
 		config.Int("agent_run_id", agentRun.ID),

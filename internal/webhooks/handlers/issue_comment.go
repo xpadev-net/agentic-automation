@@ -1135,6 +1135,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		config.String("delivery_id", deliveryID),
 	)
 
+	// Update planAgentRun state in memory to match database
+	planAgentRun.State = "started"
+
 	// Step 14: Create Kubernetes Job for plan creation
 	// Note: reviewFeedback is nil for issue-triggered plan creation
 	job, err := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, nil, existingBranchName)
@@ -1168,6 +1171,17 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		config.String("namespace", job.Namespace),
 		config.String("delivery_id", deliveryID),
 	)
+
+	// Update AgentRun with job name for cleanup
+	// planAgentRun.State is already set to "started" above, so Update will preserve it
+	if err := agentRunRepo.Update(planAgentRun); err != nil {
+		logger.Warn("Failed to update AgentRun with job name",
+			config.Error(err),
+			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
+		)
+		// Non-blocking: continue even if update fails
+	}
 
 	// Post GitHub status comment for plan creation
 	if err := githubNotificationService.PostExecutionStartComment(
