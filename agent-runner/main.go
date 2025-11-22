@@ -1019,9 +1019,13 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	prBody = buildPRBodyWithCollapsibleSections(prBody, prompt, planContent, issueID)
 
 	// Ensure issue-closing keyword is present in PR body
-	if prBody != "" {
-		closingKeyword := fmt.Sprintf("close #%d", issueID)
-		// Check if any closing keyword pattern exists (case-insensitive)
+	closingKeyword := fmt.Sprintf("close #%d", issueID)
+	if prBody == "" {
+		// prBodyが空の場合は、closeキーワードのみを含むPR本文を生成
+		prBody = closingKeyword
+		fmt.Fprintf(os.Stderr, "Created PR body with issue-closing keyword\n")
+	} else {
+		// prBodyが空でない場合は、closeキーワードが含まれているかチェック
 		bodyLower := strings.ToLower(prBody)
 		hasClosingKeyword := strings.Contains(bodyLower, strings.ToLower(closingKeyword)) ||
 			strings.Contains(bodyLower, fmt.Sprintf("closes #%d", issueID)) ||
