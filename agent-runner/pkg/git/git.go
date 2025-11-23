@@ -1322,3 +1322,44 @@ func ResolveConflictsWithAI(workDir, repo string, issueID int, agentType string)
 
 	return nil
 }
+
+// GetHEAD returns the current HEAD commit SHA.
+func GetHEAD(workDir string) (string, error) {
+	// Validate inputs
+	if workDir == "" {
+		return "", fmt.Errorf("work directory is required")
+	}
+
+	// Execute git rev-parse HEAD to get the current HEAD commit SHA
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = workDir
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get HEAD commit: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// ResetToCommit resets the repository to the specified commit using --soft flag.
+// This removes commits but keeps changes in the staging area.
+func ResetToCommit(workDir, commitSHA string) error {
+	// Validate inputs
+	if workDir == "" {
+		return fmt.Errorf("work directory is required")
+	}
+	if commitSHA == "" {
+		return fmt.Errorf("commit SHA is required")
+	}
+
+	// Execute git reset --soft to reset to the specified commit
+	// --soft keeps changes in the staging area
+	cmd := exec.Command("git", "reset", "--soft", commitSHA)
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git reset --soft failed: %w, output: %s", err, string(output))
+	}
+
+	return nil
+}

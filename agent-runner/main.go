@@ -646,6 +646,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 			}
 
+			// Get initial HEAD before agent execution
+			initialHEAD, err := git.GetHEAD(envCfg.WorkDir)
+			if err != nil {
+				return fmt.Errorf("failed to get initial HEAD: %w", err)
+			}
+
 			// Execute agent
 			if envCfg.AgentType == "cursor-agent" {
 				agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
@@ -664,6 +670,19 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				return fmt.Errorf("agent execution failed: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+
+			// Check if agent created a commit and rollback if needed
+			currentHEAD, err := git.GetHEAD(envCfg.WorkDir)
+			if err != nil {
+				return fmt.Errorf("failed to get current HEAD: %w", err)
+			}
+			if initialHEAD != currentHEAD {
+				fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", initialHEAD)
+				if err := git.ResetToCommit(envCfg.WorkDir, initialHEAD); err != nil {
+					return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
+			}
 
 			// Handle plan creation result
 			err = handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput)
@@ -713,6 +732,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 		}
 
+		// Get initial HEAD before agent execution
+		initialHEAD, err := git.GetHEAD(envCfg.WorkDir)
+		if err != nil {
+			return fmt.Errorf("failed to get initial HEAD: %w", err)
+		}
+
 		// Execute agent
 		if envCfg.AgentType == "cursor-agent" {
 			agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
@@ -731,6 +756,19 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			return fmt.Errorf("agent execution failed: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+
+		// Check if agent created a commit and rollback if needed
+		currentHEAD, err := git.GetHEAD(envCfg.WorkDir)
+		if err != nil {
+			return fmt.Errorf("failed to get current HEAD: %w", err)
+		}
+		if initialHEAD != currentHEAD {
+			fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", initialHEAD)
+			if err := git.ResetToCommit(envCfg.WorkDir, initialHEAD); err != nil {
+				return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
+		}
 
 		// Check for file changes
 		fmt.Fprintf(os.Stderr, "Checking for file changes\n")
