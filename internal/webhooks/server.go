@@ -156,6 +156,9 @@ func handleGitHubWebhook(c *gin.Context) {
 	case models.EventTypeStatus:
 		statusEventHandler(c)
 		return
+	case models.EventTypeWorkflowRun:
+		handlers.HandleWorkflowRun(c)
+		return
 	default:
 		// For unhandled event types, log and return 200 OK
 		// Get payload from context (set by signature middleware)

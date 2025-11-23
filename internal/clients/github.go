@@ -824,6 +824,106 @@ func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (stri
 	return *repository.DefaultBranch, nil
 }
 
+// AddLabelsToIssue adds labels to a GitHub issue or pull request
+// If a label already exists, the error is ignored (idempotent operation)
+func (c *Client) AddLabelsToIssue(ctx context.Context, owner, repo string, number int, labels []string) error {
+	c.logger.Info("Adding labels to GitHub issue",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", number),
+		config.Strings("labels", labels),
+	)
+
+	_, resp, err := c.Issues.AddLabelsToIssue(ctx, owner, repo, number, labels)
+	if err != nil {
+		// Check if it's a 422 (label already exists) or 404 (label doesn't exist)
+		// In both cases, we treat it as idempotent and ignore the error
+		if resp != nil {
+			if resp.StatusCode == http.StatusUnprocessableEntity || resp.StatusCode == http.StatusNotFound {
+				c.handleRateLimit(resp)
+				c.logger.Info("Label already exists or not found, treating as success",
+					config.String("owner", owner),
+					config.String("repo", repo),
+					config.Int("issue_number", number),
+					config.Strings("labels", labels),
+				)
+				return nil
+			}
+		}
+		return c.handleError(err, resp, "AddLabelsToIssue")
+	}
+
+	c.handleRateLimit(resp)
+	return nil
+}
+
+// RemoveLabelFromIssue removes a label from a GitHub issue or pull request
+// If the label doesn't exist, the error is ignored (idempotent operation)
+func (c *Client) RemoveLabelFromIssue(ctx context.Context, owner, repo string, number int, label string) error {
+	c.logger.Info("Removing label from GitHub issue",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", number),
+		config.String("label", label),
+	)
+
+	resp, err := c.Issues.RemoveLabelForIssue(ctx, owner, repo, number, label)
+	if err != nil {
+		// Check if it's a 404 (label doesn't exist), treat as idempotent
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			c.handleRateLimit(resp)
+			c.logger.Info("Label not found, treating as success",
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.Int("issue_number", number),
+				config.String("label", label),
+			)
+			return nil
+		}
+		return c.handleError(err, resp, "RemoveLabelFromIssue")
+	}
+
+	c.handleRateLimit(resp)
+	return nil
+}
+
+// ListLabelsOnIssue retrieves all labels for a GitHub issue or pull request
+// Handles pagination to return all labels, not just the first page
+func (c *Client) ListLabelsOnIssue(ctx context.Context, owner, repo string, number int) ([]*github.Label, error) {
+	c.logger.Info("Listing labels on GitHub issue",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", number),
+	)
+
+	opts := &github.ListOptions{
+		Page:    1,
+		PerPage: 100, // Maximum per page to minimize API calls
+	}
+
+	var allLabels []*github.Label
+	var resp *github.Response
+
+	for {
+		labels, pageResp, err := c.Issues.ListLabelsByIssue(ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "ListLabelsOnIssue")
+		}
+
+		allLabels = append(allLabels, labels...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
+	}
+
+	c.handleRateLimit(resp)
+	return allLabels, nil
+}
+
 // InstallationTokenCache caches installation tokens per installation ID
 type InstallationTokenCache struct {
 	mutex      sync.RWMutex

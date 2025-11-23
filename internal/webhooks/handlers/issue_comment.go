@@ -422,6 +422,20 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 				githubClient = clients.NewFromGitHub(rawClient, logger)
 			}
 
+			// codex:approvedラベルを追加（エラーはログに記録するが処理は継続）
+			if err := githubClient.AddLabelsToIssue(ctx, owner, repo, pr.Number, []string{services.CodexApprovalLabel}); err != nil {
+				logger.Warn("Failed to add codex:approved label",
+					config.Error(err),
+					config.String("delivery_id", deliveryID),
+					config.Int("pr_number", pr.Number),
+				)
+			} else {
+				logger.Info("Added codex:approved label to PR",
+					config.String("delivery_id", deliveryID),
+					config.Int("pr_number", pr.Number),
+				)
+			}
+
 			// ReviewFeedbackレコード作成（承認検出時）
 			reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
 			commentID := int64(payload.Comment.ID)
