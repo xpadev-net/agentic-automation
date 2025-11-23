@@ -358,6 +358,15 @@ func (r *RetryOrchestrator) TriggerRetry(
 		config.Int("retry_count", agentRun.RetryCount),
 	)
 
+	// Update AgentRun with job name for cleanup
+	if err := r.agentRunRepo.Update(agentRun); err != nil {
+		r.logger.Warn("Failed to update AgentRun with job name",
+			config.Error(err),
+			config.Int("agent_run_id", agentRun.ID),
+		)
+		// Non-blocking: continue even if update fails
+	}
+
 	return nil
 }
 

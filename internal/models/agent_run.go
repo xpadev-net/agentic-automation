@@ -19,6 +19,7 @@ type AgentRun struct {
 	//   plan_creation  : レビュー指摘からプランを作成するモード
 	//   plan_execution : 作成済みプランを実行するモード
 	ExecutionMode string  `gorm:"type:enum('normal','plan_creation','plan_execution');default:'normal'"`
+	JobName       *string `gorm:"column:job_name;size:255"`
 	PlanContent   *string `gorm:"type:text"`
 	// ReviewFeedbackID links plan-related runs back to their originating feedback.
 	ReviewFeedbackID *int `gorm:"column:review_feedback_id;index"`

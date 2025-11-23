@@ -3,6 +3,7 @@ package clients
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"os"
@@ -40,6 +41,7 @@ type JobConfig struct {
 	PlanContent           string
 	ReviewFeedbackContent string
 	CursorAllowWrite      bool
+	JobName               string // Kubernetes Job name (injected as JOB_NAME environment variable)
 }
 
 // KubernetesClient wraps Kubernetes API client functionality
@@ -209,16 +211,47 @@ func NewKubernetesClient(logger *config.AppLogger) (*KubernetesClient, error) {
 	}, nil
 }
 
-// GenerateJobName generates a job name from agentRunID
-func (c *KubernetesClient) GenerateJobName(agentRunID int) string {
-	return fmt.Sprintf("agent-runner-%d", agentRunID)
+// generateRandomSuffix generates a 6-character random suffix using crypto/rand
+// for secure random generation. The suffix consists of lowercase alphanumeric
+// characters (a-z, 0-9) to comply with Kubernetes DNS subdomain name constraints.
+func generateRandomSuffix() (string, error) {
+	const (
+		charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+		length  = 6
+	)
+
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("failed to generate random suffix: %w", err)
+	}
+
+	for i := range bytes {
+		bytes[i] = charset[bytes[i]%byte(len(charset))]
+	}
+
+	return string(bytes), nil
+}
+
+// GenerateJobName generates a job name from agentRunID with a random suffix
+// to prevent naming conflicts when multiple jobs are created for the same agentRunID.
+// Format: agent-runner-{agentRunID}-{randomSuffix}
+func (c *KubernetesClient) GenerateJobName(agentRunID int) (string, error) {
+	suffix, err := generateRandomSuffix()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate job name: %w", err)
+	}
+	return fmt.Sprintf("agent-runner-%d-%s", agentRunID, suffix), nil
 }
 
 // GeneratePlanCreationJobName generates a unique job name for plan creation
-// by including review_feedback_id to ensure uniqueness when the same agentRunID
-// is used for multiple plan creation attempts
-func (c *KubernetesClient) GeneratePlanCreationJobName(agentRunID int, reviewFeedbackID int) string {
-	return fmt.Sprintf("agent-runner-%d-plan-%d", agentRunID, reviewFeedbackID)
+// by including review_feedback_id and a random suffix to ensure uniqueness.
+// Format: agent-runner-{agentRunID}-plan-{reviewFeedbackID}-{randomSuffix}
+func (c *KubernetesClient) GeneratePlanCreationJobName(agentRunID int, reviewFeedbackID int) (string, error) {
+	suffix, err := generateRandomSuffix()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate plan creation job name: %w", err)
+	}
+	return fmt.Sprintf("agent-runner-%d-plan-%d-%s", agentRunID, reviewFeedbackID, suffix), nil
 }
 
 // buildEnvVars builds environment variables for the Job container
@@ -283,6 +316,14 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 			Name:  "CURSOR_ALLOW_WRITE",
 			Value: strconv.FormatBool(jobCfg.CursorAllowWrite),
 		},
+	}
+
+	// Add Job name if specified (for agent-runner to report back the correct job name)
+	if jobCfg.JobName != "" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name:  "JOB_NAME",
+			Value: jobCfg.JobName,
+		})
 	}
 
 	// Add existing branch name if specified (for continuing work on existing PR)
@@ -891,6 +932,82 @@ func (c *KubernetesClient) ListJobs(ctx context.Context, labelSelector string) (
 		return nil, fmt.Errorf("failed to list jobs: %w", err)
 	}
 	return jobs, nil
+}
+
+// FindJobByAgentRunID finds a Kubernetes Job by agent-run-id label
+// This is used as a fallback when JobName is not stored in the database.
+// Returns the first matching Job if multiple are found (should not happen in normal operation).
+func (c *KubernetesClient) FindJobByAgentRunID(ctx context.Context, agentRunID int) (*batchv1.Job, error) {
+	labelSelector := fmt.Sprintf("agent-run-id=%d", agentRunID)
+	jobs, err := c.ListJobs(ctx, labelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find job by agent-run-id %d: %w", agentRunID, err)
+	}
+
+	if len(jobs.Items) == 0 {
+		return nil, fmt.Errorf("no job found with agent-run-id=%d", agentRunID)
+	}
+
+	// Return the first matching job (normally there should be only one)
+	job := &jobs.Items[0]
+	if len(jobs.Items) > 1 {
+		c.logger.Warn("Multiple jobs found with same agent-run-id, using first one",
+			config.Int("agent_run_id", agentRunID),
+			config.Int("job_count", len(jobs.Items)),
+			config.String("selected_job", job.Name),
+		)
+	}
+
+	return job, nil
+}
+
+// FindActiveJobByAgentRunID finds an active (Running or Pending) Kubernetes Job by agent-run-id label.
+// This is used to prevent duplicate job creation when multiple workers try to create a job for the same agent-run-id.
+// Returns the first active job found if multiple exist, or an error if no active job is found.
+func (c *KubernetesClient) FindActiveJobByAgentRunID(ctx context.Context, agentRunID int) (*batchv1.Job, error) {
+	labelSelector := fmt.Sprintf("agent-run-id=%d", agentRunID)
+	jobs, err := c.ListJobs(ctx, labelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list jobs by agent-run-id %d: %w", agentRunID, err)
+	}
+
+	if len(jobs.Items) == 0 {
+		return nil, fmt.Errorf("no active job found with agent-run-id=%d", agentRunID)
+	}
+
+	// Find active jobs (Running or Pending status)
+	var activeJobs []*batchv1.Job
+	for i := range jobs.Items {
+		job := &jobs.Items[i]
+		status, err := c.GetJobStatus(ctx, job.Name)
+		if err != nil {
+			c.logger.Warn("Failed to get job status while checking for active jobs",
+				config.String("job_name", job.Name),
+				config.Int("agent_run_id", agentRunID),
+				config.Error(err),
+			)
+			continue
+		}
+		if status == "Running" || status == "Pending" {
+			activeJobs = append(activeJobs, job)
+		}
+	}
+
+	if len(activeJobs) == 0 {
+		return nil, fmt.Errorf("no active job found with agent-run-id=%d", agentRunID)
+	}
+
+	// Return the first active job
+	job := activeJobs[0]
+	if len(activeJobs) > 1 {
+		c.logger.Warn("Multiple active jobs found with same agent-run-id, using first one",
+			config.Int("agent_run_id", agentRunID),
+			config.Int("active_job_count", len(activeJobs)),
+			config.String("selected_job", job.Name),
+		)
+	}
+
+	return job, nil
 }
 
 // GetJobStatus returns the status of a Job as a string

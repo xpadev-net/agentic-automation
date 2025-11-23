@@ -956,14 +956,10 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	// Reuse the agentRun created by idempotency middleware to avoid leaving orphaned queued records
 	planAgentRun := agentRun
 
-	// Configure agentRun for plan creation mode
-	planAgentRun.ExecutionMode = "plan_creation"
-	planAgentRun.AgentType = agentType
-	planAgentRun.ReviewFeedbackID = nil // No review feedback for issue-triggered plan creation
-
-	// Update agentRun with plan creation configuration
-	if err := agentRunRepo.Update(planAgentRun); err != nil {
-		logger.Error("Failed to update AgentRun for plan creation",
+	// Reload agentRun from database to ensure we have the latest state
+	reloadedForConfig, err := agentRunRepo.GetByID(planAgentRun.ID)
+	if err != nil {
+		logger.Error("Failed to reload AgentRun for plan creation",
 			config.Error(err),
 			config.Int("agent_run_id", planAgentRun.ID),
 			config.String("delivery_id", deliveryID),
@@ -971,6 +967,23 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		c.Error(err)
 		return
 	}
+
+	// Configure agentRun for plan creation mode
+	reloadedForConfig.ExecutionMode = "plan_creation"
+	reloadedForConfig.AgentType = agentType
+	reloadedForConfig.ReviewFeedbackID = nil // No review feedback for issue-triggered plan creation
+
+	// Update agentRun with plan creation configuration
+	if err := agentRunRepo.Update(reloadedForConfig); err != nil {
+		logger.Error("Failed to update AgentRun for plan creation",
+			config.Error(err),
+			config.Int("agent_run_id", reloadedForConfig.ID),
+			config.String("delivery_id", deliveryID),
+		)
+		c.Error(err)
+		return
+	}
+	planAgentRun = reloadedForConfig
 
 	logger.Info("Reusing middleware-created AgentRun for plan creation",
 		config.Int("plan_agent_run_id", planAgentRun.ID),
@@ -1011,17 +1024,30 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		})
 	}
 
-	// Assign JSON to plan creation AgentRun.Input
-	planAgentRun.Input = datatypes.JSON(inputBytes)
-	if err := agentRunRepo.Update(planAgentRun); err != nil {
-		logger.Error("Failed to update plan creation AgentRun",
+	// Reload agentRun from database to ensure we have the latest state
+	reloadedForInput, err := agentRunRepo.GetByID(planAgentRun.ID)
+	if err != nil {
+		logger.Error("Failed to reload AgentRun before updating input",
 			config.Error(err),
-			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.Int("agent_run_id", planAgentRun.ID),
 			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
 		return
 	}
+
+	// Assign JSON to plan creation AgentRun.Input
+	reloadedForInput.Input = datatypes.JSON(inputBytes)
+	if err := agentRunRepo.Update(reloadedForInput); err != nil {
+		logger.Error("Failed to update plan creation AgentRun",
+			config.Error(err),
+			config.Int("plan_agent_run_id", reloadedForInput.ID),
+			config.String("delivery_id", deliveryID),
+		)
+		c.Error(err)
+		return
+	}
+	planAgentRun = reloadedForInput
 
 	// Step 12.5: Dependency validation (US5 T127)
 	// ジョブ開始前に依存が全てクローズ済みかを検証する。
@@ -1135,6 +1161,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		config.String("delivery_id", deliveryID),
 	)
 
+	// Update planAgentRun state in memory to match database
+	planAgentRun.State = "started"
+
 	// Step 14: Create Kubernetes Job for plan creation
 	// Note: reviewFeedback is nil for issue-triggered plan creation
 	job, err := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, nil, existingBranchName)
@@ -1168,6 +1197,29 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		config.String("namespace", job.Namespace),
 		config.String("delivery_id", deliveryID),
 	)
+
+	// Reload agentRun from database to preserve started_at and other fields
+	// that were set by TransitionToStarted
+	reloadedForJobName, err := agentRunRepo.GetByID(planAgentRun.ID)
+	if err != nil {
+		logger.Warn("Failed to reload AgentRun before updating job name",
+			config.Error(err),
+			config.Int("plan_agent_run_id", planAgentRun.ID),
+			config.String("delivery_id", deliveryID),
+		)
+		// Non-blocking: continue even if reload fails
+	} else {
+		// Update AgentRun with job name for cleanup
+		reloadedForJobName.JobName = &job.Name
+		if err := agentRunRepo.Update(reloadedForJobName); err != nil {
+			logger.Warn("Failed to update AgentRun with job name",
+				config.Error(err),
+				config.Int("plan_agent_run_id", reloadedForJobName.ID),
+				config.String("delivery_id", deliveryID),
+			)
+			// Non-blocking: continue even if update fails
+		}
+	}
 
 	// Post GitHub status comment for plan creation
 	if err := githubNotificationService.PostExecutionStartComment(

@@ -88,6 +88,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 			state TEXT DEFAULT 'queued',
 			agent_type TEXT DEFAULT 'claude-code',
 		execution_mode TEXT DEFAULT 'normal',
+		job_name TEXT,
 		plan_content TEXT,
 		review_feedback_id INTEGER,
 			plan_agent_run_id INTEGER,

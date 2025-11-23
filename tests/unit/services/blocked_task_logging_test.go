@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   state TEXT DEFAULT 'queued',
   agent_type TEXT,
   execution_mode TEXT DEFAULT 'normal',
+  job_name TEXT,
   plan_content TEXT,
   review_feedback_id INTEGER,
 			plan_agent_run_id INTEGER,
