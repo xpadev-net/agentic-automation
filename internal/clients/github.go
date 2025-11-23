@@ -873,16 +873,11 @@ func (c *Client) AddLabelsToIssue(ctx context.Context, owner, repo string, numbe
 
 	_, resp, err := c.Issues.AddLabelsToIssue(ctx, owner, repo, number, labels)
 	if err != nil {
-		// Handle 404 (Issue/PR not found) - this is a different problem
+		// Handle 404 (Issue/PR not found or insufficient permissions)
+		// This should be treated as an error, not success, because it indicates
+		// the resource doesn't exist or the token lacks permissions to access it
 		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			c.handleRateLimit(resp)
-			c.logger.Info("Issue/PR not found, treating as success",
-				config.String("owner", owner),
-				config.String("repo", repo),
-				config.Int("issue_number", number),
-				config.Strings("labels", labels),
-			)
-			return nil
+			return c.handleError(err, resp, "AddLabelsToIssue")
 		}
 
 		// Handle 422 (Unprocessable Entity) - could be label doesn't exist
@@ -964,15 +959,12 @@ func (c *Client) AddLabelsToIssue(ctx context.Context, owner, repo string, numbe
 				}
 			}
 
-			// 422 but not a "label doesn't exist" error - treat as success (idempotent)
-			c.handleRateLimit(resp)
-			c.logger.Info("422 error but not label missing, treating as success",
-				config.String("owner", owner),
-				config.String("repo", repo),
-				config.Int("issue_number", number),
-				config.Strings("labels", labels),
-			)
-			return nil
+			// 422 but not a "label doesn't exist" error - this could be:
+			// - Invalid label name
+			// - Insufficient permissions to add labels
+			// - Other validation errors
+			// These should be propagated as errors, not treated as success
+			return c.handleError(err, resp, "AddLabelsToIssue")
 		}
 
 		return c.handleError(err, resp, "AddLabelsToIssue")
