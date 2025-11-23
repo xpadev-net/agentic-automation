@@ -581,6 +581,25 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 		config.String("service", "kubernetes_job"),
 	)
 
+	// Check for existing active job to prevent duplicate creation
+	existingJob, err := s.kubernetesClient.FindActiveJobByAgentRunID(ctx, agentRun.ID)
+	if err == nil && existingJob != nil {
+		// Active job already exists, return AlreadyExists error
+		s.logger.Info("Active job already exists for agent run, skipping plan creation",
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("existing_job_name", existingJob.Name),
+			config.String("content_source", contentSource),
+			config.Int("review_feedback_id", reviewFeedbackID),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, apierrors.NewAlreadyExists(
+			schema.GroupResource{Resource: "jobs"},
+			existingJob.Name,
+		)
+	}
+	// If error is not nil, it means no active job was found, which is expected for new jobs
+	// Continue with job creation
+
 	jobName, err := s.kubernetesClient.GeneratePlanCreationJobName(agentRun.ID, reviewFeedbackID)
 	if err != nil {
 		s.logger.Error("Failed to generate plan creation job name",
