@@ -11,7 +11,7 @@ validation:
     timeout: "3m"
     required: true
   - name: "fmt"
-    command: "gofmt -l ."
+    command: "gofmt -s -w ."
     description: "Check Go code formatting"
     timeout: "1m"
     required: true
