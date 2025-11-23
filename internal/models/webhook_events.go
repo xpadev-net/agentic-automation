@@ -37,6 +37,9 @@ const (
 
 	// check_suite actions
 	CheckSuiteActionCompleted = "completed"
+
+	// workflow_run actions
+	WorkflowRunActionCompleted = "completed"
 )
 
 // check_suite conclusion values
@@ -101,6 +104,8 @@ func IsValidAction(eventType, action string) bool {
 		return action == PullRequestReviewCommentActionCreated
 	case EventTypeCheckSuite:
 		return action == CheckSuiteActionCompleted
+	case EventTypeWorkflowRun:
+		return action == WorkflowRunActionCompleted
 	case EventTypeStatus:
 		// status events don't have an action field, so always return true
 		return true

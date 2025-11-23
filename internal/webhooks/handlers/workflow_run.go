@@ -3,6 +3,7 @@ package handlers
 import (
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
+	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"agentic-automation/internal/services"
 	"context"
@@ -12,9 +13,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/go-github/v76/github"
 	"gorm.io/gorm"
 )
+
+// deliveryHeader is defined in issue_comment.go, reuse it
+// appGitHubClient is defined in issue_comment.go, reuse it
 
 // WorkflowRunPayload represents the GitHub webhook payload for workflow_run events
 type WorkflowRunPayload struct {
@@ -143,7 +146,23 @@ func HandleWorkflowRunWithDeps(c *gin.Context, deps WorkflowRunDeps) {
 		config.String("repo", payload.Repository.FullName),
 	)
 
-	// Step 4: ステータスと結論の検証
+	// Step 4: アクション検証
+	if payload.Action != models.WorkflowRunActionCompleted {
+		logger.Info("Ignoring non-completed action",
+			config.String("action", payload.Action),
+			config.String("delivery_id", deliveryID),
+			config.Int64("workflow_run_id", payload.WorkflowRun.ID),
+			config.String("repo", payload.Repository.FullName),
+		)
+		c.JSON(http.StatusOK, gin.H{
+			"status":      "ignored",
+			"action":      payload.Action,
+			"delivery_id": deliveryID,
+		})
+		return
+	}
+
+	// Step 5: ステータスと結論の検証
 	if payload.WorkflowRun.Status != "completed" {
 		logger.Info("Ignoring non-completed workflow run",
 			config.String("status", payload.WorkflowRun.Status),
@@ -184,7 +203,7 @@ func HandleWorkflowRunWithDeps(c *gin.Context, deps WorkflowRunDeps) {
 		return
 	}
 
-	// Step 5: リポジトリ情報抽出
+	// Step 6: リポジトリ情報抽出
 	repoParts := strings.Split(payload.Repository.FullName, "/")
 	if len(repoParts) != 2 {
 		logger.Error("Invalid repository full name format",
@@ -197,7 +216,7 @@ func HandleWorkflowRunWithDeps(c *gin.Context, deps WorkflowRunDeps) {
 	owner := repoParts[0]
 	repo := repoParts[1]
 
-	// Step 6: PullRequests取得
+	// Step 7: PullRequests取得
 	if len(payload.WorkflowRun.PullRequests) == 0 {
 		logger.Info("No pull requests in workflow_run, skipping",
 			config.String("delivery_id", deliveryID),
@@ -253,7 +272,7 @@ func HandleWorkflowRunWithDeps(c *gin.Context, deps WorkflowRunDeps) {
 		autoMergeSvc = services.NewAutoMergeService(appGitHubClient, logger)
 	}
 
-	// Step 7: 各PRについて処理
+	// Step 8: 各PRについて処理
 	prRepo := deps.PullRequestRepository
 	if prRepo == nil {
 		prRepo = repositories.NewPullRequestRepository(config.GetDB())
