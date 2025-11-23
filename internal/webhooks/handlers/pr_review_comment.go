@@ -495,6 +495,18 @@ func startPlanCreationIfNeeded(
 	commentUserID int64,
 	deliveryID string,
 ) (*planCreationResult, error) {
+	// System bot detection: skip plan creation if comment is from system bot
+	systemBotDetector := services.NewSystemBotDetector(logger)
+	if systemBotDetector.IsSystemBot(commentUserLogin, commentUserID) {
+		logger.Info("Skipping plan creation: comment from system bot",
+			config.Int("pr_id", pr.ID),
+			config.String("comment_user", commentUserLogin),
+			config.Int64("comment_user_id", commentUserID),
+			config.String("delivery_id", deliveryID),
+		)
+		return &planCreationResult{Status: "skipped_system_bot"}, nil
+	}
+
 	commentBody = strings.TrimSpace(commentBody)
 	if commentBody == "" {
 		logger.Info("Skipping plan creation: empty review comment",
@@ -877,6 +889,64 @@ func startPlanCreationIfNeeded(
 			result.PlanAgentRunID = *updatedFeedback.PlanAgentRunID
 		}
 		return result, nil
+	}
+
+	// Post comment when plan creation starts (started == true)
+	// Extract repository information from pr.Repo (format: "owner/repo")
+	repoParts := strings.Split(pr.Repo, "/")
+	if len(repoParts) == 2 {
+		owner := repoParts[0]
+		repo := repoParts[1]
+
+		// Initialize GitHub client and notification service
+		githubClient := deps.GitHubClient
+		if githubClient == nil {
+			if appGitHubClient == nil {
+				logger.Warn("GitHub App client not available for plan creation notification",
+					config.String("delivery_id", deliveryID),
+				)
+			} else {
+				rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
+				if err != nil {
+					logger.Warn("Failed to init per-repo GitHub client for plan creation notification",
+						config.Error(err),
+						config.String("owner", owner),
+						config.String("repo", repo),
+						config.String("delivery_id", deliveryID),
+					)
+				} else {
+					githubClient = clients.NewFromGitHub(rawClient, logger)
+				}
+			}
+		}
+
+		if githubClient != nil {
+			notificationService := services.NewGitHubNotificationService(githubClient, logger)
+			if err := notificationService.NotifyPlanCreationStarted(ctx, owner, repo, pr.Number, reviewFeedback.ID, planAgentRun.ID); err != nil {
+				// Log error but continue with plan creation
+				logger.Warn("Failed to post plan creation started comment",
+					config.Error(err),
+					config.Int("pr_id", pr.ID),
+					config.Int("pr_number", pr.Number),
+					config.Int("review_feedback_id", reviewFeedback.ID),
+					config.Int("agent_run_id", planAgentRun.ID),
+					config.String("delivery_id", deliveryID),
+				)
+			} else {
+				logger.Info("Posted plan creation started comment",
+					config.Int("pr_id", pr.ID),
+					config.Int("pr_number", pr.Number),
+					config.Int("review_feedback_id", reviewFeedback.ID),
+					config.Int("agent_run_id", planAgentRun.ID),
+					config.String("delivery_id", deliveryID),
+				)
+			}
+		}
+	} else {
+		logger.Warn("Invalid repository format for plan creation notification",
+			config.String("repo", pr.Repo),
+			config.String("delivery_id", deliveryID),
+		)
 	}
 
 	jobService := deps.KubernetesJobService
