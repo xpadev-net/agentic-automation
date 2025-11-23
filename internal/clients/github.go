@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -822,6 +823,222 @@ func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (stri
 	}
 
 	return *repository.DefaultBranch, nil
+}
+
+// CreateLabel creates a label in a GitHub repository
+// If the label already exists, the error is ignored (idempotent operation)
+func (c *Client) CreateLabel(ctx context.Context, owner, repo, name, color, description string) error {
+	c.logger.Info("Creating label in GitHub repository",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.String("label_name", name),
+		config.String("color", color),
+		config.String("description", description),
+	)
+
+	label := &github.Label{
+		Name:        &name,
+		Color:       &color,
+		Description: &description,
+	}
+
+	_, resp, err := c.Issues.CreateLabel(ctx, owner, repo, label)
+	if err != nil {
+		// Check if it's a 422 (label already exists), treat as idempotent
+		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+			c.handleRateLimit(resp)
+			c.logger.Info("Label already exists, treating as success",
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.String("label_name", name),
+			)
+			return nil
+		}
+		return c.handleError(err, resp, "CreateLabel")
+	}
+
+	c.handleRateLimit(resp)
+	return nil
+}
+
+// AddLabelsToIssue adds labels to a GitHub issue or pull request
+// If a label doesn't exist in the repository, it will be created automatically
+func (c *Client) AddLabelsToIssue(ctx context.Context, owner, repo string, number int, labels []string) error {
+	c.logger.Info("Adding labels to GitHub issue",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", number),
+		config.Strings("labels", labels),
+	)
+
+	_, resp, err := c.Issues.AddLabelsToIssue(ctx, owner, repo, number, labels)
+	if err != nil {
+		// Handle 404 (Issue/PR not found or insufficient permissions)
+		// This should be treated as an error, not success, because it indicates
+		// the resource doesn't exist or the token lacks permissions to access it
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return c.handleError(err, resp, "AddLabelsToIssue")
+		}
+
+		// Handle 422 (Unprocessable Entity) - could be label doesn't exist
+		if resp != nil && resp.StatusCode == http.StatusUnprocessableEntity {
+			// Check if error message indicates label doesn't exist
+			if ghErr, ok := err.(*github.ErrorResponse); ok {
+				errMsg := strings.ToLower(ghErr.Message)
+				errorStrings := make([]string, len(ghErr.Errors))
+				for i, e := range ghErr.Errors {
+					errorStrings[i] = strings.ToLower(e.Message)
+				}
+
+				// Check if error indicates label doesn't exist
+				labelNotFound := false
+				for _, errStr := range errorStrings {
+					if strings.Contains(errStr, "does not exist") ||
+						strings.Contains(errStr, "not found") ||
+						strings.Contains(errStr, "invalid") {
+						labelNotFound = true
+						break
+					}
+				}
+				if !labelNotFound {
+					errMsgLower := strings.ToLower(errMsg)
+					if strings.Contains(errMsgLower, "does not exist") ||
+						strings.Contains(errMsgLower, "not found") ||
+						strings.Contains(errMsgLower, "invalid") {
+						labelNotFound = true
+					}
+				}
+
+				if labelNotFound {
+					c.logger.Warn("Label does not exist in repository, attempting to create missing labels",
+						config.String("owner", owner),
+						config.String("repo", repo),
+						config.Int("issue_number", number),
+						config.Strings("labels", labels),
+						config.String("error_message", ghErr.Message),
+						config.Strings("error_details", errorStrings),
+					)
+
+					// Create missing labels with default color and description
+					// Default color: green (#28a745) for approval labels, gray (#6c757d) for others
+					for _, labelName := range labels {
+						var color, description string
+						if strings.HasPrefix(labelName, "codex:") {
+							color = "28a745" // Green for codex labels
+							description = "Codex automation label"
+						} else {
+							color = "6c757d" // Gray for other labels
+							description = "Automated label"
+						}
+
+						if err := c.CreateLabel(ctx, owner, repo, labelName, color, description); err != nil {
+							c.logger.Error("Failed to create label",
+								config.String("owner", owner),
+								config.String("repo", repo),
+								config.String("label_name", labelName),
+								config.Error(err),
+							)
+							// Continue with other labels even if one fails
+						}
+					}
+
+					// Retry adding labels after creating them
+					_, retryResp, retryErr := c.Issues.AddLabelsToIssue(ctx, owner, repo, number, labels)
+					if retryErr != nil {
+						c.handleRateLimit(retryResp)
+						return c.handleError(retryErr, retryResp, "AddLabelsToIssue")
+					}
+					c.handleRateLimit(retryResp)
+					c.logger.Info("Successfully added labels after creating missing ones",
+						config.String("owner", owner),
+						config.String("repo", repo),
+						config.Int("issue_number", number),
+						config.Strings("labels", labels),
+					)
+					return nil
+				}
+			}
+
+			// 422 but not a "label doesn't exist" error - this could be:
+			// - Invalid label name
+			// - Insufficient permissions to add labels
+			// - Other validation errors
+			// These should be propagated as errors, not treated as success
+			return c.handleError(err, resp, "AddLabelsToIssue")
+		}
+
+		return c.handleError(err, resp, "AddLabelsToIssue")
+	}
+
+	c.handleRateLimit(resp)
+	return nil
+}
+
+// RemoveLabelFromIssue removes a label from a GitHub issue or pull request
+// If the label doesn't exist, the error is ignored (idempotent operation)
+func (c *Client) RemoveLabelFromIssue(ctx context.Context, owner, repo string, number int, label string) error {
+	c.logger.Info("Removing label from GitHub issue",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", number),
+		config.String("label", label),
+	)
+
+	resp, err := c.Issues.RemoveLabelForIssue(ctx, owner, repo, number, label)
+	if err != nil {
+		// Check if it's a 404 (label doesn't exist), treat as idempotent
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			c.handleRateLimit(resp)
+			c.logger.Info("Label not found, treating as success",
+				config.String("owner", owner),
+				config.String("repo", repo),
+				config.Int("issue_number", number),
+				config.String("label", label),
+			)
+			return nil
+		}
+		return c.handleError(err, resp, "RemoveLabelFromIssue")
+	}
+
+	c.handleRateLimit(resp)
+	return nil
+}
+
+// ListLabelsOnIssue retrieves all labels for a GitHub issue or pull request
+// Handles pagination to return all labels, not just the first page
+func (c *Client) ListLabelsOnIssue(ctx context.Context, owner, repo string, number int) ([]*github.Label, error) {
+	c.logger.Info("Listing labels on GitHub issue",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("issue_number", number),
+	)
+
+	opts := &github.ListOptions{
+		Page:    1,
+		PerPage: 100, // Maximum per page to minimize API calls
+	}
+
+	var allLabels []*github.Label
+	var resp *github.Response
+
+	for {
+		labels, pageResp, err := c.Issues.ListLabelsByIssue(ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, c.handleError(err, pageResp, "ListLabelsOnIssue")
+		}
+
+		allLabels = append(allLabels, labels...)
+		resp = pageResp
+
+		if resp.NextPage == 0 {
+			break
+		}
+
+		opts.Page = resp.NextPage
+	}
+
+	c.handleRateLimit(resp)
+	return allLabels, nil
 }
 
 // InstallationTokenCache caches installation tokens per installation ID

@@ -12,6 +12,7 @@ const (
 	EventTypePullRequestReviewComment = "pull_request_review_comment"
 	EventTypeCheckSuite               = "check_suite"
 	EventTypeStatus                   = "status"
+	EventTypeWorkflowRun              = "workflow_run"
 )
 
 // Webhook action values for each event type
@@ -36,6 +37,9 @@ const (
 
 	// check_suite actions
 	CheckSuiteActionCompleted = "completed"
+
+	// workflow_run actions
+	WorkflowRunActionCompleted = "completed"
 )
 
 // check_suite conclusion values
@@ -67,7 +71,7 @@ func IsValidEventType(eventType string) bool {
 	switch eventType {
 	case EventTypeIssueComment, EventTypeIssues, EventTypePullRequest,
 		EventTypePullRequestReview, EventTypePullRequestReviewComment,
-		EventTypeCheckSuite, EventTypeStatus:
+		EventTypeCheckSuite, EventTypeStatus, EventTypeWorkflowRun:
 		return true
 	default:
 		return false
@@ -100,6 +104,8 @@ func IsValidAction(eventType, action string) bool {
 		return action == PullRequestReviewCommentActionCreated
 	case EventTypeCheckSuite:
 		return action == CheckSuiteActionCompleted
+	case EventTypeWorkflowRun:
+		return action == WorkflowRunActionCompleted
 	case EventTypeStatus:
 		// status events don't have an action field, so always return true
 		return true
@@ -122,5 +128,6 @@ func GetSupportedEventTypes() []string {
 		EventTypePullRequestReviewComment,
 		EventTypeCheckSuite,
 		EventTypeStatus,
+		EventTypeWorkflowRun,
 	}
 }

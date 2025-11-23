@@ -10,6 +10,9 @@ import (
 // codexApprovalExactMatch is the exact approval message from Codex bot.
 const codexApprovalExactMatch = "Codex Review: Didn't find any major issues."
 
+// CodexApprovalLabel is the label name used to mark PRs approved by Codex.
+const CodexApprovalLabel = "codex:approved"
+
 // CodexApprovalDetector detects Codex bot approval patterns in review comments.
 type CodexApprovalDetector struct {
 	logger           *config.AppLogger
