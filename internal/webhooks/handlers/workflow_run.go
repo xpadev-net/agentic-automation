@@ -23,17 +23,17 @@ import (
 type WorkflowRunPayload struct {
 	Action      string                `json:"action"`
 	WorkflowRun WorkflowRun           `json:"workflow_run"`
-	Repository  WorkflowRunRepository  `json:"repository"`
+	Repository  WorkflowRunRepository `json:"repository"`
 }
 
 // WorkflowRun represents the WorkflowRun object in workflow_run webhook payload
 type WorkflowRun struct {
-	ID           int64                      `json:"id"`
-	Status       string                     `json:"status"`
-	Conclusion   *string                    `json:"conclusion"`
-	HeadBranch   string                     `json:"head_branch"`
-	HeadSHA      string                     `json:"head_sha"`
-	PullRequests []WorkflowRunPullRequest  `json:"pull_requests"`
+	ID           int64                    `json:"id"`
+	Status       string                   `json:"status"`
+	Conclusion   *string                  `json:"conclusion"`
+	HeadBranch   string                   `json:"head_branch"`
+	HeadSHA      string                   `json:"head_sha"`
+	PullRequests []WorkflowRunPullRequest `json:"pull_requests"`
 }
 
 // WorkflowRunPullRequest represents a PullRequest object in workflow_run webhook payload
@@ -170,9 +170,9 @@ func HandleWorkflowRunWithDeps(c *gin.Context, deps WorkflowRunDeps) {
 			config.Int64("workflow_run_id", payload.WorkflowRun.ID),
 		)
 		c.JSON(http.StatusOK, gin.H{
-			"status":      "ignored",
+			"status":          "ignored",
 			"workflow_status": payload.WorkflowRun.Status,
-			"delivery_id": deliveryID,
+			"delivery_id":     deliveryID,
 		})
 		return
 	}
