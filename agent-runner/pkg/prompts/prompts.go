@@ -123,6 +123,7 @@ func BuildPlanExecutionPrompt(originalPrompt, planContent string, validationErro
 		result.WriteString(`
 
 プランに従って実装を完了してください。`)
+	}
 
 	// 禁止事項セクションを追加
 	result.WriteString("\n\n## 禁止事項 (MUST NOT)\n\n")
