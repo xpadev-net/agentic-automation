@@ -961,6 +961,55 @@ func (c *KubernetesClient) FindJobByAgentRunID(ctx context.Context, agentRunID i
 	return job, nil
 }
 
+// FindActiveJobByAgentRunID finds an active (Running or Pending) Kubernetes Job by agent-run-id label.
+// This is used to prevent duplicate job creation when multiple workers try to create a job for the same agent-run-id.
+// Returns the first active job found if multiple exist, or an error if no active job is found.
+func (c *KubernetesClient) FindActiveJobByAgentRunID(ctx context.Context, agentRunID int) (*batchv1.Job, error) {
+	labelSelector := fmt.Sprintf("agent-run-id=%d", agentRunID)
+	jobs, err := c.ListJobs(ctx, labelSelector)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list jobs by agent-run-id %d: %w", agentRunID, err)
+	}
+
+	if len(jobs.Items) == 0 {
+		return nil, fmt.Errorf("no active job found with agent-run-id=%d", agentRunID)
+	}
+
+	// Find active jobs (Running or Pending status)
+	var activeJobs []*batchv1.Job
+	for i := range jobs.Items {
+		job := &jobs.Items[i]
+		status, err := c.GetJobStatus(ctx, job.Name)
+		if err != nil {
+			c.logger.Warn("Failed to get job status while checking for active jobs",
+				config.String("job_name", job.Name),
+				config.Int("agent_run_id", agentRunID),
+				config.Error(err),
+			)
+			continue
+		}
+		if status == "Running" || status == "Pending" {
+			activeJobs = append(activeJobs, job)
+		}
+	}
+
+	if len(activeJobs) == 0 {
+		return nil, fmt.Errorf("no active job found with agent-run-id=%d", agentRunID)
+	}
+
+	// Return the first active job
+	job := activeJobs[0]
+	if len(activeJobs) > 1 {
+		c.logger.Warn("Multiple active jobs found with same agent-run-id, using first one",
+			config.Int("agent_run_id", agentRunID),
+			config.Int("active_job_count", len(activeJobs)),
+			config.String("selected_job", job.Name),
+		)
+	}
+
+	return job, nil
+}
+
 // GetJobStatus returns the status of a Job as a string
 func (c *KubernetesClient) GetJobStatus(ctx context.Context, jobName string) (string, error) {
 	job, err := c.GetJob(ctx, jobName)

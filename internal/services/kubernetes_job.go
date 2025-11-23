@@ -13,6 +13,8 @@ import (
 	"agentic-automation/internal/models"
 
 	batchv1 "k8s.io/api/batch/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // KubernetesJobService provides methods to create Kubernetes Jobs for AgentRun execution
@@ -249,6 +251,23 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 	// Build JobConfig
 	executionMode := resolveExecutionMode(agentRun)
 
+	// Check for existing active job to prevent duplicate creation
+	existingJob, err := s.kubernetesClient.FindActiveJobByAgentRunID(ctx, agentRun.ID)
+	if err == nil && existingJob != nil {
+		// Active job already exists, return AlreadyExists error
+		s.logger.Info("Active job already exists for agent run, skipping creation",
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("existing_job_name", existingJob.Name),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, apierrors.NewAlreadyExists(
+			schema.GroupResource{Resource: "jobs"},
+			existingJob.Name,
+		)
+	}
+	// If error is not nil, it means no active job was found, which is expected for new jobs
+	// Continue with job creation
+
 	// Generate job name
 	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
 	if err != nil {
@@ -391,6 +410,23 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 
 	// Build JobConfig
 	executionMode := resolveExecutionMode(agentRun)
+
+	// Check for existing active job to prevent duplicate creation
+	existingJob, err := s.kubernetesClient.FindActiveJobByAgentRunID(ctx, agentRun.ID)
+	if err == nil && existingJob != nil {
+		// Active job already exists, return AlreadyExists error
+		s.logger.Info("Active job already exists for agent run, skipping creation",
+			config.Int("agent_run_id", agentRun.ID),
+			config.String("existing_job_name", existingJob.Name),
+			config.String("service", "kubernetes_job"),
+		)
+		return nil, apierrors.NewAlreadyExists(
+			schema.GroupResource{Resource: "jobs"},
+			existingJob.Name,
+		)
+	}
+	// If error is not nil, it means no active job was found, which is expected for new jobs
+	// Continue with job creation
 
 	// Generate job name
 	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)

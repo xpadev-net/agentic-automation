@@ -287,3 +287,220 @@ func TestFindJobByAgentRunID(t *testing.T) {
 		assert.Contains(t, err.Error(), "no job found with agent-run-id=999")
 	})
 }
+
+func TestFindActiveJobByAgentRunID(t *testing.T) {
+	ctx := context.Background()
+	logger := config.NewNopLogger()
+	client := NewKubernetesClientWithClientset(logger)
+
+	t.Run("finds active job by agent-run-id label", func(t *testing.T) {
+		agentRunID := 123
+		issueID := 456
+
+		// Create a job with agent-run-id label and Running status
+		jobName := "test-job-active-123"
+		job := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      jobName,
+				Namespace: "default",
+				Labels: map[string]string{
+					"app":          "agent-runner",
+					"agent-run-id": strconv.Itoa(agentRunID),
+					"issue-id":     strconv.Itoa(issueID),
+				},
+			},
+			Spec: batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test",
+								Image: "test:latest",
+							},
+						},
+						RestartPolicy: corev1.RestartPolicyNever,
+					},
+				},
+			},
+			Status: batchv1.JobStatus{
+				Active: 1, // Active job
+			},
+		}
+
+		createdJob, err := client.clientset.BatchV1().Jobs("default").Create(ctx, job, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		// Find the active job by agent-run-id
+		foundJob, err := client.FindActiveJobByAgentRunID(ctx, agentRunID)
+		require.NoError(t, err)
+		assert.Equal(t, createdJob.Name, foundJob.Name)
+		assert.Equal(t, createdJob.Labels["agent-run-id"], strconv.Itoa(agentRunID))
+	})
+
+	t.Run("returns error when no active job found", func(t *testing.T) {
+		agentRunID := 999
+
+		_, err := client.FindActiveJobByAgentRunID(ctx, agentRunID)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no active job found with agent-run-id=999")
+	})
+
+	t.Run("ignores completed jobs", func(t *testing.T) {
+		agentRunID := 456
+		issueID := 789
+
+		// Create a completed job
+		job := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-job-completed-456",
+				Namespace: "default",
+				Labels: map[string]string{
+					"app":          "agent-runner",
+					"agent-run-id": strconv.Itoa(agentRunID),
+					"issue-id":     strconv.Itoa(issueID),
+				},
+			},
+			Spec: batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test",
+								Image: "test:latest",
+							},
+						},
+						RestartPolicy: corev1.RestartPolicyNever,
+					},
+				},
+			},
+			Status: batchv1.JobStatus{
+				Succeeded: 1, // Completed job
+			},
+		}
+
+		_, err := client.clientset.BatchV1().Jobs("default").Create(ctx, job, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		// Should not find completed job
+		_, err = client.FindActiveJobByAgentRunID(ctx, agentRunID)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no active job found with agent-run-id=456")
+	})
+
+	t.Run("returns first active job when multiple active jobs found", func(t *testing.T) {
+		agentRunID := 789
+		issueID1 := 100
+		issueID2 := 200
+
+		// Create first active job
+		job1 := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-job-active-789-1",
+				Namespace: "default",
+				Labels: map[string]string{
+					"app":          "agent-runner",
+					"agent-run-id": strconv.Itoa(agentRunID),
+					"issue-id":     strconv.Itoa(issueID1),
+				},
+			},
+			Spec: batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test",
+								Image: "test:latest",
+							},
+						},
+						RestartPolicy: corev1.RestartPolicyNever,
+					},
+				},
+			},
+			Status: batchv1.JobStatus{
+				Active: 1, // Active job
+			},
+		}
+
+		// Create second active job with same agent-run-id
+		job2 := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-job-active-789-2",
+				Namespace: "default",
+				Labels: map[string]string{
+					"app":          "agent-runner",
+					"agent-run-id": strconv.Itoa(agentRunID),
+					"issue-id":     strconv.Itoa(issueID2),
+				},
+			},
+			Spec: batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test",
+								Image: "test:latest",
+							},
+						},
+						RestartPolicy: corev1.RestartPolicyNever,
+					},
+				},
+			},
+			Status: batchv1.JobStatus{
+				Active: 1, // Active job
+			},
+		}
+
+		_, err := client.clientset.BatchV1().Jobs("default").Create(ctx, job1, metav1.CreateOptions{})
+		require.NoError(t, err)
+		_, err = client.clientset.BatchV1().Jobs("default").Create(ctx, job2, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		// Find active job - should return one of them and log warning
+		foundJob, err := client.FindActiveJobByAgentRunID(ctx, agentRunID)
+		require.NoError(t, err)
+		assert.NotNil(t, foundJob)
+		assert.Equal(t, foundJob.Labels["agent-run-id"], strconv.Itoa(agentRunID))
+		// Should return one of the active jobs
+		assert.True(t, foundJob.Name == "test-job-active-789-1" || foundJob.Name == "test-job-active-789-2")
+	})
+
+	t.Run("finds pending job", func(t *testing.T) {
+		agentRunID := 321
+		issueID := 654
+
+		// Create a pending job (no status set)
+		job := &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-job-pending-321",
+				Namespace: "default",
+				Labels: map[string]string{
+					"app":          "agent-runner",
+					"agent-run-id": strconv.Itoa(agentRunID),
+					"issue-id":     strconv.Itoa(issueID),
+				},
+			},
+			Spec: batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{
+							{
+								Name:  "test",
+								Image: "test:latest",
+							},
+						},
+						RestartPolicy: corev1.RestartPolicyNever,
+					},
+				},
+			},
+			// No status set - should be treated as Pending
+		}
+
+		createdJob, err := client.clientset.BatchV1().Jobs("default").Create(ctx, job, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		// Find the pending job
+		foundJob, err := client.FindActiveJobByAgentRunID(ctx, agentRunID)
+		require.NoError(t, err)
+		assert.Equal(t, createdJob.Name, foundJob.Name)
+	})
+}
