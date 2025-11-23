@@ -9,7 +9,7 @@ type ReviewFeedback struct {
 	ID               int     `gorm:"primaryKey;autoIncrement"`
 	PRID             int     `gorm:"column:pr_id;index"`
 	Source           string  `gorm:"type:enum('Codex');default:'Codex'"`
-	Content          *string `gorm:"type:text"`
+	Content          *string `gorm:"type:longtext"`
 	Status           string  `gorm:"type:enum('requested','received','commented');default:'requested'"`
 	ApprovalDetected bool    `gorm:"column:approval_detected;type:boolean;default:false;index"`
 	GitHubCommentID  *int64  `gorm:"column:github_comment_id;type:bigint"`
@@ -22,7 +22,7 @@ type ReviewFeedback struct {
 	//         → executed (プラン実行完了)
 	//     ↘ rejected (プラン却下)
 	PlanCreationStatus  string    `gorm:"type:enum('pending','creating','created','rejected','executed');default:'pending'"`
-	PlanContent         *string   `gorm:"type:text"`
+	PlanContent         *string   `gorm:"type:longtext"`
 	PlanAgentRunID      *int      `gorm:"column:plan_agent_run_id;index"`
 	ExecutionAgentRunID *int      `gorm:"column:execution_agent_run_id;index"`
 	CreatedAt           time.Time `gorm:"column:created_at;autoCreateTime"`
