@@ -891,64 +891,6 @@ func startPlanCreationIfNeeded(
 		return result, nil
 	}
 
-	// Post comment when plan creation starts (started == true)
-	// Extract repository information from pr.Repo (format: "owner/repo")
-	repoParts := strings.Split(pr.Repo, "/")
-	if len(repoParts) == 2 {
-		owner := repoParts[0]
-		repo := repoParts[1]
-
-		// Initialize GitHub client and notification service
-		githubClient := deps.GitHubClient
-		if githubClient == nil {
-			if appGitHubClient == nil {
-				logger.Warn("GitHub App client not available for plan creation notification",
-					config.String("delivery_id", deliveryID),
-				)
-			} else {
-				rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
-				if err != nil {
-					logger.Warn("Failed to init per-repo GitHub client for plan creation notification",
-						config.Error(err),
-						config.String("owner", owner),
-						config.String("repo", repo),
-						config.String("delivery_id", deliveryID),
-					)
-				} else {
-					githubClient = clients.NewFromGitHub(rawClient, logger)
-				}
-			}
-		}
-
-		if githubClient != nil {
-			notificationService := services.NewGitHubNotificationService(githubClient, logger)
-			if err := notificationService.NotifyPlanCreationStarted(ctx, owner, repo, pr.Number, reviewFeedback.ID, planAgentRun.ID); err != nil {
-				// Log error but continue with plan creation
-				logger.Warn("Failed to post plan creation started comment",
-					config.Error(err),
-					config.Int("pr_id", pr.ID),
-					config.Int("pr_number", pr.Number),
-					config.Int("review_feedback_id", reviewFeedback.ID),
-					config.Int("agent_run_id", planAgentRun.ID),
-					config.String("delivery_id", deliveryID),
-				)
-			} else {
-				logger.Info("Posted plan creation started comment",
-					config.Int("pr_id", pr.ID),
-					config.Int("pr_number", pr.Number),
-					config.Int("review_feedback_id", reviewFeedback.ID),
-					config.Int("agent_run_id", planAgentRun.ID),
-					config.String("delivery_id", deliveryID),
-				)
-			}
-		}
-	} else {
-		logger.Warn("Invalid repository format for plan creation notification",
-			config.String("repo", pr.Repo),
-			config.String("delivery_id", deliveryID),
-		)
-	}
-
 	jobService := deps.KubernetesJobService
 	if jobService == nil {
 		kubernetesClient, clientErr := clients.NewKubernetesClient(logger)
@@ -1021,6 +963,64 @@ func startPlanCreationIfNeeded(
 			)
 			// Non-blocking: continue even if update fails
 		}
+	}
+
+	// Post comment when plan creation starts (after job is successfully created)
+	// Extract repository information from pr.Repo (format: "owner/repo")
+	repoParts := strings.Split(pr.Repo, "/")
+	if len(repoParts) == 2 {
+		owner := repoParts[0]
+		repo := repoParts[1]
+
+		// Initialize GitHub client and notification service
+		githubClient := deps.GitHubClient
+		if githubClient == nil {
+			if appGitHubClient == nil {
+				logger.Warn("GitHub App client not available for plan creation notification",
+					config.String("delivery_id", deliveryID),
+				)
+			} else {
+				rawClient, err := appGitHubClient.ForRepo(ctx, owner, repo)
+				if err != nil {
+					logger.Warn("Failed to init per-repo GitHub client for plan creation notification",
+						config.Error(err),
+						config.String("owner", owner),
+						config.String("repo", repo),
+						config.String("delivery_id", deliveryID),
+					)
+				} else {
+					githubClient = clients.NewFromGitHub(rawClient, logger)
+				}
+			}
+		}
+
+		if githubClient != nil {
+			notificationService := services.NewGitHubNotificationService(githubClient, logger)
+			if err := notificationService.NotifyPlanCreationStarted(ctx, owner, repo, pr.Number, reviewFeedback.ID, planAgentRun.ID); err != nil {
+				// Log error but continue with plan creation
+				logger.Warn("Failed to post plan creation started comment",
+					config.Error(err),
+					config.Int("pr_id", pr.ID),
+					config.Int("pr_number", pr.Number),
+					config.Int("review_feedback_id", reviewFeedback.ID),
+					config.Int("agent_run_id", planAgentRun.ID),
+					config.String("delivery_id", deliveryID),
+				)
+			} else {
+				logger.Info("Posted plan creation started comment",
+					config.Int("pr_id", pr.ID),
+					config.Int("pr_number", pr.Number),
+					config.Int("review_feedback_id", reviewFeedback.ID),
+					config.Int("agent_run_id", planAgentRun.ID),
+					config.String("delivery_id", deliveryID),
+				)
+			}
+		}
+	} else {
+		logger.Warn("Invalid repository format for plan creation notification",
+			config.String("repo", pr.Repo),
+			config.String("delivery_id", deliveryID),
+		)
 	}
 
 	result := &planCreationResult{
