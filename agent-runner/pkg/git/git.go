@@ -1322,3 +1322,43 @@ func ResolveConflictsWithAI(workDir, repo string, issueID int, agentType string)
 
 	return nil
 }
+
+// GetCurrentCommitSHA returns the current HEAD commit SHA.
+// workDir: Working directory (must be a git repository)
+// Returns the commit SHA as a string, or an error if retrieval fails.
+func GetCurrentCommitSHA(workDir string) (string, error) {
+	if workDir == "" {
+		return "", fmt.Errorf("work directory is required")
+	}
+
+	shaCmd := exec.Command("git", "rev-parse", "HEAD")
+	shaCmd.Dir = workDir
+	output, err := shaCmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current commit SHA: %w", err)
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// ResetToCommit resets the repository to a specific commit using hard reset.
+// workDir: Working directory (must be a git repository)
+// commitSHA: The commit SHA to reset to
+// Returns an error if the reset operation fails.
+func ResetToCommit(workDir, commitSHA string) error {
+	if workDir == "" {
+		return fmt.Errorf("work directory is required")
+	}
+	if commitSHA == "" {
+		return fmt.Errorf("commit SHA is required")
+	}
+
+	resetCmd := exec.Command("git", "reset", "--hard", commitSHA)
+	resetCmd.Dir = workDir
+	output, err := resetCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to reset to commit %s: %w, output: %s", commitSHA, err, string(output))
+	}
+
+	return nil
+}
