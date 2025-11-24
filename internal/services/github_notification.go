@@ -255,6 +255,60 @@ func (s *GitHubNotificationService) postComment(ctx context.Context, owner, repo
 	}, nil, s.logger)
 }
 
+// NotifyPlanCreationStarted posts a comment when plan creation starts.
+// It posts a notification message to the PR to inform users that plan creation has started.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout control
+//   - owner: Repository owner
+//   - repo: Repository name
+//   - prNumber: PR number
+//   - reviewFeedbackID: ReviewFeedback ID
+//   - planAgentRunID: Plan AgentRun ID
+//
+// Returns:
+//   - error: Error if comment posting failed (GitHub API error, network error, etc.)
+func (s *GitHubNotificationService) NotifyPlanCreationStarted(
+	ctx context.Context,
+	owner, repo string,
+	prNumber int,
+	reviewFeedbackID int,
+	planAgentRunID int,
+) error {
+	s.logger.Info("Posting plan creation started notification",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
+		config.Int("review_feedback_id", reviewFeedbackID),
+		config.Int("plan_agent_run_id", planAgentRunID),
+	)
+
+	message := fmt.Sprintf("レビューに対応するプラン作成を開始しました。\n\n**Review Feedback ID**: %d\n**Plan Agent Run ID**: %d",
+		reviewFeedbackID, planAgentRunID)
+
+	if err := s.postComment(ctx, owner, repo, prNumber, message); err != nil {
+		s.logger.Error("Failed to post plan creation started comment",
+			config.Error(err),
+			config.String("owner", owner),
+			config.String("repo", repo),
+			config.Int("pr_number", prNumber),
+			config.Int("review_feedback_id", reviewFeedbackID),
+			config.Int("plan_agent_run_id", planAgentRunID),
+		)
+		return err
+	}
+
+	s.logger.Info("Plan creation started notification posted successfully",
+		config.String("owner", owner),
+		config.String("repo", repo),
+		config.Int("pr_number", prNumber),
+		config.Int("review_feedback_id", reviewFeedbackID),
+		config.Int("plan_agent_run_id", planAgentRunID),
+	)
+
+	return nil
+}
+
 // updateComment updates an existing comment with retry/backoff
 func (s *GitHubNotificationService) updateComment(ctx context.Context, owner, repo string, commentID int64, body string) error {
 	return utils.Retry(ctx, func() error {
