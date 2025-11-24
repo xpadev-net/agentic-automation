@@ -646,6 +646,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 			}
 
+			// Record HEAD before agent execution for rollback on failure
+			preExecutionHEAD, headErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+			if headErr != nil {
+				fmt.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
+			}
+
 			// Execute agent
 			if envCfg.AgentType == "cursor-agent" {
 				agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
@@ -653,6 +659,19 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
 			}
 			if err != nil {
+				// Rollback any commits created by the agent before returning error
+				if preExecutionHEAD != "" {
+					currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+					if getErr == nil && currentHEAD != preExecutionHEAD {
+						// HEAD has advanced, meaning commits were created
+						if resetErr := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); resetErr != nil {
+							fmt.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
+						} else {
+							fmt.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
+						}
+					}
+				}
+
 				reportErr := reporterClient.ReportFailure(
 					fmt.Sprintf("Agent execution failed: %v", err),
 					agentOutput,
@@ -664,6 +683,18 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				return fmt.Errorf("agent execution failed: %w", err)
 			}
 			fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+
+			// Check if agent created a commit and rollback if needed
+			if preExecutionHEAD != "" {
+				currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+				if getErr == nil && currentHEAD != preExecutionHEAD {
+					fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
+					if err := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); err != nil {
+						return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+					}
+					fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
+				}
+			}
 
 			// Handle plan creation result
 			err = handlePlanCreationResult(reporterClient, envCfg.AgentType, agentOutput)
@@ -713,6 +744,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 		}
 
+		// Record HEAD before agent execution for rollback on failure
+		preExecutionHEAD, headErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+		if headErr != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
+		}
+
 		// Execute agent
 		if envCfg.AgentType == "cursor-agent" {
 			agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
@@ -720,6 +757,19 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
 		}
 		if err != nil {
+			// Rollback any commits created by the agent before returning error
+			if preExecutionHEAD != "" {
+				currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+				if getErr == nil && currentHEAD != preExecutionHEAD {
+					// HEAD has advanced, meaning commits were created
+					if resetErr := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); resetErr != nil {
+						fmt.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
+					} else {
+						fmt.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
+					}
+				}
+			}
+
 			reportErr := reporterClient.ReportFailure(
 				fmt.Sprintf("Agent execution failed: %v", err),
 				agentOutput,
@@ -731,6 +781,18 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			return fmt.Errorf("agent execution failed: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+
+		// Check if agent created a commit and rollback if needed
+		if preExecutionHEAD != "" {
+			currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+			if getErr == nil && currentHEAD != preExecutionHEAD {
+				fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
+				if err := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); err != nil {
+					return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
+			}
+		}
 
 		// Check for file changes
 		fmt.Fprintf(os.Stderr, "Checking for file changes\n")
@@ -878,6 +940,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						}
 						fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 
+						// Record HEAD before agent execution for rollback on failure
+						preExecutionHEAD, headErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+						if headErr != nil {
+							fmt.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
+						}
+
 						// Execute agent again
 						if envCfg.AgentType == "cursor-agent" {
 							agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
@@ -885,6 +953,19 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 							agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
 						}
 						if err != nil {
+							// Rollback any commits created by the agent before returning error
+							if preExecutionHEAD != "" {
+								currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+								if getErr == nil && currentHEAD != preExecutionHEAD {
+									// HEAD has advanced, meaning commits were created
+									if resetErr := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); resetErr != nil {
+										fmt.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
+									} else {
+										fmt.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
+									}
+								}
+							}
+
 							reportErr := reporterClient.ReportFailure(
 								fmt.Sprintf("Agent execution failed during post-commit sync retry: %v", err),
 								agentOutput,

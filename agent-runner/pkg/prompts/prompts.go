@@ -50,6 +50,12 @@ func BuildTaskPrompt(prompt, previousAttempts, ciLogs string, validationError ..
 		result.WriteString("\n\n上記の情報を基に、タスクを実行してください。")
 	}
 
+	// 禁止事項セクションを追加
+	result.WriteString("\n\n## 禁止事項 (MUST NOT)\n\n")
+	result.WriteString("1. コミットを作成してはならない\n")
+	result.WriteString("2. git commitコマンドを実行してはならない\n")
+	result.WriteString("3. ファイルの変更のみを行い、コミットはagent-runnerが行う\n")
+
 	return result.String()
 }
 
@@ -76,6 +82,8 @@ func BuildPlanCreationPrompt(reviewFeedback string) string {
 1. ファイルに書き出してはならない
 2. ファイルの変更を行ってはならない
 3. ファイルの作成、編集、削除を行ってはならない
+4. コミットを作成してはならない
+5. git commitコマンドを実行してはならない
 
 ## 補足
 
@@ -116,6 +124,12 @@ func BuildPlanExecutionPrompt(originalPrompt, planContent string, validationErro
 
 プランに従って実装を完了してください。`)
 	}
+
+	// 禁止事項セクションを追加
+	result.WriteString("\n\n## 禁止事項 (MUST NOT)\n\n")
+	result.WriteString("1. コミットを作成してはならない\n")
+	result.WriteString("2. git commitコマンドを実行してはならない\n")
+	result.WriteString("3. ファイルの変更のみを行い、コミットはagent-runnerが行う\n")
 
 	return result.String()
 }
