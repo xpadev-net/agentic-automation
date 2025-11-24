@@ -1341,7 +1341,8 @@ func GetCurrentCommitSHA(workDir string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// ResetToCommit resets the repository to a specific commit using hard reset.
+// ResetToCommit resets the repository to a specific commit using soft reset.
+// This removes commits but keeps changes in the staging area.
 // workDir: Working directory (must be a git repository)
 // commitSHA: The commit SHA to reset to
 // Returns an error if the reset operation fails.
@@ -1353,7 +1354,7 @@ func ResetToCommit(workDir, commitSHA string) error {
 		return fmt.Errorf("commit SHA is required")
 	}
 
-	resetCmd := exec.Command("git", "reset", "--hard", commitSHA)
+	resetCmd := exec.Command("git", "reset", "--soft", commitSHA)
 	resetCmd.Dir = workDir
 	output, err := resetCmd.CombinedOutput()
 	if err != nil {

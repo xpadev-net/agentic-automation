@@ -685,16 +685,15 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
 
 			// Check if agent created a commit and rollback if needed
-			currentHEAD, err := git.GetHEAD(envCfg.WorkDir)
-			if err != nil {
-				return fmt.Errorf("failed to get current HEAD: %w", err)
-			}
-			if initialHEAD != currentHEAD {
-				fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", initialHEAD)
-				if err := git.ResetToCommit(envCfg.WorkDir, initialHEAD); err != nil {
-					return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+			if preExecutionHEAD != "" {
+				currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+				if getErr == nil && currentHEAD != preExecutionHEAD {
+					fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
+					if err := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); err != nil {
+						return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+					}
+					fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
 				}
-				fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
 			}
 
 			// Handle plan creation result
@@ -784,16 +783,15 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
 
 		// Check if agent created a commit and rollback if needed
-		currentHEAD, err := git.GetHEAD(envCfg.WorkDir)
-		if err != nil {
-			return fmt.Errorf("failed to get current HEAD: %w", err)
-		}
-		if initialHEAD != currentHEAD {
-			fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", initialHEAD)
-			if err := git.ResetToCommit(envCfg.WorkDir, initialHEAD); err != nil {
-				return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+		if preExecutionHEAD != "" {
+			currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
+			if getErr == nil && currentHEAD != preExecutionHEAD {
+				fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
+				if err := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); err != nil {
+					return fmt.Errorf("failed to reset to initial HEAD: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
 			}
-			fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
 		}
 
 		// Check for file changes
