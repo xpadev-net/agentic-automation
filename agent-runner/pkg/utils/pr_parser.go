@@ -90,18 +90,31 @@ func parseXMLTitleAndBody(text string) (string, string, error) {
 	titlePattern := regexp.MustCompile(`(?s)<title>(.*?)</title>`)
 	bodyPattern := regexp.MustCompile(`(?s)<body>(.*?)</body>`)
 
-	titleMatches := titlePattern.FindAllStringSubmatch(text, -1)
-	bodyMatches := bodyPattern.FindAllStringSubmatch(text, -1)
+	titleIndexes := titlePattern.FindAllStringSubmatchIndex(text, -1)
+	bodyIndexes := bodyPattern.FindAllStringSubmatchIndex(text, -1)
 
-	if len(titleMatches) == 0 {
+	if len(titleIndexes) == 0 {
 		return "", "", fmt.Errorf("title tag not found in output")
 	}
-	if len(bodyMatches) == 0 {
+	if len(bodyIndexes) == 0 {
 		return "", "", fmt.Errorf("body tag not found in output")
 	}
 
-	title := strings.TrimSpace(titleMatches[len(titleMatches)-1][1])
-	body := strings.TrimSpace(bodyMatches[len(bodyMatches)-1][1])
+	// Body: last match. Title: last match that ends before that body's start —
+	// literal <title> mentions inside the markdown body are not candidates.
+	lastBody := bodyIndexes[len(bodyIndexes)-1]
+	body := strings.TrimSpace(text[lastBody[2]:lastBody[3]])
+	bodyStart := lastBody[0]
+	title := ""
+	for _, m := range titleIndexes {
+		// m[2]:m[3] spans the captured content; m[0]:m[1] the whole match
+		if m[1] <= bodyStart {
+			title = strings.TrimSpace(text[m[2]:m[3]])
+		}
+	}
+	if title == "" {
+		title = strings.TrimSpace(text[titleIndexes[len(titleIndexes)-1][2]:titleIndexes[len(titleIndexes)-1][3]])
+	}
 
 	return title, body, nil
 }

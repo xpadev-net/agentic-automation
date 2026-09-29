@@ -62,6 +62,22 @@ func TestParsePRTitleAndBody_StreamJSON(t *testing.T) {
 	}
 }
 
+func TestParsePRTitleAndBody_TitleTagInsideBody(t *testing.T) {
+	// A literal <title> mention inside the markdown body must not shadow the real title.
+	output := `<title>real title</title>
+<body>本文中に <title>例示</title> という文字列を含む</body>`
+	title, body, err := ParsePRTitleAndBody(output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "real title" {
+		t.Errorf("expected title before last body, got %q", title)
+	}
+	if body != "本文中に <title>例示</title> という文字列を含む" {
+		t.Errorf("expected last body match, got %q", body)
+	}
+}
+
 func TestParsePRTitleAndBody_NoTags(t *testing.T) {
 	_, _, err := ParsePRTitleAndBody("no xml tags here")
 	if err == nil || !strings.Contains(err.Error(), "title tag not found") {
