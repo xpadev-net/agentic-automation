@@ -84,22 +84,24 @@ func extractAssistantText(output string) (string, error) {
 // The XML tags may be on separate lines or on the same line.
 func parseXMLTitleAndBody(text string) (string, string, error) {
 	// Use regex to extract title and body
-	// Pattern matches <title>...</title> and <body>...</body> with any content (including newlines)
+	// Pattern matches <title>...</title> and <body>...</body> with any content (including newlines).
+	// The LAST match wins: plain-text agents (e.g. codex exec) echo the prompt — which
+	// itself contains example tags — before their answer.
 	titlePattern := regexp.MustCompile(`(?s)<title>(.*?)</title>`)
 	bodyPattern := regexp.MustCompile(`(?s)<body>(.*?)</body>`)
 
-	titleMatch := titlePattern.FindStringSubmatch(text)
-	bodyMatch := bodyPattern.FindStringSubmatch(text)
+	titleMatches := titlePattern.FindAllStringSubmatch(text, -1)
+	bodyMatches := bodyPattern.FindAllStringSubmatch(text, -1)
 
-	if len(titleMatch) < 2 {
+	if len(titleMatches) == 0 {
 		return "", "", fmt.Errorf("title tag not found in output")
 	}
-	if len(bodyMatch) < 2 {
+	if len(bodyMatches) == 0 {
 		return "", "", fmt.Errorf("body tag not found in output")
 	}
 
-	title := strings.TrimSpace(titleMatch[1])
-	body := strings.TrimSpace(bodyMatch[1])
+	title := strings.TrimSpace(titleMatches[len(titleMatches)-1][1])
+	body := strings.TrimSpace(bodyMatches[len(bodyMatches)-1][1])
 
 	return title, body, nil
 }
@@ -138,16 +140,18 @@ func ParseCommitMessage(output string) (string, error) {
 // The XML tags may be on separate lines or on the same line.
 func parseXMLCommitMessage(text string) (string, error) {
 	// Use regex to extract commit message
-	// Pattern matches <commit_message>...</commit_message> with any content (including newlines)
+	// Pattern matches <commit_message>...</commit_message> with any content (including newlines).
+	// The LAST match wins: plain-text agents (e.g. codex exec) echo the prompt — which
+	// itself contains example tags — before their answer.
 	commitMsgPattern := regexp.MustCompile(`(?s)<commit_message>(.*?)</commit_message>`)
 
-	commitMsgMatch := commitMsgPattern.FindStringSubmatch(text)
+	commitMsgMatches := commitMsgPattern.FindAllStringSubmatch(text, -1)
 
-	if len(commitMsgMatch) < 2 {
+	if len(commitMsgMatches) == 0 {
 		return "", fmt.Errorf("commit_message tag not found in output")
 	}
 
-	commitMsg := strings.TrimSpace(commitMsgMatch[1])
+	commitMsg := strings.TrimSpace(commitMsgMatches[len(commitMsgMatches)-1][1])
 
 	return commitMsg, nil
 }

@@ -1,0 +1,70 @@
+package utils
+
+import (
+	"strings"
+	"testing"
+)
+
+// Codex-style output: the CLI echoes the prompt (which itself contains the
+// example output format) before printing the agent's answer as plain text.
+func TestParsePRTitleAndBody_PlainTextWithPromptEcho(t *testing.T) {
+	output := `user
+以下の情報を基に、Pull Requestのタイトルと概要を生成してください。
+出力形式:
+以下のXML形式で出力してください。
+<title>PRタイトル</title>
+<body>PR概要（Markdown形式可）</body>
+
+codex
+<title>feat: add codex support</title>
+<body>実際のPR本文</body>
+`
+	title, body, err := ParsePRTitleAndBody(output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "feat: add codex support" {
+		t.Errorf("expected last <title> match, got %q", title)
+	}
+	if body != "実際のPR本文" {
+		t.Errorf("expected last <body> match, got %q", body)
+	}
+}
+
+func TestParseCommitMessage_PlainTextWithPromptEcho(t *testing.T) {
+	output := `user
+<commit_message>コミットメッセージ（必ずIssue番号 #1 を含めてください）</commit_message>
+と出力してください。
+
+codex
+<commit_message>feat: add codex agent (#1)</commit_message>
+`
+	msg, err := ParseCommitMessage(output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg != "feat: add codex agent (#1)" {
+		t.Errorf("expected last <commit_message> match, got %q", msg)
+	}
+}
+
+func TestParsePRTitleAndBody_StreamJSON(t *testing.T) {
+	output := `{"type":"assistant","message":{"content":[{"type":"text","text":"<title>json title</title>\n<body>json body</body>"}]}}`
+	title, body, err := ParsePRTitleAndBody(output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "json title" {
+		t.Errorf("expected title from assistant entry, got %q", title)
+	}
+	if body != "json body" {
+		t.Errorf("expected body from assistant entry, got %q", body)
+	}
+}
+
+func TestParsePRTitleAndBody_NoTags(t *testing.T) {
+	_, _, err := ParsePRTitleAndBody("no xml tags here")
+	if err == nil || !strings.Contains(err.Error(), "title tag not found") {
+		t.Fatalf("expected title tag error, got %v", err)
+	}
+}
