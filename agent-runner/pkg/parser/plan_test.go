@@ -87,6 +87,12 @@ func TestParsePlanResult(t *testing.T) {
 			expectPlan: "1. Task 1\n  2. Task 2",
 			rejected:   false,
 		},
+		"codex JSONL plan is decoded": {
+			input:          "{\"type\":\"item.completed\",\"item\":{\"type\":\"reasoning\",\"text\":\"ignore\"}}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"前置き \\\"quoted\\\"\"}}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"<plan_created>1. READMEを更新\\n2. テストを実行</plan_created>\"}}",
+			expectPlan:     "1. READMEを更新\n2. テストを実行",
+			rejected:       false,
+			reasonContains: "",
+		},
 	}
 
 	for name, tc := range tests {

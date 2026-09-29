@@ -221,10 +221,10 @@ RUN curl https://cursor.com/install -fsS | bash
 
 **Command**:
 ```bash
-codex exec --sandbox workspace-write "{issue_context}"
+codex exec --dangerously-bypass-approvals-and-sandbox --json -m gpt-5.6-luna "{issue_context}"
 ```
 
-`--sandbox` selects the sandbox mode: `workspace-write` when writes are allowed (normal runs), `read-only` otherwise (e.g. plan creation). `-m <model>` is appended only when `CODEX_MODEL` is set.
+Write-enabled implementation runs use `--dangerously-bypass-approvals-and-sandbox`. Read-only runs such as plan creation use `--sandbox read-only`; the flags are mutually exclusive. `--json` stdout is retained for final-output parsing and streamed line-by-line to runner logs. `-m <model>` defaults to `gpt-5.6-luna`.
 
 **Installation** (in Dockerfile):
 ```dockerfile
@@ -233,7 +233,7 @@ RUN npm install -g @openai/codex
 
 **Environment**:
 - `CODEX_API_KEY` (or `OPENAI_API_KEY`): OpenAI API key (injected by Pod template)
-- `CODEX_MODEL` (optional): model override for `-m`
+- `CODEX_MODEL` (optional): model for `-m` (default `gpt-5.6-luna`)
 
 ---
 

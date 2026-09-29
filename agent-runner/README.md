@@ -79,8 +79,10 @@ Agent Runner は Kubernetes 環境変数を前提とします（Operator から�
   - `WORKSPACE_DIR`: 作業ディレクトリ（デフォルト `/workspace`）
   - `RETRY_COUNT`: リトライ回数（整数、>=0）>0 でセッション復元
   - `CURSOR_MODEL`: Cursor モデル（デフォルト `auto`）
-  - `CURSOR_ALLOW_WRITE`: `true`/`false`（デフォルト `true`、codex の `--sandbox` にも適用）
-  - `CODEX_MODEL`: Codex モデル（デフォルト空 = Codex CLI のデフォルト）
+  - `CURSOR_ALLOW_WRITE`: `true`/`false`（デフォルト `true`）。Codex では `true` の実装実行時に承認・sandbox をバイパスし、plan creation では常に read-only sandbox を使用
+  - `CODEX_MODEL`: Codex モデル（デフォルト `gpt-5.6-luna`。明示的に `auto` を指定した場合のみ `-m` を省略してCodex CLIの選択に委ねる）
+
+Codex は `--json` で実行されます。stdout の JSONL は最終出力解析用に完全保存しつつ、各行を runner の stderr に逐次出力するため、Pod ログから進捗を追跡できます。Codex 自身の stderr もログと失敗レポート用に保持されます。
 
 ### Codex OAuth 認証ファイル
 

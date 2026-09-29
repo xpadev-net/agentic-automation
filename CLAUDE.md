@@ -104,7 +104,7 @@ git checkout -b feature/issue-123 master
   ```
 - 呼び出し例（agent-runner 内部からの起動イメージ）:
   ```bash
-  codex exec --sandbox workspace-write "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+  codex exec --dangerously-bypass-approvals-and-sandbox --json -m gpt-5.6-luna "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
   Description:
   ${ISSUE_BODY}
@@ -114,12 +114,13 @@ git checkout -b feature/issue-123 master
 
   Please fix the issue and ensure all tests pass."
   ```
-  - `--sandbox`: 書き込み可否に応じて `workspace-write` / `read-only`（内部で `CURSOR_ALLOW_WRITE` と同じフラグを流用）
-  - `-m <model>`: `CODEX_MODEL` が設定されている場合のみ付与
+  - 書き込み可能な実装実行では `--dangerously-bypass-approvals-and-sandbox`、plan creation では `--sandbox read-only` を使用（両者は排他的）
+  - `--json`: JSONL stdout を最終出力解析用に保持しながら runner ログへ逐次出力
+  - `-m <model>`: `CODEX_MODEL` を付与（未設定時は `gpt-5.6-luna`）
 - 必須環境変数:
   - `CODEX_API_KEY` または `OPENAI_API_KEY`（いずれか）
 - 任意環境変数:
-  - `CODEX_MODEL`
+  - `CODEX_MODEL`（デフォルト `gpt-5.6-luna`）
 
 ## エージェント選択ロジック
 

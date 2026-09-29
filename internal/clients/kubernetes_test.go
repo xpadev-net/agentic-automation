@@ -127,6 +127,27 @@ func TestBuildJobSpecCodexAuthFile(t *testing.T) {
 	assert.True(t, *codexKey.ValueFrom.SecretKeyRef.Optional)
 }
 
+func TestBuildJobSpecCodexModelDefaultsToLuna(t *testing.T) {
+	t.Setenv("CODEX_MODEL", "")
+	client := &KubernetesClient{}
+	spec := client.BuildJobSpec(&JobConfig{
+		AgentRunID:       1,
+		IssueID:          2,
+		Repo:             "owner/repo",
+		AgentType:        "codex",
+		AgentRunnerImage: "agent-runner:test",
+	})
+
+	var codexModel string
+	for _, env := range spec.Template.Spec.Containers[0].Env {
+		if env.Name == "CODEX_MODEL" {
+			codexModel = env.Value
+			break
+		}
+	}
+	assert.Equal(t, "gpt-5.6-luna", codexModel)
+}
+
 func TestBuildJobSpecNonCodexHasNoCodexAuthVolumes(t *testing.T) {
 	client := &KubernetesClient{}
 	spec := client.BuildJobSpec(&JobConfig{
