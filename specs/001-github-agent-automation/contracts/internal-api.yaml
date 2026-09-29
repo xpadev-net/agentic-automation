@@ -223,7 +223,7 @@ paths:
                   example: succeeded
                 agent_type:
                   type: string
-                  enum: [claude-code, cursor-agent]
+                  enum: [claude-code, cursor-agent, codex]
                   example: claude-code
                 pr_number:
                   type: integer

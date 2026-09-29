@@ -11,7 +11,7 @@
 
 ### 主要機能
 - **Issueコメントトリガー**: 指定コメント・ラベル・条件で AI 実行を開始
-- **AI 実行（claude-code / cursor-agent）**: 指定プロンプトでリポジトリに対する変更を提案・実装
+- **AI 実行（claude-code / cursor-agent / codex）**: 指定プロンプトでリポジトリに対する変更を提案・実装
 - **PR 作成**: 変更を `feature/issue-{番号}` ブランチにコミットし PR 化
 - **Codex レビュー**: 変更の自動レビューと改善提案
 - **自動マージ**: 条件（CI成功・承認など）を満たせば自動マージ
@@ -102,7 +102,7 @@ make test
 - **DB**: MySQL 8.0+
 - **オブジェクトストレージ**: S3 / MinIO
 - **オーケストレーション**: Kubernetes
-- **AI エージェント**: Claude Code（`@anthropic/claude-code`）、Cursor Headless（`cursor-agent`）
+- **AI エージェント**: Claude Code（`@anthropic/claude-code`）、Cursor Headless（`cursor-agent`）、Codex CLI（`@openai/codex`）
 - **その他**: GitHub App（認証）, Docker, Pressly Goose（migrations）
 
 ---

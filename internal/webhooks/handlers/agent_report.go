@@ -27,7 +27,7 @@ import (
 // ReportRequest represents the request body for agent execution report
 type ReportRequest struct {
 	Status       string  `json:"status" binding:"required,oneof=succeeded failed"`
-	AgentType    string  `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
+	AgentType    string  `json:"agent_type" binding:"required,oneof=claude-code cursor-agent codex"`
 	PRNumber     *int    `json:"pr_number,omitempty"`
 	Branch       string  `json:"branch,omitempty"`
 	CommitSHA    string  `json:"commit_sha,omitempty"`
@@ -46,7 +46,7 @@ type ReportResponse struct {
 // PlanReportRequest represents the request body for plan creation/execution reports.
 type PlanReportRequest struct {
 	Status          string  `json:"status" binding:"required,oneof=plan_created plan_rejected"`
-	AgentType       string  `json:"agent_type" binding:"required,oneof=claude-code cursor-agent"`
+	AgentType       string  `json:"agent_type" binding:"required,oneof=claude-code cursor-agent codex"`
 	PlanContent     string  `json:"plan_content,omitempty"`
 	RejectionReason string  `json:"rejection_reason,omitempty"`
 	Logs            string  `json:"logs,omitempty"`

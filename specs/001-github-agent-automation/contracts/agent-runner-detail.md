@@ -5,12 +5,13 @@
 
 ## Overview
 
-This document provides detailed implementation guidance for the agent-runner Go binary, which executes AI agents (claude-code or cursor-agent) inside Kubernetes Pods.
+This document provides detailed implementation guidance for the agent-runner Go binary, which executes AI agents (claude-code, cursor-agent, or codex) inside Kubernetes Pods.
 
 ## Agent CLI References
 
 - **Claude Code CLI**: https://docs.claude.com/ja/docs/claude-code/cli-reference
 - **Cursor Headless CLI**: https://cursor.com/ja/docs/cli/headless
+- **OpenAI Codex CLI**: https://developers.openai.com/codex/cli
 
 ---
 
@@ -90,6 +91,48 @@ Please fix the issue and ensure all tests pass."
 
 **File Change Detection**:
 - Cursor does not auto-commit
+- Check via `git status --porcelain` (non-empty = changes exist)
+
+---
+
+### 3. OpenAI Codex (codex)
+
+**Installation** (in Dockerfile):
+```dockerfile
+# Codex CLI installation (npm global package)
+RUN npm install -g @openai/codex
+```
+
+**Invocation**:
+```bash
+codex exec --sandbox workspace-write "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+
+Description:
+${ISSUE_BODY}
+
+Previous Attempts:
+${PREVIOUS_ATTEMPTS}
+
+Please fix the issue and ensure all tests pass."
+```
+
+`--sandbox` selects the sandbox mode: `workspace-write` when writes are allowed, `read-only` when they are not (e.g. plan creation). `-m <model>` is appended only when `CODEX_MODEL` is set.
+
+**Environment Variables Required**:
+- `CODEX_API_KEY` or `OPENAI_API_KEY`: OpenAI API key
+
+**Optional Environment Variables**:
+- `CODEX_MODEL`: Model override passed via `-m` (empty = Codex CLI default)
+
+**Output Parsing**:
+- Stdout: Agent output (plain text; not JSONL)
+- Stderr: Error messages
+- Exit Code:
+  - 0: Success
+  - 1: Failure
+
+**File Change Detection**:
+- Codex does not auto-commit
 - Check via `git status --porcelain` (non-empty = changes exist)
 
 ---
@@ -276,6 +319,8 @@ func (e *Executor) Execute(workDir, prompt string) (string, error) {
 		return e.executeClaudeCode(workDir, prompt)
 	case "cursor-agent":
 		return e.executeCursor(workDir, prompt)
+	case "codex":
+		return e.executeCodex(workDir, prompt)
 	default:
 		return "", fmt.Errorf("unknown agent type: %s", e.agentType)
 	}
@@ -304,6 +349,19 @@ func (e *Executor) executeCursor(workDir, prompt string) (string, error) {
 	)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), fmt.Sprintf("CURSOR_API_KEY=%s", os.Getenv("CURSOR_API_KEY")))
+
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+func (e *Executor) executeCodex(workDir, prompt string) (string, error) {
+	cmd := exec.Command("codex",
+		"exec",
+		"--sandbox", "workspace-write",
+		prompt,
+	)
+	cmd.Dir = workDir
+	cmd.Env = append(os.Environ(), fmt.Sprintf("CODEX_API_KEY=%s", os.Getenv("CODEX_API_KEY")))
 
 	output, err := cmd.CombinedOutput()
 	return string(output), err
@@ -664,6 +722,9 @@ RUN npm install -g @anthropic/claude-code
 # Install Cursor CLI
 RUN curl https://cursor.com/install -fsS | bash
 
+# Install Codex CLI
+RUN npm install -g @openai/codex
+
 # Copy agent-runner binary
 COPY --from=builder /build/agent-runner /usr/local/bin/agent-runner
 
@@ -685,11 +746,13 @@ ENTRYPOINT ["agent-runner"]
 | `OPERATOR_SERVICE_PORT` | Operator service port | Yes | `3000` |
 | `OPERATOR_API_TOKEN` | Bearer token for API auth | Yes | `sk-secret-token-abc123` |
 | `AGENT_RUN_ID` | AgentRun database record ID | Yes | `456` |
-| `AGENT_TYPE` | Agent to execute | Yes | `claude-code` or `cursor-agent` |
+| `AGENT_TYPE` | Agent to execute | Yes | `claude-code`, `cursor-agent`, or `codex` |
 | `GITHUB_APP_ID` | GitHub App ID | Yes | `123456` |
 | `GITHUB_PRIVATE_KEY` | GitHub App private key (PEM, multi-line) | Yes | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n` |
 | `ANTHROPIC_API_KEY` | Claude API key | Conditional | Required if `AGENT_TYPE=claude-code` |
 | `CURSOR_API_KEY` | Cursor API key | Conditional | Required if `AGENT_TYPE=cursor-agent` |
+| `CODEX_API_KEY` / `OPENAI_API_KEY` | OpenAI API key | Conditional | Required if `AGENT_TYPE=codex` (either one) |
+| `CODEX_MODEL` | Codex model override for `-m` | No | Empty = Codex CLI default |
 | `WORKSPACE_DIR` | Working directory | No | `/workspace` (default) |
 | `RETRY_COUNT` | Current retry count | Yes | `0` for initial, `>0` for retries |
 | `S3_ENDPOINT` | S3 API endpoint | Yes | `http://minio:9000` or `https://s3.amazonaws.com` |
@@ -749,6 +812,7 @@ ENTRYPOINT ["agent-runner"]
 
 - [Claude Code CLI Reference](https://docs.claude.com/ja/docs/claude-code/cli-reference)
 - [Cursor Headless CLI](https://cursor.com/ja/docs/cli/headless)
+- [OpenAI Codex CLI](https://developers.openai.com/codex/cli)
 - [ai-agent-execution.md](./ai-agent-execution.md) - Operator contract
 - [internal-api.yaml](./internal-api.yaml) - Report API specification
 

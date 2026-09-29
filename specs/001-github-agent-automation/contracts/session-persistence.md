@@ -11,7 +11,7 @@ This document specifies how AI agent session data (conversation history, context
 
 ## Motivation
 
-**Problem**: When an AI agent (claude-code or cursor-agent) fails and the Pod terminates, all session context is lost. The next retry attempt starts from scratch without knowledge of previous conversation history.
+**Problem**: When an AI agent (claude-code, cursor-agent, or codex) fails and the Pod terminates, all session context is lost. The next retry attempt starts from scratch without knowledge of previous conversation history.
 
 **Solution**: Before Pod termination, compress and upload session data to S3. On retry, download and restore the session state before agent execution.
 
@@ -34,7 +34,7 @@ This document specifies how AI agent session data (conversation history, context
 │ 2. Clone repository                                           │
 │ 3. Skip session restore (no previous session exists)         │
 │ 4. Execute AI agent (fresh session)                          │
-│ 5. Agent creates session files (~/.claude/, ~/.cursor/)      │
+│ 5. Agent creates session files (~/.claude/, ~/.cursor/, ~/.codex/) │
 │ 6. Lint/typecheck validation                                 │
 │ 7. Commit and push changes                                    │
 │ 8. Create Pull Request                                        │
@@ -50,7 +50,7 @@ This document specifies how AI agent session data (conversation history, context
 │ 1. Pod starts                                                 │
 │ 2. Clone repository                                           │
 │ 3. Download session data from S3                             │
-│ 4. Extract tar.gz → restore ~/.claude/, ~/.cursor/           │
+│ 4. Extract tar.gz → restore ~/.claude/, ~/.cursor/, ~/.codex/ │
 │ 5. Execute AI agent (resume previous session)                │
 │ 6. Agent sees previous conversation history                  │
 │ 7. Lint/typecheck validation                                 │
@@ -96,6 +96,21 @@ This document specifies how AI agent session data (conversation history, context
 **Workspace**: `/workspace` (relevant project files only)
 
 **Exclusions** (DO NOT persist):
+- API keys and credentials
+- Node modules (`/workspace/node_modules/`)
+- Build artifacts (`/workspace/dist/`, `/workspace/build/`)
+
+### For codex
+
+**Session Directory**: `~/.codex/`
+- `sessions/` - Conversation history (rollout files)
+- `config.toml` - Agent configuration
+- `log/` - Logs
+
+**Workspace**: `/workspace` (relevant project files only)
+
+**Exclusions** (DO NOT persist):
+- `~/.codex/auth.json` - Auth tokens (injected via K8s Secrets)
 - API keys and credentials
 - Node modules (`/workspace/node_modules/`)
 - Build artifacts (`/workspace/dist/`, `/workspace/build/`)
@@ -185,6 +200,8 @@ func SaveSession(agentRunID int, agentType string) error {
         CopyFile("/workspace/CLAUDE.md", tmpDir + "/workspace/CLAUDE.md")
     } else if agentType == "cursor-agent" {
         CopyDir("~/.cursor/", tmpDir + "/.cursor/")
+    } else if agentType == "codex" {
+        CopyDir("~/.codex/", tmpDir + "/.codex/")
     }
 
     // 3. Create tar.gz archive
@@ -239,7 +256,7 @@ func RestoreSession(agentRunID int, retryCount int) error {
     }
 
     // 4. Verify restored files exist
-    if !FileExists("~/.claude/") && !FileExists("~/.cursor/") {
+    if !FileExists("~/.claude/") && !FileExists("~/.cursor/") && !FileExists("~/.codex/") {
         return fmt.Errorf("session restore verification failed: no session files found")
     }
 
@@ -379,6 +396,7 @@ func S3UploadWithRetry(localPath, s3Key string) error {
 **Excluded Files**:
 - `~/.claude/.credentials.json` - Claude API key
 - `~/.cursor/.credentials.json` - Cursor API key
+- `~/.codex/auth.json` - OpenAI API key
 - `/workspace/.env` - Environment variables
 - Any file matching `*.pem`, `*.key`, `*_key`
 
@@ -387,6 +405,7 @@ func S3UploadWithRetry(localPath, s3Key string) error {
 func ShouldExclude(filePath string) bool {
     excludePatterns := []string{
         ".credentials.json",
+        "auth.json",
         ".env",
         "*.pem",
         "*.key",

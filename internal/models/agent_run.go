@@ -13,7 +13,7 @@ type AgentRun struct {
 	IssueID        int    `gorm:"column:issue_id;index"`
 	PRID           *int   `gorm:"column:pr_id;index"`
 	State          string `gorm:"type:enum('queued','started','succeeded','failed');default:'queued';index"`
-	AgentType      string `gorm:"column:agent_type;type:enum('claude-code','cursor-agent');default:'claude-code'"`
+	AgentType      string `gorm:"column:agent_type;type:enum('claude-code','cursor-agent','codex');default:'claude-code'"`
 	// ExecutionMode distinguishes normal runs from plan creation/execution workflows.
 	//   normal         : 従来のIssue対応フロー
 	//   plan_creation  : レビュー指摘からプランを作成するモード

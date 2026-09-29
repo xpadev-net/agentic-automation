@@ -58,11 +58,13 @@ ENTRYPOINT ["agent-runner"]
 #   Note: Operator API URL is auto-constructed from these three values
 # - OPERATOR_API_TOKEN: Bearer token for API authentication
 # - AGENT_RUN_ID: AgentRun database record ID
-# - AGENT_TYPE: Agent to execute ("claude-code" or "cursor-agent")
+# - AGENT_TYPE: Agent to execute ("claude-code", "cursor-agent", or "codex")
 # - GITHUB_APP_ID: GitHub App ID (App auth is the default; PAT unsupported)
 # - GITHUB_PRIVATE_KEY: GitHub App private key (PEM, multi-line)
 # - ANTHROPIC_API_KEY: Claude API key (required if AGENT_TYPE=claude-code)
 # - CURSOR_API_KEY: Cursor API key (required if AGENT_TYPE=cursor-agent)
+# - CODEX_API_KEY or OPENAI_API_KEY: OpenAI API key (required if AGENT_TYPE=codex)
+# - CODEX_MODEL: Codex model override (optional; defaults to the Codex CLI default)
 # - RETRY_COUNT: Current retry count (default: 0)
 # - WORKSPACE_DIR: Working directory (default: /workspace)
 

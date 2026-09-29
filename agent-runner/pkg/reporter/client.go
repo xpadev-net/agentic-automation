@@ -58,7 +58,7 @@ func (e *MaxRetriesExceededError) Unwrap() error {
 // ReportRequest represents the request body for agent execution report
 type ReportRequest struct {
 	Status       string `json:"status"`                  // "succeeded" | "failed"
-	AgentType    string `json:"agent_type"`              // "claude-code" | "cursor-agent"
+	AgentType    string `json:"agent_type"`              // "claude-code" | "cursor-agent" | "codex"
 	PRNumber     *int   `json:"pr_number,omitempty"`     // Optional: PR number if succeeded
 	Branch       string `json:"branch,omitempty"`        // Optional: Git branch name
 	CommitSHA    string `json:"commit_sha,omitempty"`    // Optional: Git commit SHA
@@ -124,8 +124,8 @@ func validatePlanReportRequest(req *PlanReportRequest) error {
 	if req.Status != "plan_created" && req.Status != "plan_rejected" {
 		return fmt.Errorf("status must be 'plan_created' or 'plan_rejected', got: %q", req.Status)
 	}
-	if req.AgentType != "claude-code" && req.AgentType != "cursor-agent" {
-		return fmt.Errorf("agent_type must be 'claude-code' or 'cursor-agent', got: %q", req.AgentType)
+	if req.AgentType != "claude-code" && req.AgentType != "cursor-agent" && req.AgentType != "codex" {
+		return fmt.Errorf("agent_type must be 'claude-code', 'cursor-agent', or 'codex', got: %q", req.AgentType)
 	}
 	if req.Status == "plan_created" && strings.TrimSpace(req.PlanContent) == "" {
 		return fmt.Errorf("plan_content is required when status is 'plan_created'")
@@ -147,6 +147,8 @@ func sanitizeLogs(logs string) string {
 		`sk-[A-Za-z0-9]{48}`,
 		`ANTHROPIC_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
 		`CURSOR_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
+		`CODEX_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
+		`OPENAI_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
 	}
 	sanitized := logs
 	for _, pattern := range patterns {
@@ -162,8 +164,8 @@ func validateReportRequest(req *ReportRequest) error {
 		return fmt.Errorf("status must be 'succeeded' or 'failed', got: %q", req.Status)
 	}
 
-	if req.AgentType != "claude-code" && req.AgentType != "cursor-agent" {
-		return fmt.Errorf("agent_type must be 'claude-code' or 'cursor-agent', got: %q", req.AgentType)
+	if req.AgentType != "claude-code" && req.AgentType != "cursor-agent" && req.AgentType != "codex" {
+		return fmt.Errorf("agent_type must be 'claude-code', 'cursor-agent', or 'codex', got: %q", req.AgentType)
 	}
 
 	return nil

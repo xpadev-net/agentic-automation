@@ -5,7 +5,7 @@
 
 ## Overview
 
-AI agents (claude-code/cursor-agent) are executed in Kubernetes Pods via `agent-runner` wrapper (Go binary). The Pod performs the entire workflow (agent execution → lint/typecheck → git commit/push → PR creation) and **pushes** the result to the Operator via REST API.
+AI agents (claude-code/cursor-agent/codex) are executed in Kubernetes Pods via `agent-runner` wrapper (Go binary). The Pod performs the entire workflow (agent execution → lint/typecheck → git commit/push → PR creation) and **pushes** the result to the Operator via REST API.
 
 **Architecture**: Push-type notification (Pod → Operator)
 
@@ -45,7 +45,7 @@ agent-runner \
 | `OPERATOR_SERVICE_PORT` | Operator service port | `3000` |
 | `OPERATOR_API_TOKEN` | Bearer token for API authentication | `sk-secret-token-abc123` |
 | `AGENT_RUN_ID` | AgentRun database record ID | `456` |
-| `AGENT_TYPE` | Agent to execute | `claude-code` or `cursor-agent` |
+| `AGENT_TYPE` | Agent to execute | `claude-code`, `cursor-agent`, or `codex` |
 | `WORKSPACE_DIR` | Working directory | `/workspace` (default) |
 | `GITHUB_APP_ID` | GitHub App ID | `123456` |
 | `GITHUB_PRIVATE_KEY` | GitHub App RSA private key (PEM, multi-line) | `-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n` |
@@ -60,7 +60,7 @@ agent-runner \
    └─ Obtain GitHub App installation token, then
       git clone https://x-access-token:${INSTALLATION_TOKEN}@github.com/${repo}.git
 3. Checkout new branch (auto-generated name: feature/issue-{id})
-4. Execute selected agent (claude-code or cursor-agent)
+4. Execute selected agent (claude-code, cursor-agent, or codex)
    └─ Pass Issue context + previous attempts + CI logs as prompt
 5. Run lint/typecheck validation
    ├─ npm run lint (biome/eslint)
@@ -107,7 +107,7 @@ curl -X POST \
 ```json
 {
   "status": "succeeded",           // "succeeded" | "failed"
-  "agent_type": "claude-code",     // "claude-code" | "cursor-agent"
+  "agent_type": "claude-code",     // "claude-code" | "cursor-agent" | "codex"
   "pr_number": 101,                // Optional: PR number if succeeded
   "branch": "feature/issue-42",    // Optional: Git branch name
   "commit_sha": "abc123def456",    // Optional: Git commit SHA
@@ -217,6 +217,24 @@ RUN curl https://cursor.com/install -fsS | bash
 **Environment**:
 - `CURSOR_API_KEY`: Cursor API key (injected by Pod template)
 
+### 3. codex
+
+**Command**:
+```bash
+codex exec --sandbox workspace-write "{issue_context}"
+```
+
+`--sandbox` selects the sandbox mode: `workspace-write` when writes are allowed (normal runs), `read-only` otherwise (e.g. plan creation). `-m <model>` is appended only when `CODEX_MODEL` is set.
+
+**Installation** (in Dockerfile):
+```dockerfile
+RUN npm install -g @openai/codex
+```
+
+**Environment**:
+- `CODEX_API_KEY` (or `OPENAI_API_KEY`): OpenAI API key (injected by Pod template)
+- `CODEX_MODEL` (optional): model override for `-m`
+
 ---
 
 ## Agent Selection
@@ -226,6 +244,7 @@ Agent type is determined by:
 1. **Issue Label** (highest priority)
    - Label `agent:claude-code` → Use claude-code
    - Label `agent:cursor-agent` → Use cursor-agent
+   - Label `agent:codex` → Use codex
 
 2. **Environment Variable** (fallback)
    - `AI_AGENT_DEFAULT_TYPE` in Operator config

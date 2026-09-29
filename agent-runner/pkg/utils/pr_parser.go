@@ -40,8 +40,10 @@ func ParsePRTitleAndBody(output string) (string, string, error) {
 	return title, body, nil
 }
 
-// extractAssistantText extracts all assistant entry text from cursor-agent's JSON stream output.
-// It parses each line as JSON and combines all assistant entry messages.
+// extractAssistantText extracts all assistant entry text from the agent's output.
+// For cursor-agent it parses each line of the JSON stream and combines assistant entry messages.
+// For agents that emit plain text (e.g. codex), it falls back to the raw output when
+// no assistant entries were found.
 func extractAssistantText(output string) (string, error) {
 	var texts []string
 	lines := strings.Split(output, "\n")
@@ -66,6 +68,12 @@ func extractAssistantText(output string) (string, error) {
 				}
 			}
 		}
+	}
+
+	if len(texts) == 0 {
+		// Plain-text agents (e.g. codex exec) print the final message verbatim;
+		// downstream XML parsing operates on the whole output.
+		return output, nil
 	}
 
 	return strings.Join(texts, "\n"), nil

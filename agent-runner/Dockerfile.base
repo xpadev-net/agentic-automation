@@ -1,5 +1,5 @@
 # Base runtime image for agent-runner
-# Contains Node.js, Go toolchain, and AI agent CLIs (Claude Code, Cursor)
+# Contains Node.js, Go toolchain, and AI agent CLIs (Claude Code, Cursor, Codex)
 # This image is built separately and used as a base for the agent-runner image
 
 FROM harbor-osk-k8s-pve.xpa.dev/docker/node:22-slim
@@ -61,10 +61,15 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 # This layer is cached independently, improving build performance
 RUN curl https://cursor.com/install -fsS | bash
 
-# Add Cursor CLI and npm global bin to PATH
+# Install OpenAI Codex CLI as agent user via npm global install
+# Command: codex exec --sandbox workspace-write "<prompt>"
+# Installs to $NPM_CONFIG_PREFIX/bin (already on PATH below)
+RUN npm install -g @openai/codex
+
+# Add Cursor CLI, Codex CLI, and npm global bin to PATH
 # Cursor CLI installs cursor-agent to $HOME/.local/bin
 # According to https://cursor.com/ja/docs/cli/installation, PATH must include $HOME/.local/bin
-# npm global packages are installed to $NPM_CONFIG_PREFIX/bin
+# npm global packages (e.g. @openai/codex) are installed to $NPM_CONFIG_PREFIX/bin
 ENV PATH="/usr/local/go/bin:$HOME/.local/bin:${NPM_CONFIG_PREFIX}/bin:${GOPATH}/bin:$PATH"
 
 # Set working directory for agent execution

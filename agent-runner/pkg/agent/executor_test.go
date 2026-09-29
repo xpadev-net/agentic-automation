@@ -83,6 +83,16 @@ func TestNewExecutor_ValidTypes(t *testing.T) {
 			t.Error("Expected cmdRunner to be nil for default executor")
 		}
 	})
+
+	t.Run("codex", func(t *testing.T) {
+		executor := NewExecutor("codex")
+		if executor.agentType != "codex" {
+			t.Errorf("Expected agentType 'codex', got %q", executor.agentType)
+		}
+		if executor.cmdRunner != nil {
+			t.Error("Expected cmdRunner to be nil for default executor")
+		}
+	})
 }
 
 // TestNewExecutorWithRunner tests that NewExecutorWithRunner creates executors with injected command runner.
@@ -175,6 +185,65 @@ func TestExecutor_Execute_Cursor_Success(t *testing.T) {
 	}
 }
 
+// TestExecutor_Execute_Codex_Success tests successful codex execution with defaults.
+func TestExecutor_Execute_Codex_Success(t *testing.T) {
+	cleanup := setupEnvVar(t, "CODEX_API_KEY", "test-key")
+	defer cleanup()
+
+	mockOutput := []byte("Codex agent executed")
+	mockRunner := createMockRunner(mockOutput, nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+
+	workDir := "/tmp/work"
+	prompt := "test prompt"
+	output, err := executor.Execute(workDir, prompt)
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+
+	expectedOutput := string(mockOutput)
+	if output != expectedOutput {
+		t.Errorf("Execute() output = %q, want %q", output, expectedOutput)
+	}
+
+	// Verify mock was called correctly with default values
+	if mockRunner.CallCount != 1 {
+		t.Errorf("Expected CallCount = 1, got %d", mockRunner.CallCount)
+	}
+	if mockRunner.CommandName != "codex" {
+		t.Errorf("Expected CommandName = 'codex', got %q", mockRunner.CommandName)
+	}
+	// Default values: allowWrite=true → workspace-write, no -m (empty model)
+	expectedArgs := []string{"exec", "--sandbox", "workspace-write", prompt}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+	if mockRunner.WorkDir != workDir {
+		t.Errorf("Expected WorkDir = %q, got %q", workDir, mockRunner.WorkDir)
+	}
+}
+
+// TestExecutor_Execute_Codex_Success_OpenAIKey tests that codex also accepts OPENAI_API_KEY.
+func TestExecutor_Execute_Codex_Success_OpenAIKey(t *testing.T) {
+	cleanupCodex := restoreEnvVar(t, "CODEX_API_KEY")
+	defer cleanupCodex()
+	cleanup := setupEnvVar(t, "OPENAI_API_KEY", "test-key")
+	defer cleanup()
+
+	mockRunner := createMockRunner([]byte("Codex agent executed"), nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+
+	_, err := executor.Execute("/tmp/work", "test prompt")
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if mockRunner.CallCount != 1 {
+		t.Errorf("Expected CallCount = 1, got %d", mockRunner.CallCount)
+	}
+}
+
 // TestExecutor_Execute_ClaudeCode_MissingAPIKey tests error when ANTHROPIC_API_KEY is not set.
 func TestExecutor_Execute_ClaudeCode_MissingAPIKey(t *testing.T) {
 	cleanup := restoreEnvVar(t, "ANTHROPIC_API_KEY")
@@ -215,6 +284,33 @@ func TestExecutor_Execute_Cursor_MissingAPIKey(t *testing.T) {
 	}
 
 	expectedError := "CURSOR_API_KEY environment variable is not set"
+	if err.Error() != expectedError {
+		t.Errorf("Execute() error = %q, want %q", err.Error(), expectedError)
+	}
+
+	// Verify command was not executed
+	if mockRunner.CallCount != 0 {
+		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
+	}
+}
+
+// TestExecutor_Execute_Codex_MissingAPIKey tests error when neither CODEX_API_KEY nor OPENAI_API_KEY is set.
+func TestExecutor_Execute_Codex_MissingAPIKey(t *testing.T) {
+	cleanupCodex := restoreEnvVar(t, "CODEX_API_KEY")
+	defer cleanupCodex()
+	cleanupOpenAI := restoreEnvVar(t, "OPENAI_API_KEY")
+	defer cleanupOpenAI()
+
+	mockRunner := createMockRunner([]byte("should not be called"), nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+
+	_, err := executor.Execute("/tmp/work", "test prompt")
+
+	if err == nil {
+		t.Fatal("Execute() error = nil, want error")
+	}
+
+	expectedError := "CODEX_API_KEY or OPENAI_API_KEY environment variable is not set"
 	if err.Error() != expectedError {
 		t.Errorf("Execute() error = %q, want %q", err.Error(), expectedError)
 	}
@@ -287,6 +383,40 @@ func TestExecutor_Execute_Cursor_CommandFailure(t *testing.T) {
 
 	// Verify command was called with correct arguments
 	expectedArgs := []string{"--model", "auto", "--output-format", "stream-json", "-p", "test prompt", "--force"}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+}
+
+// TestExecutor_Execute_Codex_CommandFailure tests error handling when codex command fails.
+func TestExecutor_Execute_Codex_CommandFailure(t *testing.T) {
+	cleanup := setupEnvVar(t, "CODEX_API_KEY", "test-key")
+	defer cleanup()
+
+	mockOutput := []byte("Codex agent failed")
+	mockErr := errors.New("exit status 1")
+	mockRunner := createMockRunner(mockOutput, mockErr)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+
+	output, err := executor.Execute("/tmp/work", "test prompt")
+
+	if err == nil {
+		t.Fatal("Execute() error = nil, want error")
+	}
+
+	errorMsg := err.Error()
+	if !strings.Contains(errorMsg, "codex execution failed") {
+		t.Errorf("Expected error message to contain 'codex execution failed', got %q", errorMsg)
+	}
+
+	// Verify output is still returned
+	expectedOutput := string(mockOutput)
+	if output != expectedOutput {
+		t.Errorf("Execute() output = %q, want %q", output, expectedOutput)
+	}
+
+	// Verify command was called with correct arguments
+	expectedArgs := []string{"exec", "--sandbox", "workspace-write", "test prompt"}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -526,6 +656,95 @@ func TestExecutor_ExecuteWithOptions_Cursor_CustomModel(t *testing.T) {
 	}
 }
 
+// TestExecutor_ExecuteWithOptions_Codex_Success tests successful codex execution with custom options.
+func TestExecutor_ExecuteWithOptions_Codex_Success(t *testing.T) {
+	cleanup := setupEnvVar(t, "CODEX_API_KEY", "test-key")
+	defer cleanup()
+
+	mockOutput := []byte("Codex agent executed")
+	mockRunner := createMockRunner(mockOutput, nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+
+	workDir := "/tmp/work"
+	prompt := "test prompt"
+	model := "gpt-5-codex"
+	allowWrite := true
+	output, err := executor.ExecuteWithOptions(workDir, prompt, model, allowWrite)
+
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions() error = %v, want nil", err)
+	}
+
+	expectedOutput := string(mockOutput)
+	if output != expectedOutput {
+		t.Errorf("ExecuteWithOptions() output = %q, want %q", output, expectedOutput)
+	}
+
+	// Verify mock was called correctly with custom options
+	if mockRunner.CallCount != 1 {
+		t.Errorf("Expected CallCount = 1, got %d", mockRunner.CallCount)
+	}
+	if mockRunner.CommandName != "codex" {
+		t.Errorf("Expected CommandName = 'codex', got %q", mockRunner.CommandName)
+	}
+	expectedArgs := []string{"exec", "--sandbox", "workspace-write", "-m", model, prompt}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+	if mockRunner.WorkDir != workDir {
+		t.Errorf("Expected WorkDir = %q, got %q", workDir, mockRunner.WorkDir)
+	}
+}
+
+// TestExecutor_ExecuteWithOptions_Codex_ReadOnly tests codex execution with allowWrite=false.
+func TestExecutor_ExecuteWithOptions_Codex_ReadOnly(t *testing.T) {
+	cleanup := setupEnvVar(t, "CODEX_API_KEY", "test-key")
+	defer cleanup()
+
+	mockRunner := createMockRunner([]byte("Codex agent executed"), nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+
+	prompt := "test prompt"
+	_, err := executor.ExecuteWithOptions("/tmp/work", prompt, "auto", false)
+
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions() error = %v, want nil", err)
+	}
+
+	// Verify read-only sandbox and that "auto" model omits -m
+	expectedArgs := []string{"exec", "--sandbox", "read-only", prompt}
+	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
+		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+}
+
+// TestExecutor_ExecuteWithOptions_Codex_MissingAPIKey tests error when no Codex API key is set.
+func TestExecutor_ExecuteWithOptions_Codex_MissingAPIKey(t *testing.T) {
+	cleanupCodex := restoreEnvVar(t, "CODEX_API_KEY")
+	defer cleanupCodex()
+	cleanupOpenAI := restoreEnvVar(t, "OPENAI_API_KEY")
+	defer cleanupOpenAI()
+
+	mockRunner := createMockRunner([]byte("should not be called"), nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+
+	_, err := executor.ExecuteWithOptions("/tmp/work", "test prompt", "auto", true)
+
+	if err == nil {
+		t.Fatal("ExecuteWithOptions() error = nil, want error")
+	}
+
+	expectedError := "CODEX_API_KEY or OPENAI_API_KEY environment variable is not set"
+	if err.Error() != expectedError {
+		t.Errorf("ExecuteWithOptions() error = %q, want %q", err.Error(), expectedError)
+	}
+
+	// Verify command was not executed
+	if mockRunner.CallCount != 0 {
+		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
+	}
+}
+
 // TestExecutor_ExecuteWithOptions_ClaudeCode_Error tests that ExecuteWithOptions returns error for claude-code.
 func TestExecutor_ExecuteWithOptions_ClaudeCode_Error(t *testing.T) {
 	cleanup := setupEnvVar(t, "ANTHROPIC_API_KEY", "test-key")
@@ -540,7 +759,7 @@ func TestExecutor_ExecuteWithOptions_ClaudeCode_Error(t *testing.T) {
 		t.Fatal("ExecuteWithOptions() error = nil, want error")
 	}
 
-	expectedError := "ExecuteWithOptions is only supported for cursor-agent, got: claude-code"
+	expectedError := "ExecuteWithOptions is only supported for cursor-agent and codex, got: claude-code"
 	if err.Error() != expectedError {
 		t.Errorf("ExecuteWithOptions() error = %q, want %q", err.Error(), expectedError)
 	}
