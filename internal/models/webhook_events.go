@@ -21,6 +21,7 @@ const (
 	IssueCommentActionCreated = "created"
 
 	// issues actions
+	IssuesActionAssigned = "assigned"
 	IssuesActionClosed   = "closed"
 	IssuesActionReopened = "reopened"
 
@@ -93,7 +94,7 @@ func IsValidAction(eventType, action string) bool {
 	case EventTypeIssueComment:
 		return action == IssueCommentActionCreated
 	case EventTypeIssues:
-		return action == IssuesActionClosed || action == IssuesActionReopened
+		return action == IssuesActionAssigned || action == IssuesActionClosed || action == IssuesActionReopened
 	case EventTypePullRequest:
 		return action == PullRequestActionOpened ||
 			action == PullRequestActionSynchronize ||

@@ -14,6 +14,7 @@ import (
 )
 
 const deliveryHeader = "X-GitHub-Delivery"
+const eventHeader = "X-GitHub-Event"
 
 // webhookPayload represents a minimal structure to extract issue information from webhook payloads
 type webhookPayload struct {
@@ -62,6 +63,33 @@ func IdempotencyMiddleware() gin.HandlerFunc {
 			// Continue processing even without delivery ID (defensive programming)
 			// GitHub should always send this header, but we don't want to block
 			// in case of unusual circumstances
+			c.Next()
+			return
+		}
+
+		// An issues webhook is not itself an agent execution. In particular,
+		// ordinary assignments, unassignments, closes, and reopens must not
+		// reserve a queued AgentRun: doing so makes a later assignment to the
+		// configured bot look like an already-running execution. HandleIssues
+		// creates the idempotency record only after it has established that an
+		// eligible bot assignment should run.
+		if c.GetHeader(eventHeader) == models.EventTypeIssues {
+			// Keep the Issue projection up to date for close/reopen/dependency
+			// handling, but do not create an execution record for the event.
+			if payloadData, exists := c.Get("webhook_payload"); exists {
+				if payloadBytes, ok := payloadData.([]byte); ok {
+					var payload webhookPayload
+					if err := json.Unmarshal(payloadBytes, &payload); err == nil && payload.Repository.FullName != "" && payload.Issue.Number != 0 {
+						if err := issueRepo.UpsertSelective(payload.Repository.FullName, payload.Issue.Number, map[string]interface{}{
+							"title": payload.Issue.Title,
+							"state": payload.Issue.State,
+						}); err != nil {
+							logger.Error("Failed to upsert issue for issues webhook", config.Error(err), config.String("delivery_id", deliveryID))
+						}
+					}
+				}
+			}
+			c.Set("delivery_id", deliveryID)
 			c.Next()
 			return
 		}
