@@ -78,6 +78,30 @@ func TestParsePRTitleAndBody_TitleTagInsideBody(t *testing.T) {
 	}
 }
 
+func TestParsePRTitleAndBody_BodyBeforeTitleWithEcho(t *testing.T) {
+	// Answer emitted in <body>-then-<title> order after a prompt echo: the
+	// answer's title follows the last body, so the echo's example title must
+	// not be selected.
+	output := `user
+<title>PRタイトル</title>
+<body>PR概要（Markdown形式可）</body>
+
+codex
+<body>実際のPR本文</body>
+<title>feat: real title</title>
+`
+	title, body, err := ParsePRTitleAndBody(output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != "feat: real title" {
+		t.Errorf("expected trailing title, got %q", title)
+	}
+	if body != "実際のPR本文" {
+		t.Errorf("expected last body, got %q", body)
+	}
+}
+
 func TestParsePRTitleAndBody_NoTags(t *testing.T) {
 	_, _, err := ParsePRTitleAndBody("no xml tags here")
 	if err == nil || !strings.Contains(err.Error(), "title tag not found") {

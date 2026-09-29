@@ -100,20 +100,26 @@ func parseXMLTitleAndBody(text string) (string, string, error) {
 		return "", "", fmt.Errorf("body tag not found in output")
 	}
 
-	// Body: last match. Title: last match that ends before that body's start —
-	// literal <title> mentions inside the markdown body are not candidates.
+	// Pick the answer's tags out of a possibly multi-block output (prompt echo + answer).
+	// If the last <title> sits strictly after the last <body>, the answer emitted them
+	// in body-then-title order — take both last matches. Otherwise the title must end
+	// before the last body's start (literal <title> mentions inside the body are skipped).
+	lastTitle := titleIndexes[len(titleIndexes)-1]
 	lastBody := bodyIndexes[len(bodyIndexes)-1]
 	body := strings.TrimSpace(text[lastBody[2]:lastBody[3]])
-	bodyStart := lastBody[0]
 	title := ""
-	for _, m := range titleIndexes {
-		// m[2]:m[3] spans the captured content; m[0]:m[1] the whole match
-		if m[1] <= bodyStart {
-			title = strings.TrimSpace(text[m[2]:m[3]])
+	if lastTitle[0] >= lastBody[1] {
+		title = strings.TrimSpace(text[lastTitle[2]:lastTitle[3]])
+	} else {
+		for _, m := range titleIndexes {
+			// m[2]:m[3] spans the captured content; m[0]:m[1] the whole match
+			if m[1] <= lastBody[0] {
+				title = strings.TrimSpace(text[m[2]:m[3]])
+			}
 		}
 	}
 	if title == "" {
-		title = strings.TrimSpace(text[titleIndexes[len(titleIndexes)-1][2]:titleIndexes[len(titleIndexes)-1][3]])
+		title = strings.TrimSpace(text[lastTitle[2]:lastTitle[3]])
 	}
 
 	return title, body, nil
