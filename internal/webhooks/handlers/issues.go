@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -34,6 +35,11 @@ type BlockedTaskResolver interface {
 	ResolveAndMaybeTrigger(ctx context.Context, owner, repo string, issueNumber int) error
 }
 
+// AssignmentRunner starts the existing issue-comment execution flow. It is a
+// function type so assignment handling can be tested without starting a
+// Kubernetes client/job.
+type AssignmentRunner func(*gin.Context)
+
 // IssuesDeps represents injectable dependencies for issues webhook handler
 type IssuesDeps struct {
 	Logger               *config.AppLogger
@@ -42,21 +48,67 @@ type IssuesDeps struct {
 	DependencyFetcher    IssueDependencyFetcher
 	GraphBuilder         BlockerGraphBuilder
 	BlockedTaskResolver  BlockedTaskResolver
+	AssignmentRunner     AssignmentRunner
 }
 
 // IssuesPayload represents the GitHub webhook payload for issues events
 type IssuesPayload struct {
 	Action string `json:"action"`
 	Issue  struct {
-		Number int    `json:"number"`
-		State  string `json:"state"`
+		ID     int64   `json:"id"`
+		Number int     `json:"number"`
+		Title  string  `json:"title"`
+		Body   *string `json:"body"`
+		State  string  `json:"state"`
 	} `json:"issue"`
+	Assignee *struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+	} `json:"assignee"`
+	Assignees []struct {
+		Login string `json:"login"`
+		ID    int64  `json:"id"`
+	} `json:"assignees"`
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
 	Sender struct {
 		Login string `json:"login"`
 	} `json:"sender"`
+}
+
+// assignmentBotConfigured reports whether an assignee is the configured agent bot.
+// AGENT_ASSIGNMENT_BOT_* is intentionally separate from CODEX_BOT_* so deployments
+// can use assignment-triggered automation with a bot other than Codex.
+func assignmentBotConfigured(login string, userID int64) bool {
+	configuredLogin := config.GetEnv("AGENT_ASSIGNMENT_BOT_USERNAME", config.GetEnv("CODEX_BOT_USERNAME", "codex-bot"))
+	configuredID, _ := strconv.ParseInt(config.GetEnv("AGENT_ASSIGNMENT_BOT_USER_ID", config.GetEnv("CODEX_BOT_USER_ID", "0")), 10, 64)
+
+	if configuredID != 0 && userID != 0 && configuredID == userID {
+		return true
+	}
+
+	normalize := func(value string) string {
+		return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), "[bot]")
+	}
+	return configuredLogin != "" && normalize(login) == normalize(configuredLogin)
+}
+
+func assignmentRepositoryAllowed(fullName string) bool {
+	configuredRepo := strings.TrimSpace(config.GetEnv("AGENT_ASSIGNMENT_REPOSITORY", ""))
+	return configuredRepo == "" || strings.EqualFold(configuredRepo, fullName)
+}
+
+func assignmentTarget(payload IssuesPayload) (string, int64, bool) {
+	if payload.Assignee != nil && assignmentBotConfigured(payload.Assignee.Login, payload.Assignee.ID) {
+		return payload.Assignee.Login, payload.Assignee.ID, true
+	}
+	for _, assignee := range payload.Assignees {
+		if assignmentBotConfigured(assignee.Login, assignee.ID) {
+			return assignee.Login, assignee.ID, true
+		}
+	}
+	return "", 0, false
 }
 
 // HandleIssues is the production entrypoint for issues webhook
@@ -117,6 +169,75 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 			config.String("delivery_id", deliveryID),
 		)
 		c.Error(err)
+		return
+	}
+
+	// Assignment of the configured bot is an automatic equivalent of /run-agent.
+	// Keep it on the same handler path so context collection, state transitions,
+	// job creation, notifications, and failure handling remain identical.
+	if payload.Action == models.IssuesActionAssigned {
+		if payload.Issue.State != "open" || !assignmentRepositoryAllowed(payload.Repository.FullName) {
+			logger.Info("Ignoring assignment event", config.String("delivery_id", deliveryID), config.String("repo", payload.Repository.FullName), config.String("issue_state", payload.Issue.State))
+			c.JSON(http.StatusOK, gin.H{"status": "ignored", "reason": "assignment_not eligible", "delivery_id": deliveryID})
+			return
+		}
+
+		login, userID, matched := assignmentTarget(payload)
+		if !matched {
+			logger.Info("Ignoring assignment to non-agent user", config.String("delivery_id", deliveryID), config.Int("issue_number", payload.Issue.Number))
+			c.JSON(http.StatusOK, gin.H{"status": "ignored", "reason": "assignee_not_agent_bot", "delivery_id": deliveryID})
+			return
+		}
+
+		issueRepo := repositories.NewIssueRepository()
+		runRepo := repositories.NewAgentRunRepository(config.GetDB())
+		currentRun, err := runRepo.GetByIDempotencyKey(deliveryID)
+		if err != nil {
+			logger.Error("Failed to load assignment AgentRun", config.Error(err), config.String("delivery_id", deliveryID))
+			c.Error(err)
+			return
+		}
+		issue, err := issueRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.Issue.Number)
+		if err != nil {
+			logger.Error("Failed to load assignment Issue", config.Error(err), config.String("delivery_id", deliveryID))
+			c.Error(err)
+			return
+		}
+		activeRuns, err := runRepo.GetByIssueID(issue.ID)
+		if err != nil {
+			logger.Error("Failed to check active AgentRuns for assignment", config.Error(err), config.Int("issue_id", issue.ID))
+			c.Error(err)
+			return
+		}
+		for _, run := range activeRuns {
+			if run.ID != currentRun.ID && (run.State == "queued" || run.State == "started") {
+				logger.Info("Skipping assignment because an AgentRun is already active", config.Int("issue_id", issue.ID), config.Int("agent_run_id", run.ID), config.String("delivery_id", deliveryID))
+				c.JSON(http.StatusOK, gin.H{"status": "already_running", "agent_run_id": run.ID, "delivery_id": deliveryID})
+				return
+			}
+		}
+
+		synthetic := IssueCommentPayload{
+			Action:     models.IssueCommentActionCreated,
+			Issue:      IssueCommentIssue{ID: int(payload.Issue.ID), Number: payload.Issue.Number, Title: payload.Issue.Title, Body: payload.Issue.Body, State: payload.Issue.State},
+			Comment:    IssueCommentComment{Body: "/run-agent", User: User{Login: login, ID: userID}},
+			Repository: IssueCommentRepository{FullName: payload.Repository.FullName},
+		}
+		// Preserve the human actor for the existing permission check. The bot is
+		// the trigger target, while the person who assigned it is the requester.
+		synthetic.Comment.User = User{Login: payload.Sender.Login}
+		syntheticBytes, err := json.Marshal(synthetic)
+		if err != nil {
+			c.Error(err)
+			return
+		}
+		c.Set("webhook_payload", syntheticBytes)
+		logger.Info("Starting agent from bot assignment", config.String("delivery_id", deliveryID), config.String("assignee", login), config.Int64("assignee_id", userID), config.Int("issue_number", payload.Issue.Number))
+		runner := deps.AssignmentRunner
+		if runner == nil {
+			runner = HandleIssueComment
+		}
+		runner(c)
 		return
 	}
 
