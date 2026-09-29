@@ -74,13 +74,21 @@ Agent Runner は Kubernetes 環境変数を前提とします（Operator から�
 - AI エージェント
   - `ANTHROPIC_API_KEY`: Claude 用（`AGENT_TYPE=claude-code` のとき必須）
   - `CURSOR_API_KEY`: Cursor 用（`AGENT_TYPE=cursor-agent` のとき必須）
-  - `CODEX_API_KEY` or `OPENAI_API_KEY`: Codex 用（`AGENT_TYPE=codex` のとき必須、どちらか一方）
+  - `CODEX_API_KEY` or `OPENAI_API_KEY`: Codex の API キー認証用（OAuth 認証ファイルを使わない場合、どちらか一方）
 - 任意（デフォルト/挙動）
   - `WORKSPACE_DIR`: 作業ディレクトリ（デフォルト `/workspace`）
   - `RETRY_COUNT`: リトライ回数（整数、>=0）>0 でセッション復元
   - `CURSOR_MODEL`: Cursor モデル（デフォルト `auto`）
   - `CURSOR_ALLOW_WRITE`: `true`/`false`（デフォルト `true`、codex の `--sandbox` にも適用）
   - `CODEX_MODEL`: Codex モデル（デフォルト空 = Codex CLI のデフォルト）
+
+### Codex OAuth 認証ファイル
+
+Codex は API キーの代わりに ChatGPT OAuth の `auth.json` を使用できます。Operator が作成する Codex Job は、`CODEX_AUTH_SECRET`（デフォルト `codex-auth`）で指定した Kubernetes Secret の `auth.json` キーだけを read-only 入力としてマウントします。init container が内容を Job 固有の `emptyDir` にコピーし、`/home/agent/.codex/auth.json` を mode `0600` の書き込み可能なファイルとして用意します。これにより Codex CLI によるトークン更新は元の Secret を変更せず、Pod 終了時に破棄されます。API キー用 Secret は OAuth-only 構成との両立のため optional です。
+
+Vault から同期する場合も、Kubernetes Secret の契約は Secret 名 `codex-auth`（または `CODEX_AUTH_SECRET` の値）、データキー `auth.json` です。Vault/Kubernetes のいずれにも JSON をログやマニフェストの平文として出力しないでください。OAuth トークンの更新結果は Secret に逆同期されないため、期限切れや失効時にはローカルで再認証し、Vault の値を手動で更新して Secret を再同期してください。
+
+セッション保存処理では `~/.codex/auth.json` は引き続きアーカイブ対象外です。Codex 起動前に API キーまたは non-empty の認証ファイルが見つからない場合、認証内容を含まないエラーで終了します。
 
 備考:
 - Operator API の URL は `http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}` で自動構築されます。
@@ -139,4 +147,4 @@ validation:
 - `cursor-agent`（Cursor Headless）
 - `codex`（`@openai/codex` CLI、`codex exec` を非対話実行）
 
-それぞれの API キーは環境変数 `ANTHROPIC_API_KEY` / `CURSOR_API_KEY` / `CODEX_API_KEY`（または `OPENAI_API_KEY`）で注入してください。
+Claude/Cursor の API キーは環境変数 `ANTHROPIC_API_KEY` / `CURSOR_API_KEY`、Codex は `CODEX_API_KEY`（または `OPENAI_API_KEY`）もしくは上記 OAuth 認証ファイルで注入してください。
