@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/datatypes"
 )
 
 const issuesDeliveryHeader = "X-GitHub-Delivery"
@@ -191,9 +192,14 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 
 		issueRepo := repositories.NewIssueRepository()
 		runRepo := repositories.NewAgentRunRepository(config.GetDB())
-		currentRun, err := runRepo.GetByIDempotencyKey(deliveryID)
-		if err != nil {
-			logger.Error("Failed to load assignment AgentRun", config.Error(err), config.String("delivery_id", deliveryID))
+		// The idempotency middleware deliberately does not reserve AgentRuns for
+		// issues events. Upsert the issue here, after eligibility checks, so a
+		// non-bot assignment cannot affect execution state.
+		if err := issueRepo.UpsertSelective(payload.Repository.FullName, payload.Issue.Number, map[string]interface{}{
+			"title": payload.Issue.Title,
+			"state": payload.Issue.State,
+		}); err != nil {
+			logger.Error("Failed to upsert assignment Issue", config.Error(err), config.String("delivery_id", deliveryID))
 			c.Error(err)
 			return
 		}
@@ -203,6 +209,7 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 			c.Error(err)
 			return
 		}
+
 		activeRuns, err := runRepo.GetByIssueID(issue.ID)
 		if err != nil {
 			logger.Error("Failed to check active AgentRuns for assignment", config.Error(err), config.Int("issue_id", issue.ID))
@@ -215,6 +222,23 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 				c.JSON(http.StatusOK, gin.H{"status": "already_running", "agent_run_id": run.ID, "delivery_id": deliveryID})
 				return
 			}
+		}
+
+		currentRun, isNew, err := runRepo.CreateOrGet(deliveryID, &models.AgentRun{
+			IssueID: issue.ID,
+			State:   "queued",
+			Input:   datatypes.JSON([]byte("{}")),
+			Output:  datatypes.JSON([]byte("{}")),
+		})
+		if err != nil {
+			logger.Error("Failed to reserve assignment AgentRun", config.Error(err), config.String("delivery_id", deliveryID))
+			c.Error(err)
+			return
+		}
+		if !isNew {
+			logger.Info("Assignment webhook already processed", config.String("delivery_id", deliveryID), config.Int("agent_run_id", currentRun.ID))
+			c.JSON(http.StatusOK, gin.H{"status": "already_processed", "agent_run_id": currentRun.ID, "delivery_id": deliveryID})
+			return
 		}
 
 		synthetic := IssueCommentPayload{

@@ -33,6 +33,12 @@ Operator (/webhooks/github)
 
 通常は `feature/issue-<Issue番号>` ブランチを使用し、既存の Pull Request がある場合はそのブランチを継続利用します。
 
+### bot のアサインによる自動実行
+
+`issues` webhook の `assigned` を有効にすると、設定した bot を open な Issue にアサインした時点で `/run-agent` と同じ処理を開始します。対象 bot は `AGENT_ASSIGNMENT_BOT_USERNAME`（任意で `AGENT_ASSIGNMENT_BOT_USER_ID`）で指定し、`AGENT_ASSIGNMENT_REPOSITORY` を設定すると対象リポジトリを限定できます。未指定時の bot 名は `CODEX_BOT_USERNAME`、さらに未指定なら `codex-bot` です。
+
+通常ユーザーへのアサイン、closed Issue、対象外リポジトリは起動せず、同じ webhook の再送や実行中の Issue に対する再アサインも重複起動しません。アサイン解除では実行中の Job を停止しません。GitHub App には Issues の Read and write 権限と `Issues` webhook event を設定してください。
+
 ## 対応 agent と選択方法
 
 対応する `AGENT_TYPE` は次の 3 つです。

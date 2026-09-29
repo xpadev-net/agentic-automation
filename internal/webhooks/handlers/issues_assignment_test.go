@@ -14,6 +14,18 @@ func assignmentPayload(t *testing.T, raw string) IssuesPayload {
 	return payload
 }
 
+func TestAssignmentTargetUsesConfiguredIdentity(t *testing.T) {
+	t.Setenv("AGENT_ASSIGNMENT_BOT_USERNAME", "agent-bot[bot]")
+	t.Setenv("AGENT_ASSIGNMENT_BOT_USER_ID", "123")
+
+	if !assignmentBotConfigured("unrelated-login", 123) {
+		t.Fatal("configured user ID should identify the assignment bot")
+	}
+	if assignmentBotConfigured("unrelated-login", 456) {
+		t.Fatal("an unrelated user must not match the configured bot")
+	}
+}
+
 func TestAssignmentTarget(t *testing.T) {
 	t.Setenv("AGENT_ASSIGNMENT_BOT_USERNAME", "agent-bot[bot]")
 	t.Setenv("AGENT_ASSIGNMENT_BOT_USER_ID", "")
