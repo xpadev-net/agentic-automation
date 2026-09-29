@@ -62,6 +62,38 @@ func TestParsePRTitleAndBody_StreamJSON(t *testing.T) {
 	}
 }
 
+func TestParsePRTitleAndBody_CodexJSONL(t *testing.T) {
+	output := `{"type":"thread.started","thread_id":"thread-1"}
+{"type":"item.completed","item":{"id":"item-1","type":"reasoning","text":"internal"}}
+{"type":"item.completed","item":{"id":"item-2","type":"agent_message","text":"検討結果です。"}}
+{"type":"item.completed","item":{"id":"item-3","type":"agent_message","text":"<title>docs: \"quoted\" title</title>\n<body>first line\nsecond line</body>"}}`
+
+	title, body, err := ParsePRTitleAndBody(output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if title != `docs: "quoted" title` {
+		t.Errorf("expected decoded title, got %q", title)
+	}
+	if body != "first line\nsecond line" {
+		t.Errorf("expected decoded multiline body, got %q", body)
+	}
+}
+
+func TestParseCommitMessage_CodexJSONL(t *testing.T) {
+	output := `{"type":"item.started","item":{"type":"agent_message"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"前置き"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"<commit_message>docs: explain \"Codex\" output (#304)</commit_message>"}}`
+
+	message, err := ParseCommitMessage(output)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if message != `docs: explain "Codex" output (#304)` {
+		t.Errorf("expected decoded commit message, got %q", message)
+	}
+}
+
 func TestParsePRTitleAndBody_TitleTagInsideBody(t *testing.T) {
 	// A literal <title> mention inside the markdown body must not shadow the real title.
 	output := `<title>real title</title>

@@ -7,7 +7,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("progress sink failed")
+}
 
 // MockCommandRunner is a mock implementation of CommandRunner for testing.
 type MockCommandRunner struct {
@@ -215,8 +222,9 @@ func TestExecutor_Execute_Codex_Success(t *testing.T) {
 	if mockRunner.CommandName != "codex" {
 		t.Errorf("Expected CommandName = 'codex', got %q", mockRunner.CommandName)
 	}
-	// Default values: allowWrite=true → workspace-write, no -m (empty model)
-	expectedArgs := []string{"exec", "--sandbox", "workspace-write", prompt}
+	// Default values: allowWrite=true uses unrestricted execution, JSONL output,
+	// and the repository's default Codex model.
+	expectedArgs := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-m", defaultCodexModel, prompt}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -473,7 +481,7 @@ func TestExecutor_Execute_Codex_CommandFailure(t *testing.T) {
 	}
 
 	// Verify command was called with correct arguments
-	expectedArgs := []string{"exec", "--sandbox", "workspace-write", "test prompt"}
+	expectedArgs := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-m", defaultCodexModel, "test prompt"}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
 	}
@@ -744,9 +752,12 @@ func TestExecutor_ExecuteWithOptions_Codex_Success(t *testing.T) {
 	if mockRunner.CommandName != "codex" {
 		t.Errorf("Expected CommandName = 'codex', got %q", mockRunner.CommandName)
 	}
-	expectedArgs := []string{"exec", "--sandbox", "workspace-write", "-m", model, prompt}
+	expectedArgs := []string{"exec", "--dangerously-bypass-approvals-and-sandbox", "--json", "-m", model, prompt}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+	if strings.Contains(strings.Join(mockRunner.Args, " "), "--sandbox") {
+		t.Fatalf("write-enabled execution must not also pass --sandbox: %v", mockRunner.Args)
 	}
 	if mockRunner.WorkDir != workDir {
 		t.Errorf("Expected WorkDir = %q, got %q", workDir, mockRunner.WorkDir)
@@ -769,9 +780,79 @@ func TestExecutor_ExecuteWithOptions_Codex_ReadOnly(t *testing.T) {
 	}
 
 	// Verify read-only sandbox and that "auto" model omits -m
-	expectedArgs := []string{"exec", "--sandbox", "read-only", prompt}
+	expectedArgs := []string{"exec", "--sandbox", "read-only", "--json", prompt}
 	if !reflect.DeepEqual(mockRunner.Args, expectedArgs) {
 		t.Errorf("Expected Args = %v, got %v", expectedArgs, mockRunner.Args)
+	}
+	if strings.Contains(strings.Join(mockRunner.Args, " "), "dangerously-bypass") {
+		t.Fatalf("read-only execution must not bypass approvals or sandbox: %v", mockRunner.Args)
+	}
+}
+
+func TestExecutor_ExecuteWithOptions_Codex_StreamsJSONLAndRetainsStderr(t *testing.T) {
+	cleanup := setupEnvVar(t, "CODEX_API_KEY", "test-key")
+	defer cleanup()
+
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.started\"}' '{\"type\":\"item.completed\"}'\nprintf '%s\\n' 'diagnostic from codex' >&2\n"
+	if err := os.WriteFile(codexPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var progress strings.Builder
+	executor := NewExecutor("codex")
+	executor.progressWriter = &progress
+	output, err := executor.ExecuteWithOptions(t.TempDir(), "test prompt", "gpt-5.6-luna", true)
+	if err != nil {
+		t.Fatalf("ExecuteWithOptions() error = %v, want nil", err)
+	}
+
+	wantStdout := "{\"type\":\"item.started\"}\n{\"type\":\"item.completed\"}\n"
+	if !strings.HasPrefix(output, wantStdout) {
+		t.Fatalf("returned output must preserve complete JSONL stdout; got %q", output)
+	}
+	if !strings.Contains(output, "diagnostic from codex\n") {
+		t.Fatalf("returned output must retain stderr; got %q", output)
+	}
+	progressOutput := progress.String()
+	if !strings.Contains(progressOutput, "[CODEX] {\"type\":\"item.started\"}\n") ||
+		!strings.Contains(progressOutput, "[CODEX] {\"type\":\"item.completed\"}\n") {
+		t.Fatalf("progress must stream every JSONL line; got %q", progressOutput)
+	}
+	if !strings.Contains(progressOutput, "diagnostic from codex\n") {
+		t.Fatalf("progress must stream stderr; got %q", progressOutput)
+	}
+}
+
+func TestExecutor_ExecuteWithOptions_Codex_ProgressErrorKillsProcess(t *testing.T) {
+	cleanup := setupEnvVar(t, "CODEX_API_KEY", "test-key")
+	defer cleanup()
+
+	binDir := t.TempDir()
+	codexPath := filepath.Join(binDir, "codex")
+	script := "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.started\"}'\nexec sleep 30\n"
+	if err := os.WriteFile(codexPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	executor := NewExecutor("codex")
+	executor.progressWriter = failingWriter{}
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.ExecuteWithOptions(t.TempDir(), "test prompt", defaultCodexModel, true)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "progress sink failed") {
+			t.Fatalf("expected progress writer error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Codex execution hung after progress writer failure")
 	}
 }
 

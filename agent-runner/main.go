@@ -273,8 +273,10 @@ func validateEnv() (*envConfig, error) {
 	}
 
 	// Codex specific environment variables
-	// Empty means the Codex CLI default model (no -m flag is passed)
 	cfg.CodexModel = os.Getenv("CODEX_MODEL")
+	if cfg.CodexModel == "" {
+		cfg.CodexModel = "gpt-5.6-luna"
+	}
 
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))

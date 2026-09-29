@@ -23,22 +23,37 @@ type CommandRunner interface {
 
 // Executor executes AI agents (claude-code, cursor-agent, or codex).
 type Executor struct {
-	agentType string
-	cmdRunner CommandRunner // Optional command runner for testing (nil uses exec.Command)
+	agentType      string
+	cmdRunner      CommandRunner // Optional command runner for testing (nil uses exec.Command)
+	progressWriter io.Writer
+}
+
+type synchronizedWriter struct {
+	mu     sync.Mutex
+	writer io.Writer
+}
+
+const defaultCodexModel = "gpt-5.6-luna"
+
+func (w *synchronizedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writer.Write(p)
 }
 
 // NewExecutor creates a new agent executor for the specified agent type.
 // Valid agent types are "claude-code", "cursor-agent", and "codex".
 func NewExecutor(agentType string) *Executor {
-	return &Executor{agentType: agentType}
+	return &Executor{agentType: agentType, progressWriter: os.Stderr}
 }
 
 // NewExecutorWithRunner creates a new agent executor with a custom command runner.
 // This is primarily used for testing to inject a mock command runner.
 func NewExecutorWithRunner(agentType string, runner CommandRunner) *Executor {
 	return &Executor{
-		agentType: agentType,
-		cmdRunner: runner,
+		agentType:      agentType,
+		cmdRunner:      runner,
+		progressWriter: os.Stderr,
 	}
 }
 
@@ -53,7 +68,7 @@ func (e *Executor) Execute(workDir, prompt string) (string, error) {
 		return e.executeCursor(workDir, prompt, "auto", true)
 	case "codex":
 		// Use default values for codex
-		return e.executeCodex(workDir, prompt, "", true)
+		return e.executeCodex(workDir, prompt, defaultCodexModel, true)
 	default:
 		return "", fmt.Errorf("unknown agent type: %s", e.agentType)
 	}
@@ -109,8 +124,9 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 }
 
 // executeCodex executes the OpenAI Codex CLI (codex exec) in non-interactive mode.
-// model selects the model via -m; empty or "auto" means the CLI default.
-// allowWrite selects the sandbox mode: workspace-write (edits allowed) or read-only.
+// model selects the model via -m; empty uses gpt-5.6-luna and "auto" uses the CLI default.
+// allowWrite enables unrestricted execution for implementation runs. Read-only
+// runs keep the Codex sandbox and never bypass approvals.
 func (e *Executor) executeCodex(workDir, prompt, model string, allowWrite bool) (string, error) {
 	// Codex accepts either API-key environment authentication or its OAuth auth file.
 	// Only check that the file is non-empty here; the CLI owns parsing and refreshing it.
@@ -125,45 +141,119 @@ func (e *Executor) executeCodex(workDir, prompt, model string, allowWrite bool) 
 		}
 	}
 
-	// Build command arguments: codex exec --sandbox <mode> [-m <model>] "<prompt>"
-	sandboxMode := "workspace-write"
-	if !allowWrite {
-		sandboxMode = "read-only"
+	args := []string{"exec"}
+	if allowWrite {
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	} else {
+		args = append(args, "--sandbox", "read-only")
 	}
-	args := []string{
-		"exec",
-		"--sandbox", sandboxMode,
+	args = append(args, "--json")
+	if model == "" {
+		model = defaultCodexModel
 	}
 	if model != "" && model != "auto" {
 		args = append(args, "-m", model)
 	}
 	args = append(args, prompt)
 
-	var output []byte
-	var err error
-
 	if e.cmdRunner != nil {
 		// Use injected command runner (for testing)
-		output, err = e.cmdRunner.Run("codex", args, workDir)
-	} else {
-		cmd := exec.Command("codex", args...)
-		cmd.Dir = workDir
-
-		// Preserve existing environment
-		cmd.Env = os.Environ()
-
-		// Execute and capture combined output (stdout + stderr)
-		output, err = cmd.CombinedOutput()
+		output, err := e.cmdRunner.Run("codex", args, workDir)
+		return codexResult(string(output), err)
 	}
 
-	outputStr := string(output)
+	cmd := exec.Command("codex", args...)
+	cmd.Dir = workDir
+	cmd.Env = os.Environ()
 
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create codex stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", fmt.Errorf("failed to create codex stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start codex: %w", err)
+	}
+
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	progressWriter := &synchronizedWriter{writer: e.progressWriter}
+	type readerResult struct {
+		stream string
+		err    error
+	}
+	readerResults := make(chan readerResult, 2)
+
+	go func() {
+		reader := bufio.NewReader(stdout)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if len(line) > 0 {
+				stdoutBuf.WriteString(line)
+				_, writeErr := fmt.Fprintf(progressWriter, "[CODEX] %s", line)
+				if !strings.HasSuffix(line, "\n") {
+					_, newlineErr := fmt.Fprintln(progressWriter)
+					if writeErr == nil {
+						writeErr = newlineErr
+					}
+				}
+				if writeErr != nil {
+					readerResults <- readerResult{stream: "stdout", err: fmt.Errorf("error streaming codex stdout: %w", writeErr)}
+					return
+				}
+			}
+			if readErr != nil {
+				if readErr == io.EOF {
+					readerResults <- readerResult{stream: "stdout"}
+				} else {
+					readerResults <- readerResult{stream: "stdout", err: fmt.Errorf("error reading codex stdout: %w", readErr)}
+				}
+				return
+			}
+		}
+	}()
+
+	go func() {
+		_, copyErr := io.Copy(io.MultiWriter(&stderrBuf, progressWriter), stderr)
+		if copyErr != nil {
+			readerResults <- readerResult{stream: "stderr", err: fmt.Errorf("error reading codex stderr: %w", copyErr)}
+			return
+		}
+		readerResults <- readerResult{stream: "stderr"}
+	}()
+
+	var streamErr error
+	for range 2 {
+		result := <-readerResults
+		if result.err != nil {
+			if streamErr == nil {
+				streamErr = result.err
+			}
+			// Stop the child immediately on the first reader/writer error. This
+			// closes both pipes so the other goroutine can finish and be joined.
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
+	}
+	cmdErr := cmd.Wait()
+
+	outputStr := stdoutBuf.String() + stderrBuf.String()
+	if streamErr != nil {
+		return outputStr, streamErr
+	}
+	return codexResult(outputStr, cmdErr)
+}
+
+func codexResult(output string, err error) (string, error) {
 	// If command execution failed, wrap the error with output context
 	if err != nil {
-		return outputStr, fmt.Errorf("codex execution failed: %w\nOutput: %s", err, outputStr)
+		return output, fmt.Errorf("codex execution failed: %w\nOutput: %s", err, output)
 	}
-
-	return outputStr, nil
+	return output, nil
 }
 
 // executeCursor executes the cursor-agent agent.

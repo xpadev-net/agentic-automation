@@ -1306,7 +1306,7 @@ env:
 | `ANTHROPIC_API_KEY` | 条件付き | - | Claude API キー（AGENT_TYPE=claude-code の場合） |
 | `CURSOR_API_KEY` | 条件付き | - | Cursor API キー（AGENT_TYPE=cursor-agent の場合） |
 | `CODEX_API_KEY` or `OPENAI_API_KEY` | 条件付き | - | OpenAI API キー（AGENT_TYPE=codex の場合、いずれか） |
-| `CODEX_MODEL` | いいえ | - | Codex モデル（`-m` 指定、空=Codex CLI デフォルト） |
+| `CODEX_MODEL` | いいえ | `gpt-5.6-luna` | Codex モデル（`-m` 指定） |
 | `RETRY_COUNT` | いいえ | `0` | 現在のリトライ回数 |
 | `WORKSPACE_DIR` | いいえ | `/workspace` | 作業ディレクトリ |
 | `S3_ENDPOINT` | はい | - | S3 API エンドポイント |

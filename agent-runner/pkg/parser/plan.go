@@ -3,6 +3,8 @@ package parser
 import (
 	"regexp"
 	"strings"
+
+	"agent-runner/pkg/utils"
 )
 
 var (
@@ -19,7 +21,11 @@ var (
 // This ensures that the actual ASSISTANT output is used instead of example text from the prompt.
 // Returns planContent, rejected flag, rejectionReason.
 func ParsePlanResult(output string) (string, bool, string) {
-	trimmed := strings.TrimSpace(output)
+	assistantText, err := utils.ExtractAssistantText(output)
+	if err != nil {
+		return "", true, "プラン出力の解析に失敗しました"
+	}
+	trimmed := strings.TrimSpace(assistantText)
 	if trimmed == "" {
 		return "", true, "プラン出力が空です"
 	}

@@ -318,7 +318,7 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 		},
 		{
 			Name:  "CODEX_MODEL",
-			Value: appconfig.GetEnv("CODEX_MODEL", ""),
+			Value: appconfig.GetEnv("CODEX_MODEL", "gpt-5.6-luna"),
 		},
 	}
 

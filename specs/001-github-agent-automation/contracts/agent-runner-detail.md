@@ -105,7 +105,7 @@ RUN npm install -g @openai/codex
 
 **Invocation**:
 ```bash
-codex exec --sandbox workspace-write "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
+codex exec --dangerously-bypass-approvals-and-sandbox --json -m gpt-5.6-luna "Fix issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
 Description:
 ${ISSUE_BODY}
@@ -116,17 +116,17 @@ ${PREVIOUS_ATTEMPTS}
 Please fix the issue and ensure all tests pass."
 ```
 
-`--sandbox` selects the sandbox mode: `workspace-write` when writes are allowed, `read-only` when they are not (e.g. plan creation). `-m <model>` is appended only when `CODEX_MODEL` is set.
+Write-enabled implementation runs use `--dangerously-bypass-approvals-and-sandbox`. Read-only runs such as plan creation use `--sandbox read-only`; these flags are mutually exclusive. `--json` emits JSONL so stdout can be retained for final-output parsing while every line is streamed to runner logs. `-m <model>` defaults to `gpt-5.6-luna`.
 
 **Environment Variables Required**:
 - `CODEX_API_KEY` or `OPENAI_API_KEY`: OpenAI API key
 
 **Optional Environment Variables**:
-- `CODEX_MODEL`: Model override passed via `-m` (empty = Codex CLI default)
+- `CODEX_MODEL`: Model passed via `-m` (default `gpt-5.6-luna`)
 
 **Output Parsing**:
-- Stdout: Agent output (plain text; not JSONL)
-- Stderr: Error messages
+- Stdout: JSONL, retained completely for final-output parsing and streamed line-by-line to runner stderr
+- Stderr: Error messages, streamed and retained for failure reporting
 - Exit Code:
   - 0: Success
   - 1: Failure
@@ -357,7 +357,9 @@ func (e *Executor) executeCursor(workDir, prompt string) (string, error) {
 func (e *Executor) executeCodex(workDir, prompt string) (string, error) {
 	cmd := exec.Command("codex",
 		"exec",
-		"--sandbox", "workspace-write",
+		"--dangerously-bypass-approvals-and-sandbox",
+		"--json",
+		"-m", "gpt-5.6-luna",
 		prompt,
 	)
 	cmd.Dir = workDir
@@ -752,7 +754,7 @@ ENTRYPOINT ["agent-runner"]
 | `ANTHROPIC_API_KEY` | Claude API key | Conditional | Required if `AGENT_TYPE=claude-code` |
 | `CURSOR_API_KEY` | Cursor API key | Conditional | Required if `AGENT_TYPE=cursor-agent` |
 | `CODEX_API_KEY` / `OPENAI_API_KEY` | OpenAI API key | Conditional | Required if `AGENT_TYPE=codex` (either one) |
-| `CODEX_MODEL` | Codex model override for `-m` | No | Empty = Codex CLI default |
+| `CODEX_MODEL` | Codex model for `-m` | No | `gpt-5.6-luna` |
 | `WORKSPACE_DIR` | Working directory | No | `/workspace` (default) |
 | `RETRY_COUNT` | Current retry count | Yes | `0` for initial, `>0` for retries |
 | `S3_ENDPOINT` | S3 API endpoint | Yes | `http://minio:9000` or `https://s3.amazonaws.com` |

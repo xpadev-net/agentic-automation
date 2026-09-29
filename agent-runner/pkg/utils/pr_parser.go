@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -11,7 +12,7 @@ import (
 // Returns title and body, or an error if parsing fails.
 func ParsePRTitleAndBody(output string) (string, string, error) {
 	// Extract all assistant entries from the output
-	assistantText, err := extractAssistantText(output)
+	assistantText, err := ExtractAssistantText(output)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to extract assistant text: %w", err)
 	}
@@ -40,11 +41,11 @@ func ParsePRTitleAndBody(output string) (string, string, error) {
 	return title, body, nil
 }
 
-// extractAssistantText extracts all assistant entry text from the agent's output.
+// ExtractAssistantText extracts all assistant entry text from the agent's output.
 // For cursor-agent it parses each line of the JSON stream and combines assistant entry messages.
-// For agents that emit plain text (e.g. codex), it falls back to the raw output when
-// no assistant entries were found.
-func extractAssistantText(output string) (string, error) {
+// For Codex it decodes completed agent_message events from the JSONL stream.
+// Plain-text output is returned unchanged when no supported assistant events are found.
+func ExtractAssistantText(output string) (string, error) {
 	var texts []string
 	lines := strings.Split(output, "\n")
 
@@ -55,18 +56,32 @@ func extractAssistantText(output string) (string, error) {
 		}
 
 		entry, err := ParseLogEntry([]byte(line))
-		if err != nil {
-			// Skip lines that are not valid log entries
-			continue
-		}
-
-		// Extract text from assistant entries
-		if assistantEntry, ok := entry.(*AssistantEntry); ok {
+		if err == nil {
+			// Extract text from Cursor assistant entries.
+			assistantEntry, ok := entry.(*AssistantEntry)
+			if !ok {
+				continue
+			}
 			for _, content := range assistantEntry.Message.Content {
 				if content.Type == "text" && content.Text != "" {
 					texts = append(texts, content.Text)
 				}
 			}
+			continue
+		}
+
+		var codexEvent struct {
+			Type string `json:"type"`
+			Item struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"item"`
+		}
+		if json.Unmarshal([]byte(line), &codexEvent) == nil &&
+			codexEvent.Type == "item.completed" &&
+			codexEvent.Item.Type == "agent_message" &&
+			codexEvent.Item.Text != "" {
+			texts = append(texts, codexEvent.Item.Text)
 		}
 	}
 
@@ -130,7 +145,7 @@ func parseXMLTitleAndBody(text string) (string, string, error) {
 // Returns commit message, or an error if parsing fails.
 func ParseCommitMessage(output string) (string, error) {
 	// Extract all assistant entries from the output
-	assistantText, err := extractAssistantText(output)
+	assistantText, err := ExtractAssistantText(output)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract assistant text: %w", err)
 	}
