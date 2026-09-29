@@ -20,14 +20,14 @@ type CommandRunner interface {
 	Run(name string, args []string, workDir string) ([]byte, error)
 }
 
-// Executor executes AI agents (claude-code or cursor-agent).
+// Executor executes AI agents (claude-code, cursor-agent, or codex).
 type Executor struct {
 	agentType string
 	cmdRunner CommandRunner // Optional command runner for testing (nil uses exec.Command)
 }
 
 // NewExecutor creates a new agent executor for the specified agent type.
-// Valid agent types are "claude-code" and "cursor-agent".
+// Valid agent types are "claude-code", "cursor-agent", and "codex".
 func NewExecutor(agentType string) *Executor {
 	return &Executor{agentType: agentType}
 }
@@ -50,19 +50,24 @@ func (e *Executor) Execute(workDir, prompt string) (string, error) {
 	case "cursor-agent":
 		// Use default values for cursor-agent
 		return e.executeCursor(workDir, prompt, "auto", true)
+	case "codex":
+		// Use default values for codex
+		return e.executeCodex(workDir, prompt, "", true)
 	default:
 		return "", fmt.Errorf("unknown agent type: %s", e.agentType)
 	}
 }
 
 // ExecuteWithOptions runs the configured agent with additional options.
-// This is used for cursor-agent with custom model and allow-write settings.
+// This is used for cursor-agent and codex with custom model and allow-write settings.
 func (e *Executor) ExecuteWithOptions(workDir, prompt, model string, allowWrite bool) (string, error) {
 	switch e.agentType {
 	case "cursor-agent":
 		return e.executeCursor(workDir, prompt, model, allowWrite)
+	case "codex":
+		return e.executeCodex(workDir, prompt, model, allowWrite)
 	default:
-		return "", fmt.Errorf("ExecuteWithOptions is only supported for cursor-agent, got: %s", e.agentType)
+		return "", fmt.Errorf("ExecuteWithOptions is only supported for cursor-agent and codex, got: %s", e.agentType)
 	}
 }
 
@@ -97,6 +102,56 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 	// If command execution failed, wrap the error with output context
 	if err != nil {
 		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput: %s", err, outputStr)
+	}
+
+	return outputStr, nil
+}
+
+// executeCodex executes the OpenAI Codex CLI (codex exec) in non-interactive mode.
+// model selects the model via -m; empty or "auto" means the CLI default.
+// allowWrite selects the sandbox mode: workspace-write (edits allowed) or read-only.
+func (e *Executor) executeCodex(workDir, prompt, model string, allowWrite bool) (string, error) {
+	// Check if CODEX_API_KEY or OPENAI_API_KEY is set (Codex CLI accepts both)
+	if os.Getenv("CODEX_API_KEY") == "" && os.Getenv("OPENAI_API_KEY") == "" {
+		return "", fmt.Errorf("CODEX_API_KEY or OPENAI_API_KEY environment variable is not set")
+	}
+
+	// Build command arguments: codex exec --sandbox <mode> [-m <model>] "<prompt>"
+	sandboxMode := "workspace-write"
+	if !allowWrite {
+		sandboxMode = "read-only"
+	}
+	args := []string{
+		"exec",
+		"--sandbox", sandboxMode,
+	}
+	if model != "" && model != "auto" {
+		args = append(args, "-m", model)
+	}
+	args = append(args, prompt)
+
+	var output []byte
+	var err error
+
+	if e.cmdRunner != nil {
+		// Use injected command runner (for testing)
+		output, err = e.cmdRunner.Run("codex", args, workDir)
+	} else {
+		cmd := exec.Command("codex", args...)
+		cmd.Dir = workDir
+
+		// Preserve existing environment
+		cmd.Env = os.Environ()
+
+		// Execute and capture combined output (stdout + stderr)
+		output, err = cmd.CombinedOutput()
+	}
+
+	outputStr := string(output)
+
+	// If command execution failed, wrap the error with output context
+	if err != nil {
+		return outputStr, fmt.Errorf("codex execution failed: %w\nOutput: %s", err, outputStr)
 	}
 
 	return outputStr, nil

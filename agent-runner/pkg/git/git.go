@@ -452,13 +452,13 @@ GET_SUCCESS:
 	return combineIssueInfo(title, description), nil
 }
 
-// GeneratePRTitleAndBody generates PR title and body using cursor-agent in read-only mode.
+// GeneratePRTitleAndBody generates PR title and body using an AI agent in read-only mode.
 // It uses Issue information, changed files, commit message, and git diff to generate the PR content.
 // Returns title and body, or an error if generation fails.
-func GeneratePRTitleAndBody(workDir string, repo string, issueNumber int, issuePrompt, commitMsg, agentType, cursorModel, baseBranch string) (string, string, error) {
-	// Only cursor-agent is supported for PR generation
-	if agentType != "cursor-agent" {
-		return "", "", fmt.Errorf("PR generation is only supported for cursor-agent, got: %s", agentType)
+func GeneratePRTitleAndBody(workDir string, repo string, issueNumber int, issuePrompt, commitMsg, agentType, model, baseBranch string) (string, string, error) {
+	// Only option-capable agents (cursor-agent, codex) are supported for PR generation
+	if agentType != "cursor-agent" && agentType != "codex" {
+		return "", "", fmt.Errorf("PR generation is only supported for cursor-agent or codex, got: %s", agentType)
 	}
 
 	// Extract Issue information from prompt or fetch from GitHub API
@@ -515,11 +515,11 @@ func GeneratePRTitleAndBody(workDir string, repo string, issueNumber int, issueP
 	}
 	prompt := prompts.BuildPRTitleGenerationPrompt(issueNumber, issueInfo, changedFilesList, commitMsg, diffCommand)
 
-	// Execute cursor-agent in read-only mode
+	// Execute agent in read-only mode
 	executor := agent.NewExecutor(agentType)
-	output, err := executor.ExecuteWithOptions(workDir, prompt, cursorModel, false)
+	output, err := executor.ExecuteWithOptions(workDir, prompt, model, false)
 	if err != nil {
-		return "", "", fmt.Errorf("cursor-agent execution failed: %w", err)
+		return "", "", fmt.Errorf("%s execution failed: %w", agentType, err)
 	}
 
 	// Parse output to extract title and body
@@ -531,13 +531,13 @@ func GeneratePRTitleAndBody(workDir string, repo string, issueNumber int, issueP
 	return title, body, nil
 }
 
-// GenerateCommitMessage generates commit message using cursor-agent in read-only mode.
+// GenerateCommitMessage generates commit message using an AI agent in read-only mode.
 // It uses Issue information, changed files, and staged diff to generate the commit message.
 // Returns commit message, or an error if generation fails.
-func GenerateCommitMessage(workDir string, repo string, issueNumber int, issuePrompt, agentType, cursorModel string) (string, error) {
-	// Only cursor-agent is supported for commit message generation
-	if agentType != "cursor-agent" {
-		return "", fmt.Errorf("commit message generation is only supported for cursor-agent, got: %s", agentType)
+func GenerateCommitMessage(workDir string, repo string, issueNumber int, issuePrompt, agentType, model string) (string, error) {
+	// Only option-capable agents (cursor-agent, codex) are supported for commit message generation
+	if agentType != "cursor-agent" && agentType != "codex" {
+		return "", fmt.Errorf("commit message generation is only supported for cursor-agent or codex, got: %s", agentType)
 	}
 
 	// Extract Issue information from prompt or fetch from GitHub API
@@ -577,12 +577,12 @@ func GenerateCommitMessage(workDir string, repo string, issueNumber int, issuePr
 	// Build prompt with structured information
 	prompt := prompts.BuildCommitMessageGenerationPrompt(issueNumber, issueInfo, changedFilesList, stagedDiff)
 
-	// Execute cursor-agent in read-only mode (allowWrite=false) to prevent file modifications
+	// Execute agent in read-only mode (allowWrite=false) to prevent file modifications
 	// This ensures that the agent cannot modify files after validation has passed
 	executor := agent.NewExecutor(agentType)
-	output, err := executor.ExecuteWithOptions(workDir, prompt, cursorModel, false)
+	output, err := executor.ExecuteWithOptions(workDir, prompt, model, false)
 	if err != nil {
-		return "", fmt.Errorf("cursor-agent execution failed: %w", err)
+		return "", fmt.Errorf("%s execution failed: %w", agentType, err)
 	}
 
 	// Parse output to extract commit message
@@ -1190,9 +1190,9 @@ func ResolveConflictsWithAI(workDir, repo string, issueID int, agentType string)
 		return fmt.Errorf("issue ID must be positive, got: %d", issueID)
 	}
 
-	// Only cursor-agent is supported for conflict resolution
-	if agentType != "cursor-agent" {
-		return fmt.Errorf("conflict resolution is only supported for cursor-agent, got: %s", agentType)
+	// Only option-capable agents (cursor-agent, codex) are supported for conflict resolution
+	if agentType != "cursor-agent" && agentType != "codex" {
+		return fmt.Errorf("conflict resolution is only supported for cursor-agent or codex, got: %s", agentType)
 	}
 
 	// Get list of conflict files
@@ -1257,11 +1257,12 @@ func ResolveConflictsWithAI(workDir, repo string, issueID int, agentType string)
 	// Build prompt
 	prompt := prompts.BuildConflictResolutionPrompt(issueID, conflictFilesList, headSHA, mergeHeadSHA, conflictDiffs.String())
 
-	// Execute cursor-agent to resolve conflicts
+	// Execute agent to resolve conflicts
+	// Model "auto" keeps the agent's default model (cursor "auto"; codex ignores it).
 	executor := agent.NewExecutor(agentType)
 	output, err := executor.ExecuteWithOptions(workDir, prompt, "auto", true)
 	if err != nil {
-		return fmt.Errorf("cursor-agent execution failed: %w\nOutput: %s", err, output)
+		return fmt.Errorf("%s execution failed: %w\nOutput: %s", agentType, err, output)
 	}
 
 	// Check for conflict markers in files directly BEFORE staging

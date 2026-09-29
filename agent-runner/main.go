@@ -38,7 +38,7 @@ func main() {
 	rootCmd := &cobra.Command{
 		Use:   "agent-runner",
 		Short: "Execute AI agent for GitHub Issue automation",
-		Long: `agent-runner executes AI agents (claude-code or cursor-agent) in Kubernetes Pods.
+		Long: `agent-runner executes AI agents (claude-code, cursor-agent, or codex) in Kubernetes Pods.
 It processes GitHub Issues, runs lint/typecheck, commits changes, and reports results to the Operator API.`,
 		Version: "0.1.0",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
@@ -233,8 +233,8 @@ func validateEnv() (*envConfig, error) {
 
 	if cfg.AgentType = os.Getenv("AGENT_TYPE"); cfg.AgentType == "" {
 		missing = append(missing, "AGENT_TYPE")
-	} else if cfg.AgentType != "claude-code" && cfg.AgentType != "cursor-agent" {
-		return nil, fmt.Errorf("AGENT_TYPE must be 'claude-code' or 'cursor-agent', got: %q", cfg.AgentType)
+	} else if cfg.AgentType != "claude-code" && cfg.AgentType != "cursor-agent" && cfg.AgentType != "codex" {
+		return nil, fmt.Errorf("AGENT_TYPE must be 'claude-code', 'cursor-agent', or 'codex', got: %q", cfg.AgentType)
 	}
 
 	// GitHub authentication is handled via GitHub App installation token (on-demand). No PAT support.
@@ -272,6 +272,10 @@ func validateEnv() (*envConfig, error) {
 		cfg.CursorAllowWrite = strings.ToLower(cursorAllowWriteStr) == "true"
 	}
 
+	// Codex specific environment variables
+	// Empty means the Codex CLI default model (no -m flag is passed)
+	cfg.CodexModel = os.Getenv("CODEX_MODEL")
+
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
@@ -289,13 +293,28 @@ type envConfig struct {
 	WorkDir          string
 	CursorModel      string
 	CursorAllowWrite bool
+	CodexModel       string
+}
+
+// isOptionAgentType reports whether the agent supports model/allow-write options
+// (cursor-agent and codex).
+func isOptionAgentType(agentType string) bool {
+	return agentType == "cursor-agent" || agentType == "codex"
+}
+
+// agentModel returns the configured model for option-capable agents.
+func (c *envConfig) agentModel() string {
+	if c.AgentType == "codex" {
+		return c.CodexModel
+	}
+	return c.CursorModel
 }
 
 // commitChangesIfNeeded commits changes if there are any file changes.
 // Returns the commit SHA, commit message if a commit was made, empty strings if no changes, and error if commit failed.
 // If skipHooks is true, the --no-verify flag is added to skip pre-commit hooks.
-// If commitMsgPrefix is empty and agentType is cursor-agent, AI-generated commit message will be used.
-func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string, skipHooks bool, agentType, cursorModel, issuePrompt string) (string, string, error) {
+// If commitMsgPrefix is empty and agentType supports options (cursor-agent or codex), AI-generated commit message will be used.
+func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix string, skipHooks bool, agentType, model, issuePrompt string) (string, string, error) {
 	// Check for file changes
 	hasChanges, err := git.HasChanges(workDir)
 	if err != nil {
@@ -314,8 +333,8 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 	// Build commit message
 	commitMsg := commitMsgPrefix
 	if commitMsg == "" {
-		// Try AI generation if cursor-agent is used
-		if agentType == "cursor-agent" {
+		// Try AI generation if an option-capable agent (cursor-agent or codex) is used
+		if isOptionAgentType(agentType) {
 			// Stage changes before generating commit message (required for GetStagedDiff)
 			addCmd := exec.Command("git", "add", ".")
 			addCmd.Dir = workDir
@@ -324,7 +343,7 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 			}
 
 			// Generate commit message using AI
-			generatedMsg, err := git.GenerateCommitMessage(workDir, repo, issueID, issuePrompt, agentType, cursorModel)
+			generatedMsg, err := git.GenerateCommitMessage(workDir, repo, issueID, issuePrompt, agentType, model)
 			if err != nil {
 				// Log warning and fallback to default message
 				fmt.Fprintf(os.Stderr, "WARNING: Failed to generate commit message with AI: %v (using default message)\n", err)
@@ -349,7 +368,7 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 				fmt.Fprintf(os.Stderr, "Generated commit message with AI: %s\n", commitMsg)
 			}
 		} else {
-			// Use default message for non-cursor-agent
+			// Use default message for agents without AI generation
 			commitMsg = fmt.Sprintf("feat: implement issue #%d", issueID)
 		}
 	}
@@ -399,14 +418,14 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 
 	if len(conflicts) > 0 {
 		fmt.Fprintf(os.Stderr, "Merge conflicts detected in %d files, resolving with AI...\n", len(conflicts))
-		// Resolve conflicts with AI (cursor-agent only)
-		if agentType != "cursor-agent" {
+		// Resolve conflicts with AI (cursor-agent or codex)
+		if !isOptionAgentType(agentType) {
 			// Abort merge before returning error to clean up workspace
-			fmt.Fprintf(os.Stderr, "Conflict resolution requires cursor-agent, but agent type is %s. Aborting merge...\n", agentType)
+			fmt.Fprintf(os.Stderr, "Conflict resolution requires cursor-agent or codex, but agent type is %s. Aborting merge...\n", agentType)
 			if abortErr := git.AbortMerge(workDir); abortErr != nil {
-				return false, fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s; failed to abort merge: %w", agentType, abortErr)
+				return false, fmt.Errorf("conflict resolution requires cursor-agent or codex, but agent type is %s; failed to abort merge: %w", agentType, abortErr)
 			}
-			return false, fmt.Errorf("conflict resolution requires cursor-agent, but agent type is %s", agentType)
+			return false, fmt.Errorf("conflict resolution requires cursor-agent or codex, but agent type is %s", agentType)
 		}
 		if err := git.ResolveConflictsWithAI(workDir, repo, issueID, agentType); err != nil {
 			// If conflict resolution fails, abort merge to clean up workspace
@@ -653,8 +672,8 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			}
 
 			// Execute agent
-			if envCfg.AgentType == "cursor-agent" {
-				agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+			if isOptionAgentType(envCfg.AgentType) {
+				agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.agentModel(), envCfg.CursorAllowWrite)
 			} else {
 				agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
 			}
@@ -751,8 +770,8 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		}
 
 		// Execute agent
-		if envCfg.AgentType == "cursor-agent" {
-			agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+		if isOptionAgentType(envCfg.AgentType) {
+			agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.agentModel(), envCfg.CursorAllowWrite)
 		} else {
 			agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
 		}
@@ -837,7 +856,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				fmt.Fprintf(os.Stderr, "Validation failed: %v\n", validationErr)
 				// Commit changes as checkpoint before retry
 				checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (validation retry checkpoint #%d)", issueID, retryCount)
-				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.CursorModel, prompt)
+				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.agentModel(), prompt)
 				if commitErr != nil {
 					reportErr := reporterClient.ReportFailure(
 						fmt.Sprintf("Failed to commit checkpoint: %v", commitErr),
@@ -870,7 +889,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		if retryCount > 0 {
 			commitMsgPrefix = fmt.Sprintf("feat: implement issue #%d (validation retry #%d)", issueID, retryCount)
 		}
-		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix, false, envCfg.AgentType, envCfg.CursorModel, prompt)
+		commitSHA, lastCommitMsg, err = commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, commitMsgPrefix, false, envCfg.AgentType, envCfg.agentModel(), prompt)
 		if err != nil {
 			reportErr := reporterClient.ReportFailure(
 				fmt.Sprintf("Git commit failed: %v", err),
@@ -947,8 +966,8 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						}
 
 						// Execute agent again
-						if envCfg.AgentType == "cursor-agent" {
-							agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.CursorModel, envCfg.CursorAllowWrite)
+						if isOptionAgentType(envCfg.AgentType) {
+							agentOutput, err = executor.ExecuteWithOptions(envCfg.WorkDir, fullPrompt, envCfg.agentModel(), envCfg.CursorAllowWrite)
 						} else {
 							agentOutput, err = executor.Execute(envCfg.WorkDir, fullPrompt)
 						}
@@ -980,7 +999,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 						// Commit changes after retry
 						retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
-						retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg, false, envCfg.AgentType, envCfg.CursorModel, prompt)
+						retryCommitSHA, retryCommitMsgValue, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, retryCommitMsg, false, envCfg.AgentType, envCfg.agentModel(), prompt)
 						if commitErr != nil {
 							reportErr := reporterClient.ReportFailure(
 								fmt.Sprintf("Failed to commit after post-commit sync retry: %v", commitErr),
@@ -1005,7 +1024,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
 						// Commit changes as checkpoint before retry
 						checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
-						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.CursorModel, prompt)
+						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.agentModel(), prompt)
 						if commitErr != nil {
 							reportErr := reporterClient.ReportFailure(
 								fmt.Sprintf("Failed to commit checkpoint after post-commit sync: %v", commitErr),
@@ -1070,16 +1089,16 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 	fmt.Fprintf(os.Stderr, "Saved session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 
-	// 14. Generate PR title and body (if cursor-agent is used)
+	// 14. Generate PR title and body (if an option-capable agent is used)
 	var prTitle, prBody string
-	if envCfg.AgentType == "cursor-agent" {
+	if isOptionAgentType(envCfg.AgentType) {
 		fmt.Fprintf(os.Stderr, "Generating PR title and body\n")
 		// Use lastCommitMsg if available, otherwise use default commit message
 		commitMsgForPR := lastCommitMsg
 		if commitMsgForPR == "" {
 			commitMsgForPR = fmt.Sprintf("feat: implement issue #%d", issueID)
 		}
-		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, repo, issueID, prompt, commitMsgForPR, envCfg.AgentType, envCfg.CursorModel, baseBranch)
+		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, repo, issueID, prompt, commitMsgForPR, envCfg.AgentType, envCfg.agentModel(), baseBranch)
 		if err != nil {
 			// Log warning but continue with default title/body
 			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
@@ -1091,7 +1110,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			fmt.Fprintf(os.Stderr, "Generated PR title and body\n")
 		}
 	} else {
-		// For non-cursor-agent, use default format
+		// For agents without AI generation, use default format
 		prTitle = ""
 		prBody = ""
 	}

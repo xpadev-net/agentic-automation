@@ -390,7 +390,11 @@ kubectl create secret generic anthropic-api-key \
 kubectl create secret generic cursor-api-key \
   --from-literal=api-key="$CURSOR_API_KEY"
 
-# 4. s3-credentials
+# 4. codex-api-key (オプション)
+kubectl create secret generic codex-api-key \
+  --from-literal=api-key="$CODEX_API_KEY"
+
+# 5. s3-credentials
 kubectl create secret generic s3-credentials \
   --from-literal=access-key-id="$S3_ACCESS_KEY_ID" \
   --from-literal=secret-access-key="$S3_SECRET_ACCESS_KEY"
@@ -792,7 +796,7 @@ curl https://your-domain.com/health
 1. GitHub App がインストールされているリポジトリで新しい Issue を作成
 2. Issue に `/run-agent` のコメントを追加（説明文を含めても検知されます: 例 `/run-agent fix typo in README.md`）
    
-   エージェント種別はコメントではなく Issue ラベルで制御します（`agent:claude-code` / `agent:cursor-agents`）。ラベルが無い場合は `AI_AGENT_DEFAULT_TYPE` が使用されます。コメント実行には Collaborator 以上の権限が必要で、Issue は open である必要があります。
+   エージェント種別はコメントではなく Issue ラベルで制御します（`agent:claude-code` / `agent:cursor-agent` / `agent:codex`）。ラベルが無い場合は `AI_AGENT_DEFAULT_TYPE` が使用されます。コメント実行には Collaborator 以上の権限が必要で、Issue は open である必要があります。
 3. Operator のログを確認:
 
 ```bash
@@ -1298,9 +1302,11 @@ env:
 | `OPERATOR_SERVICE_PORT` | はい | - | Operator サービスポート |
 | `OPERATOR_API_TOKEN` | はい | - | Bearer トークン |
 | `AGENT_RUN_ID` | はい | - | AgentRun レコード ID |
-| `AGENT_TYPE` | はい | - | エージェント種別（claude-code/cursor-agent） |
+| `AGENT_TYPE` | はい | - | エージェント種別（claude-code/cursor-agent/codex） |
 | `ANTHROPIC_API_KEY` | 条件付き | - | Claude API キー（AGENT_TYPE=claude-code の場合） |
 | `CURSOR_API_KEY` | 条件付き | - | Cursor API キー（AGENT_TYPE=cursor-agent の場合） |
+| `CODEX_API_KEY` or `OPENAI_API_KEY` | 条件付き | - | OpenAI API キー（AGENT_TYPE=codex の場合、いずれか） |
+| `CODEX_MODEL` | いいえ | - | Codex モデル（`-m` 指定、空=Codex CLI デフォルト） |
 | `RETRY_COUNT` | いいえ | `0` | 現在のリトライ回数 |
 | `WORKSPACE_DIR` | いいえ | `/workspace` | 作業ディレクトリ |
 | `S3_ENDPOINT` | はい | - | S3 API エンドポイント |

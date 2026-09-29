@@ -1,6 +1,6 @@
 ## Agent Runner 概要
 
-Agent Runner は、Kubernetes の Pod（Job）内で実行される AI エージェント実行コンポーネントです。対象リポジトリをクローンし、プロンプトに基づいて `claude-code` もしくは `cursor-agent` を起動、lint/型チェック・フック・バリデーションを実行して変更をコミットし、PR を作成します。実行結果は Operator API に push 通知されます。
+Agent Runner は、Kubernetes の Pod（Job）内で実行される AI エージェント実行コンポーネントです。対象リポジトリをクローンし、プロンプトに基づいて `claude-code` / `cursor-agent` / `codex` を起動、lint/型チェック・フック・バリデーションを実行して変更をコミットし、PR を作成します。実行結果は Operator API に push 通知されます。
 
 - エントリーポイント: `agent-runner/main.go`
 - 実行契約: `specs/001-github-agent-automation/contracts/ai-agent-execution.md`
@@ -12,7 +12,7 @@ Agent Runner は、Kubernetes の Pod（Job）内で実行される AI エージ
 ## 主な機能
 - リポジトリのクローン（`feature/issue-{番号}` ブランチ作成）
 - マニフェスト（`.agent-config.yaml`）のロード、pre/post フックと validation 実行
-- AI エージェント実行（claude-code / cursor-agent）
+- AI エージェント実行（claude-code / cursor-agent / codex）
 - 変更検知、コミット、リモートに push、PR 作成
 - セッションの保存・復元（S3/MinIO）
 - 実行結果の Operator API へのレポート
@@ -67,18 +67,20 @@ Agent Runner は Kubernetes 環境変数を前提とします（Operator から�
 - 必須（認可・実行）
   - `OPERATOR_API_TOKEN`: Operator API の Bearer トークン
   - `AGENT_RUN_ID`: AgentRun レコード ID（整数、>0）
-  - `AGENT_TYPE`: `claude-code` | `cursor-agent`
+  - `AGENT_TYPE`: `claude-code` | `cursor-agent` | `codex`
 - GitHub App（認証）
   - `GITHUB_APP_ID`: App ID（数値）
   - `GITHUB_PRIVATE_KEY`: App 秘密鍵（PEM 本文、改行含む）
 - AI エージェント
   - `ANTHROPIC_API_KEY`: Claude 用（`AGENT_TYPE=claude-code` のとき必須）
   - `CURSOR_API_KEY`: Cursor 用（`AGENT_TYPE=cursor-agent` のとき必須）
+  - `CODEX_API_KEY` or `OPENAI_API_KEY`: Codex 用（`AGENT_TYPE=codex` のとき必須、どちらか一方）
 - 任意（デフォルト/挙動）
   - `WORKSPACE_DIR`: 作業ディレクトリ（デフォルト `/workspace`）
   - `RETRY_COUNT`: リトライ回数（整数、>=0）>0 でセッション復元
   - `CURSOR_MODEL`: Cursor モデル（デフォルト `auto`）
-  - `CURSOR_ALLOW_WRITE`: `true`/`false`（デフォルト `true`）
+  - `CURSOR_ALLOW_WRITE`: `true`/`false`（デフォルト `true`、codex の `--sandbox` にも適用）
+  - `CODEX_MODEL`: Codex モデル（デフォルト空 = Codex CLI のデフォルト）
 
 備考:
 - Operator API の URL は `http://{OPERATOR_SERVICE_NAME}.{KUBERNETES_NAMESPACE}.svc.cluster.local:{OPERATOR_SERVICE_PORT}` で自動構築されます。
@@ -135,5 +137,6 @@ validation:
 ## サポートする AI エージェント
 - `claude-code`（`@anthropic/claude-code` CLI）
 - `cursor-agent`（Cursor Headless）
+- `codex`（`@openai/codex` CLI、`codex exec` を非対話実行）
 
-それぞれの API キーは環境変数 `ANTHROPIC_API_KEY` / `CURSOR_API_KEY` で注入してください。
+それぞれの API キーは環境変数 `ANTHROPIC_API_KEY` / `CURSOR_API_KEY` / `CODEX_API_KEY`（または `OPENAI_API_KEY`）で注入してください。

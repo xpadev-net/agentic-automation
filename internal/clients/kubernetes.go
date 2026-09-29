@@ -316,6 +316,10 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 			Name:  "CURSOR_ALLOW_WRITE",
 			Value: strconv.FormatBool(jobCfg.CursorAllowWrite),
 		},
+		{
+			Name:  "CODEX_MODEL",
+			Value: appconfig.GetEnv("CODEX_MODEL", ""),
+		},
 	}
 
 	// Add Job name if specified (for agent-runner to report back the correct job name)
@@ -339,6 +343,7 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 	githubAppSecret := appconfig.GetEnv("OPERATOR_SECRETS_NAME", "operator-secrets")
 	anthropicAPIKeySecret := appconfig.GetEnv("ANTHROPIC_API_KEY_SECRET", "anthropic-api-key")
 	cursorAPIKeySecret := appconfig.GetEnv("CURSOR_API_KEY_SECRET", "cursor-api-key")
+	codexAPIKeySecret := appconfig.GetEnv("CODEX_API_KEY_SECRET", "codex-api-key")
 	operatorAPITokenSecret := appconfig.GetEnv("OPERATOR_API_TOKEN_SECRET", "agent-runner-secret")
 	s3CredentialsSecret := appconfig.GetEnv("S3_CREDENTIALS_SECRET", "s3-credentials")
 
@@ -423,6 +428,18 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 				SecretKeyRef: &corev1.SecretKeySelector{
 					LocalObjectReference: corev1.LocalObjectReference{
 						Name: cursorAPIKeySecret,
+					},
+					Key: "api-key",
+				},
+			},
+		})
+	} else if jobCfg.AgentType == "codex" {
+		envVars = append(envVars, corev1.EnvVar{
+			Name: "CODEX_API_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: codexAPIKeySecret,
 					},
 					Key: "api-key",
 				},

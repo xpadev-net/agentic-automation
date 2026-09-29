@@ -134,10 +134,13 @@ func RestoreSession(agentRunID int, retryCount int) error {
 
 	claudeDir := filepath.Join(homeDir, ".claude")
 	cursorDir := filepath.Join(homeDir, ".cursor")
+	codexDir := filepath.Join(homeDir, ".codex")
 
 	if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
 		if _, err := os.Stat(cursorDir); os.IsNotExist(err) {
-			return fmt.Errorf("session restore verification failed: neither ~/.claude/ nor ~/.cursor/ found")
+			if _, err := os.Stat(codexDir); os.IsNotExist(err) {
+				return fmt.Errorf("session restore verification failed: none of ~/.claude/, ~/.cursor/, ~/.codex/ found")
+			}
 		}
 	}
 
@@ -362,6 +365,18 @@ func copySessionFiles(agentType, homeDir, tmpDir string) error {
 			// If directory doesn't exist, skip (not an error for initial runs)
 			if !os.IsNotExist(err) {
 				return fmt.Errorf("failed to copy ~/.cursor/: %w", err)
+			}
+		}
+		return nil
+
+	case "codex":
+		// Copy ~/.codex/ to tmpDir/.codex/
+		srcCodexDir := filepath.Join(homeDir, ".codex")
+		destCodexDir := filepath.Join(tmpDir, ".codex")
+		if err := copyDir(srcCodexDir, destCodexDir); err != nil {
+			// If directory doesn't exist, skip (not an error for initial runs)
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to copy ~/.codex/: %w", err)
 			}
 		}
 		return nil

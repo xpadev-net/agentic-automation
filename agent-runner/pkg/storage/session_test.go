@@ -138,6 +138,8 @@ func setupTestHomeDir(t *testing.T, agentType string) (string, func()) {
 		sessionDir = filepath.Join(homeDir, ".claude")
 	case "cursor-agent":
 		sessionDir = filepath.Join(homeDir, ".cursor")
+	case "codex":
+		sessionDir = filepath.Join(homeDir, ".codex")
 	default:
 		sessionDir = filepath.Join(homeDir, ".claude")
 	}
@@ -629,6 +631,22 @@ func TestCopySessionFiles(t *testing.T) {
 			verify: func(t *testing.T, tmpDir string) {
 				session := filepath.Join(tmpDir, ".cursor/session.json")
 				assert.FileExists(t, session)
+			},
+		},
+		{
+			name:      "Codex",
+			agentType: "codex",
+			setupFiles: map[string]testFileInfo{
+				".codex/config.toml":                 {Content: "model = \"gpt-5-codex\"", Permissions: 0644},
+				".codex/sessions/2026/rollout.jsonl": {Content: "session data", Permissions: 0644},
+				".codex/auth.json":                   {Content: `{"OPENAI_API_KEY": "secret"}`, Permissions: 0600},
+			},
+			wantErr: false,
+			verify: func(t *testing.T, tmpDir string) {
+				assert.FileExists(t, filepath.Join(tmpDir, ".codex/config.toml"))
+				assert.FileExists(t, filepath.Join(tmpDir, ".codex/sessions/2026/rollout.jsonl"))
+				// auth.json contains credentials and must be excluded
+				assert.NoFileExists(t, filepath.Join(tmpDir, ".codex/auth.json"))
 			},
 		},
 		{
@@ -1159,7 +1177,7 @@ func TestSaveSession_ConfigLoadFailure(t *testing.T) {
 
 // TestRestoreSession_VerificationFailure tests RestoreSession verification failure
 func TestRestoreSession_VerificationFailure(t *testing.T) {
-	// Create a tar.gz archive without .claude/ or .cursor/ directories
+	// Create a tar.gz archive without .claude/, .cursor/, or .codex/ directories
 	srcDir, _ := setupTempDir(t)
 	homeDir, _ := setupTempDir(t)
 	tarPath := filepath.Join(t.TempDir(), "invalid-session.tar.gz")
@@ -1181,11 +1199,14 @@ func TestRestoreSession_VerificationFailure(t *testing.T) {
 	// (we can't easily test RestoreSession directly without S3, so we test the verification logic)
 	claudeDir := filepath.Join(homeDir, ".claude")
 	cursorDir := filepath.Join(homeDir, ".cursor")
+	codexDir := filepath.Join(homeDir, ".codex")
 
 	if _, err := os.Stat(claudeDir); os.IsNotExist(err) {
 		if _, err := os.Stat(cursorDir); os.IsNotExist(err) {
-			// This is the error that RestoreSession would return
-			assert.Error(t, fmt.Errorf("session restore verification failed: neither ~/.claude/ nor ~/.cursor/ found"))
+			if _, err := os.Stat(codexDir); os.IsNotExist(err) {
+				// This is the error that RestoreSession would return
+				assert.Error(t, fmt.Errorf("session restore verification failed: none of ~/.claude/, ~/.cursor/, ~/.codex/ found"))
+			}
 		}
 	}
 }

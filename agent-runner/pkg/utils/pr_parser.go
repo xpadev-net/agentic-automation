@@ -40,8 +40,10 @@ func ParsePRTitleAndBody(output string) (string, string, error) {
 	return title, body, nil
 }
 
-// extractAssistantText extracts all assistant entry text from cursor-agent's JSON stream output.
-// It parses each line as JSON and combines all assistant entry messages.
+// extractAssistantText extracts all assistant entry text from the agent's output.
+// For cursor-agent it parses each line of the JSON stream and combines assistant entry messages.
+// For agents that emit plain text (e.g. codex), it falls back to the raw output when
+// no assistant entries were found.
 func extractAssistantText(output string) (string, error) {
 	var texts []string
 	lines := strings.Split(output, "\n")
@@ -68,6 +70,12 @@ func extractAssistantText(output string) (string, error) {
 		}
 	}
 
+	if len(texts) == 0 {
+		// Plain-text agents (e.g. codex exec) print the final message verbatim;
+		// downstream XML parsing operates on the whole output.
+		return output, nil
+	}
+
 	return strings.Join(texts, "\n"), nil
 }
 
@@ -76,22 +84,43 @@ func extractAssistantText(output string) (string, error) {
 // The XML tags may be on separate lines or on the same line.
 func parseXMLTitleAndBody(text string) (string, string, error) {
 	// Use regex to extract title and body
-	// Pattern matches <title>...</title> and <body>...</body> with any content (including newlines)
+	// Pattern matches <title>...</title> and <body>...</body> with any content (including newlines).
+	// The LAST match wins: plain-text agents (e.g. codex exec) echo the prompt — which
+	// itself contains example tags — before their answer.
 	titlePattern := regexp.MustCompile(`(?s)<title>(.*?)</title>`)
 	bodyPattern := regexp.MustCompile(`(?s)<body>(.*?)</body>`)
 
-	titleMatch := titlePattern.FindStringSubmatch(text)
-	bodyMatch := bodyPattern.FindStringSubmatch(text)
+	titleIndexes := titlePattern.FindAllStringSubmatchIndex(text, -1)
+	bodyIndexes := bodyPattern.FindAllStringSubmatchIndex(text, -1)
 
-	if len(titleMatch) < 2 {
+	if len(titleIndexes) == 0 {
 		return "", "", fmt.Errorf("title tag not found in output")
 	}
-	if len(bodyMatch) < 2 {
+	if len(bodyIndexes) == 0 {
 		return "", "", fmt.Errorf("body tag not found in output")
 	}
 
-	title := strings.TrimSpace(titleMatch[1])
-	body := strings.TrimSpace(bodyMatch[1])
+	// Pick the answer's tags out of a possibly multi-block output (prompt echo + answer).
+	// If the last <title> sits strictly after the last <body>, the answer emitted them
+	// in body-then-title order — take both last matches. Otherwise the title must end
+	// before the last body's start (literal <title> mentions inside the body are skipped).
+	lastTitle := titleIndexes[len(titleIndexes)-1]
+	lastBody := bodyIndexes[len(bodyIndexes)-1]
+	body := strings.TrimSpace(text[lastBody[2]:lastBody[3]])
+	title := ""
+	if lastTitle[0] >= lastBody[1] {
+		title = strings.TrimSpace(text[lastTitle[2]:lastTitle[3]])
+	} else {
+		for _, m := range titleIndexes {
+			// m[2]:m[3] spans the captured content; m[0]:m[1] the whole match
+			if m[1] <= lastBody[0] {
+				title = strings.TrimSpace(text[m[2]:m[3]])
+			}
+		}
+	}
+	if title == "" {
+		title = strings.TrimSpace(text[lastTitle[2]:lastTitle[3]])
+	}
 
 	return title, body, nil
 }
@@ -130,16 +159,18 @@ func ParseCommitMessage(output string) (string, error) {
 // The XML tags may be on separate lines or on the same line.
 func parseXMLCommitMessage(text string) (string, error) {
 	// Use regex to extract commit message
-	// Pattern matches <commit_message>...</commit_message> with any content (including newlines)
+	// Pattern matches <commit_message>...</commit_message> with any content (including newlines).
+	// The LAST match wins: plain-text agents (e.g. codex exec) echo the prompt — which
+	// itself contains example tags — before their answer.
 	commitMsgPattern := regexp.MustCompile(`(?s)<commit_message>(.*?)</commit_message>`)
 
-	commitMsgMatch := commitMsgPattern.FindStringSubmatch(text)
+	commitMsgMatches := commitMsgPattern.FindAllStringSubmatch(text, -1)
 
-	if len(commitMsgMatch) < 2 {
+	if len(commitMsgMatches) == 0 {
 		return "", fmt.Errorf("commit_message tag not found in output")
 	}
 
-	commitMsg := strings.TrimSpace(commitMsgMatch[1])
+	commitMsg := strings.TrimSpace(commitMsgMatches[len(commitMsgMatches)-1][1])
 
 	return commitMsg, nil
 }

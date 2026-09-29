@@ -22,6 +22,8 @@ func ShouldExclude(filePath string) bool {
 	exactMatches := []string{
 		".credentials.json",
 		".env",
+		// Codex CLI stores auth tokens in ~/.codex/auth.json
+		"auth.json",
 	}
 	for _, pattern := range exactMatches {
 		if baseName == pattern {
