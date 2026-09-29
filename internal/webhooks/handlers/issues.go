@@ -217,13 +217,17 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 			return
 		}
 		for _, run := range activeRuns {
-			if run.ID != currentRun.ID && (run.State == "queued" || run.State == "started") {
+			if run.State == "queued" || run.State == "started" {
 				logger.Info("Skipping assignment because an AgentRun is already active", config.Int("issue_id", issue.ID), config.Int("agent_run_id", run.ID), config.String("delivery_id", deliveryID))
 				c.JSON(http.StatusOK, gin.H{"status": "already_running", "agent_run_id": run.ID, "delivery_id": deliveryID})
 				return
 			}
 		}
 
+		// Reserve the delivery only after the active-run check. The issues
+		// idempotency middleware intentionally does not create AgentRuns, since
+		// most issues events are not execution requests. The existing
+		// issue_comment flow expects this record to exist before it is called.
 		currentRun, isNew, err := runRepo.CreateOrGet(deliveryID, &models.AgentRun{
 			IssueID: issue.ID,
 			State:   "queued",
