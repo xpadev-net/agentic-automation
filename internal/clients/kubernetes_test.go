@@ -83,6 +83,65 @@ func TestGenerateJobName(t *testing.T) {
 	})
 }
 
+func TestBuildJobSpecCodexAuthFile(t *testing.T) {
+	t.Setenv("CODEX_AUTH_SECRET", "test-codex-auth")
+	client := &KubernetesClient{}
+	spec := client.BuildJobSpec(&JobConfig{
+		AgentRunID:       1,
+		IssueID:          2,
+		Repo:             "owner/repo",
+		AgentType:        "codex",
+		AgentRunnerImage: "agent-runner:test",
+	})
+
+	require.Len(t, spec.Template.Spec.InitContainers, 1)
+	initContainer := spec.Template.Spec.InitContainers[0]
+	assert.Equal(t, "initialize-codex-auth", initContainer.Name)
+	assert.Contains(t, initContainer.Args[0], "chmod 0600")
+	require.Len(t, spec.Template.Spec.Volumes, 2)
+
+	input := spec.Template.Spec.Volumes[0]
+	require.NotNil(t, input.Secret)
+	assert.Equal(t, "test-codex-auth", input.Secret.SecretName)
+	require.NotNil(t, input.Secret.Optional)
+	assert.True(t, *input.Secret.Optional)
+	require.Len(t, input.Secret.Items, 1)
+	assert.Equal(t, "auth.json", input.Secret.Items[0].Key)
+	assert.Equal(t, "auth.json", input.Secret.Items[0].Path)
+
+	require.Len(t, spec.Template.Spec.Containers, 1)
+	mainContainer := spec.Template.Spec.Containers[0]
+	require.Len(t, mainContainer.VolumeMounts, 1)
+	assert.Equal(t, "/home/agent/.codex", mainContainer.VolumeMounts[0].MountPath)
+	assert.False(t, mainContainer.VolumeMounts[0].ReadOnly)
+
+	var codexKey *corev1.EnvVar
+	for i := range mainContainer.Env {
+		if mainContainer.Env[i].Name == "CODEX_API_KEY" {
+			codexKey = &mainContainer.Env[i]
+			break
+		}
+	}
+	require.NotNil(t, codexKey)
+	require.NotNil(t, codexKey.ValueFrom.SecretKeyRef.Optional)
+	assert.True(t, *codexKey.ValueFrom.SecretKeyRef.Optional)
+}
+
+func TestBuildJobSpecNonCodexHasNoCodexAuthVolumes(t *testing.T) {
+	client := &KubernetesClient{}
+	spec := client.BuildJobSpec(&JobConfig{
+		AgentRunID:       1,
+		IssueID:          2,
+		Repo:             "owner/repo",
+		AgentType:        "cursor-agent",
+		AgentRunnerImage: "agent-runner:test",
+	})
+
+	assert.Empty(t, spec.Template.Spec.InitContainers)
+	assert.Empty(t, spec.Template.Spec.Volumes)
+	assert.Empty(t, spec.Template.Spec.Containers[0].VolumeMounts)
+}
+
 func TestGeneratePlanCreationJobName(t *testing.T) {
 	client := &KubernetesClient{}
 

@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -244,6 +245,34 @@ func TestExecutor_Execute_Codex_Success_OpenAIKey(t *testing.T) {
 	}
 }
 
+// TestExecutor_Execute_Codex_Success_AuthFile tests OAuth authentication via ~/.codex/auth.json.
+func TestExecutor_Execute_Codex_Success_AuthFile(t *testing.T) {
+	cleanupCodex := restoreEnvVar(t, "CODEX_API_KEY")
+	defer cleanupCodex()
+	cleanupOpenAI := restoreEnvVar(t, "OPENAI_API_KEY")
+	defer cleanupOpenAI()
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	authDir := filepath.Join(homeDir, ".codex")
+	if err := os.MkdirAll(authDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"synthetic"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	mockRunner := createMockRunner([]byte("Codex agent executed"), nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+	_, err := executor.Execute("/tmp/work", "test prompt")
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if mockRunner.CallCount != 1 {
+		t.Errorf("Expected CallCount = 1, got %d", mockRunner.CallCount)
+	}
+}
+
 // TestExecutor_Execute_ClaudeCode_MissingAPIKey tests error when ANTHROPIC_API_KEY is not set.
 func TestExecutor_Execute_ClaudeCode_MissingAPIKey(t *testing.T) {
 	cleanup := restoreEnvVar(t, "ANTHROPIC_API_KEY")
@@ -300,6 +329,7 @@ func TestExecutor_Execute_Codex_MissingAPIKey(t *testing.T) {
 	defer cleanupCodex()
 	cleanupOpenAI := restoreEnvVar(t, "OPENAI_API_KEY")
 	defer cleanupOpenAI()
+	t.Setenv("HOME", t.TempDir())
 
 	mockRunner := createMockRunner([]byte("should not be called"), nil)
 	executor := NewExecutorWithRunner("codex", mockRunner)
@@ -310,12 +340,39 @@ func TestExecutor_Execute_Codex_MissingAPIKey(t *testing.T) {
 		t.Fatal("Execute() error = nil, want error")
 	}
 
-	expectedError := "CODEX_API_KEY or OPENAI_API_KEY environment variable is not set"
+	expectedError := "codex credentials are not configured"
 	if err.Error() != expectedError {
 		t.Errorf("Execute() error = %q, want %q", err.Error(), expectedError)
 	}
 
 	// Verify command was not executed
+	if mockRunner.CallCount != 0 {
+		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
+	}
+}
+
+func TestExecutor_Execute_Codex_EmptyAuthFile(t *testing.T) {
+	cleanupCodex := restoreEnvVar(t, "CODEX_API_KEY")
+	defer cleanupCodex()
+	cleanupOpenAI := restoreEnvVar(t, "OPENAI_API_KEY")
+	defer cleanupOpenAI()
+
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	authDir := filepath.Join(homeDir, ".codex")
+	if err := os.MkdirAll(authDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "auth.json"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	mockRunner := createMockRunner([]byte("should not be called"), nil)
+	executor := NewExecutorWithRunner("codex", mockRunner)
+	_, err := executor.Execute("/tmp/work", "test prompt")
+	if err == nil || err.Error() != "codex credentials are not configured" {
+		t.Fatalf("Execute() error = %v, want credential error", err)
+	}
 	if mockRunner.CallCount != 0 {
 		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
 	}
@@ -724,6 +781,7 @@ func TestExecutor_ExecuteWithOptions_Codex_MissingAPIKey(t *testing.T) {
 	defer cleanupCodex()
 	cleanupOpenAI := restoreEnvVar(t, "OPENAI_API_KEY")
 	defer cleanupOpenAI()
+	t.Setenv("HOME", t.TempDir())
 
 	mockRunner := createMockRunner([]byte("should not be called"), nil)
 	executor := NewExecutorWithRunner("codex", mockRunner)
@@ -734,7 +792,7 @@ func TestExecutor_ExecuteWithOptions_Codex_MissingAPIKey(t *testing.T) {
 		t.Fatal("ExecuteWithOptions() error = nil, want error")
 	}
 
-	expectedError := "CODEX_API_KEY or OPENAI_API_KEY environment variable is not set"
+	expectedError := "codex credentials are not configured"
 	if err.Error() != expectedError {
 		t.Errorf("ExecuteWithOptions() error = %q, want %q", err.Error(), expectedError)
 	}

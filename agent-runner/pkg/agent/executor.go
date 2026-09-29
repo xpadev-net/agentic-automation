@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -111,9 +112,17 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 // model selects the model via -m; empty or "auto" means the CLI default.
 // allowWrite selects the sandbox mode: workspace-write (edits allowed) or read-only.
 func (e *Executor) executeCodex(workDir, prompt, model string, allowWrite bool) (string, error) {
-	// Check if CODEX_API_KEY or OPENAI_API_KEY is set (Codex CLI accepts both)
+	// Codex accepts either API-key environment authentication or its OAuth auth file.
+	// Only check that the file is non-empty here; the CLI owns parsing and refreshing it.
 	if os.Getenv("CODEX_API_KEY") == "" && os.Getenv("OPENAI_API_KEY") == "" {
-		return "", fmt.Errorf("CODEX_API_KEY or OPENAI_API_KEY environment variable is not set")
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("codex credentials are not configured")
+		}
+		authInfo, err := os.Stat(filepath.Join(homeDir, ".codex", "auth.json"))
+		if err != nil || !authInfo.Mode().IsRegular() || authInfo.Size() == 0 {
+			return "", fmt.Errorf("codex credentials are not configured")
+		}
 	}
 
 	// Build command arguments: codex exec --sandbox <mode> [-m <model>] "<prompt>"

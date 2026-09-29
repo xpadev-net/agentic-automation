@@ -434,6 +434,7 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 			},
 		})
 	} else if jobCfg.AgentType == "codex" {
+		optional := true
 		envVars = append(envVars, corev1.EnvVar{
 			Name: "CODEX_API_KEY",
 			ValueFrom: &corev1.EnvVarSource{
@@ -441,7 +442,8 @@ func (c *KubernetesClient) buildEnvVars(jobCfg *JobConfig) []corev1.EnvVar {
 					LocalObjectReference: corev1.LocalObjectReference{
 						Name: codexAPIKeySecret,
 					},
-					Key: "api-key",
+					Key:      "api-key",
+					Optional: &optional,
 				},
 			},
 		})
@@ -526,6 +528,48 @@ func (c *KubernetesClient) BuildJobSpec(jobCfg *JobConfig) *batchv1.JobSpec {
 				},
 			},
 		},
+	}
+
+	if jobCfg.AgentType == "codex" {
+		const (
+			authInputVolume = "codex-auth-input"
+			authHomeVolume  = "codex-auth-home"
+		)
+		optional := true
+		secretName := appconfig.GetEnv("CODEX_AUTH_SECRET", "codex-auth")
+		jobSpec.Template.Spec.Volumes = append(jobSpec.Template.Spec.Volumes,
+			corev1.Volume{
+				Name: authInputVolume,
+				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+					SecretName: secretName,
+					Optional:   &optional,
+					Items: []corev1.KeyToPath{{
+						Key:  "auth.json",
+						Path: "auth.json",
+					}},
+				}},
+			},
+			corev1.Volume{
+				Name:         authHomeVolume,
+				VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+			},
+		)
+		jobSpec.Template.Spec.InitContainers = []corev1.Container{{
+			Name:    "initialize-codex-auth",
+			Image:   jobCfg.AgentRunnerImage,
+			Command: []string{"/bin/sh", "-c"},
+			Args: []string{
+				`if [ -s /codex-auth-input/auth.json ]; then cp /codex-auth-input/auth.json /codex-auth-home/auth.json && chmod 0600 /codex-auth-home/auth.json; fi`,
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: authInputVolume, MountPath: "/codex-auth-input", ReadOnly: true},
+				{Name: authHomeVolume, MountPath: "/codex-auth-home"},
+			},
+		}}
+		jobSpec.Template.Spec.Containers[0].VolumeMounts = append(
+			jobSpec.Template.Spec.Containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: authHomeVolume, MountPath: "/home/agent/.codex"},
+		)
 	}
 
 	// Set ImagePullSecrets if configured via environment variable
