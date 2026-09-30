@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -10,9 +9,9 @@ import (
 // ParsePRTitleAndBody parses the PR title and body from cursor-agent's output.
 // It extracts assistant entries from the JSON stream output and parses XML format.
 // Returns title and body, or an error if parsing fails.
-func ParsePRTitleAndBody(output string) (string, string, error) {
+func ParsePRTitleAndBody(output string, mode OutputMode) (string, string, error) {
 	// Extract all assistant entries from the output
-	assistantText, err := ExtractAssistantText(output)
+	assistantText, err := ExtractAssistantText(output, mode)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to extract assistant text: %w", err)
 	}
@@ -39,59 +38,6 @@ func ParsePRTitleAndBody(output string) (string, string, error) {
 	}
 
 	return title, body, nil
-}
-
-// ExtractAssistantText extracts all assistant entry text from the agent's output.
-// For cursor-agent it parses each line of the JSON stream and combines assistant entry messages.
-// For Codex it decodes completed agent_message events from the JSONL stream.
-// Plain-text output is returned unchanged when no supported assistant events are found.
-func ExtractAssistantText(output string) (string, error) {
-	var texts []string
-	lines := strings.Split(output, "\n")
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		entry, err := ParseLogEntry([]byte(line))
-		if err == nil {
-			// Extract text from Cursor assistant entries.
-			assistantEntry, ok := entry.(*AssistantEntry)
-			if !ok {
-				continue
-			}
-			for _, content := range assistantEntry.Message.Content {
-				if content.Type == "text" && content.Text != "" {
-					texts = append(texts, content.Text)
-				}
-			}
-			continue
-		}
-
-		var codexEvent struct {
-			Type string `json:"type"`
-			Item struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"item"`
-		}
-		if json.Unmarshal([]byte(line), &codexEvent) == nil &&
-			codexEvent.Type == "item.completed" &&
-			codexEvent.Item.Type == "agent_message" &&
-			codexEvent.Item.Text != "" {
-			texts = append(texts, codexEvent.Item.Text)
-		}
-	}
-
-	if len(texts) == 0 {
-		// Plain-text agents (e.g. codex exec) print the final message verbatim;
-		// downstream XML parsing operates on the whole output.
-		return output, nil
-	}
-
-	return strings.Join(texts, "\n"), nil
 }
 
 // parseXMLTitleAndBody parses XML format to extract title and body.
@@ -143,9 +89,9 @@ func parseXMLTitleAndBody(text string) (string, string, error) {
 // ParseCommitMessage parses the commit message from cursor-agent's output.
 // It extracts assistant entries from the JSON stream output and parses XML format.
 // Returns commit message, or an error if parsing fails.
-func ParseCommitMessage(output string) (string, error) {
+func ParseCommitMessage(output string, mode OutputMode) (string, error) {
 	// Extract all assistant entries from the output
-	assistantText, err := ExtractAssistantText(output)
+	assistantText, err := ExtractAssistantText(output, mode)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract assistant text: %w", err)
 	}

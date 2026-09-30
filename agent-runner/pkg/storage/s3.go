@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"agent-runner/pkg/redact"
 	"context"
 	"errors"
 	"fmt"
@@ -284,7 +285,7 @@ func (c *Client) Upload(ctx context.Context, key string, filePath string) error 
 		return fmt.Errorf("failed to get file info: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Uploading to S3: key=%s, size=%d\n", key, fileSize)
+	redact.Fprintf(os.Stderr, "Uploading to S3: key=%s, size=%d\n", key, fileSize)
 
 	// Configure exponential backoff
 	backoffConfig := backoff.NewExponentialBackOff()
@@ -297,7 +298,7 @@ func (c *Client) Upload(ctx context.Context, key string, filePath string) error 
 	operation := func() error {
 		retryCount++
 		if retryCount > 1 {
-			fmt.Fprintf(os.Stderr, "S3 upload retry attempt %d/%d\n", retryCount-1, c.config.MaxRetries)
+			redact.Fprintf(os.Stderr, "S3 upload retry attempt %d/%d\n", retryCount-1, c.config.MaxRetries)
 		}
 
 		// Open file for reading
@@ -318,19 +319,19 @@ func (c *Client) Upload(ctx context.Context, key string, filePath string) error 
 		_, err = c.s3Client.PutObject(ctx, putObjectInput)
 		if err != nil {
 			if isRetryableError(err) {
-				fmt.Fprintf(os.Stderr, "S3 upload failed (attempt %d/%d): %v, retrying...\n", retryCount, c.config.MaxRetries, err)
+				redact.Fprintf(os.Stderr, "S3 upload failed (attempt %d/%d): %v, retrying...\n", retryCount, c.config.MaxRetries, err)
 				return err // Trigger retry
 			} else {
 				// Non-retryable error
-				fmt.Fprintf(os.Stderr, "S3 upload failed with non-retryable error: %v\n", err)
+				redact.Fprintf(os.Stderr, "S3 upload failed with non-retryable error: %v\n", err)
 				return backoff.Permanent(err) // Stop retrying
 			}
 		}
 
 		if retryCount > 1 {
-			fmt.Fprintf(os.Stderr, "S3 upload succeeded after %d attempts: key=%s\n", retryCount, key)
+			redact.Fprintf(os.Stderr, "S3 upload succeeded after %d attempts: key=%s\n", retryCount, key)
 		} else {
-			fmt.Fprintf(os.Stderr, "S3 upload succeeded: key=%s\n", key)
+			redact.Fprintf(os.Stderr, "S3 upload succeeded: key=%s\n", key)
 		}
 		return nil
 	}
@@ -366,7 +367,7 @@ func (c *Client) Download(ctx context.Context, key string, filePath string) erro
 		return fmt.Errorf("failed to ensure directory: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Downloading from S3: key=%s\n", key)
+	redact.Fprintf(os.Stderr, "Downloading from S3: key=%s\n", key)
 
 	// Configure exponential backoff
 	backoffConfig := backoff.NewExponentialBackOff()
@@ -379,7 +380,7 @@ func (c *Client) Download(ctx context.Context, key string, filePath string) erro
 	operation := func() error {
 		retryCount++
 		if retryCount > 1 {
-			fmt.Fprintf(os.Stderr, "S3 download retry attempt %d/%d\n", retryCount-1, c.config.MaxRetries)
+			redact.Fprintf(os.Stderr, "S3 download retry attempt %d/%d\n", retryCount-1, c.config.MaxRetries)
 		}
 
 		// Create GetObject input
@@ -392,11 +393,11 @@ func (c *Client) Download(ctx context.Context, key string, filePath string) erro
 		getObjectOutput, err := c.s3Client.GetObject(ctx, getObjectInput)
 		if err != nil {
 			if isRetryableError(err) {
-				fmt.Fprintf(os.Stderr, "S3 download failed (attempt %d/%d): %v, retrying...\n", retryCount, c.config.MaxRetries, err)
+				redact.Fprintf(os.Stderr, "S3 download failed (attempt %d/%d): %v, retrying...\n", retryCount, c.config.MaxRetries, err)
 				return err // Trigger retry
 			} else {
 				// Non-retryable error
-				fmt.Fprintf(os.Stderr, "S3 download failed with non-retryable error: %v\n", err)
+				redact.Fprintf(os.Stderr, "S3 download failed with non-retryable error: %v\n", err)
 				return backoff.Permanent(err) // Stop retrying
 			}
 		}
@@ -417,19 +418,19 @@ func (c *Client) Download(ctx context.Context, key string, filePath string) erro
 				// Close and remove partial file before retry
 				localFile.Close()
 				os.Remove(filePath) // Ignore error if file doesn't exist
-				fmt.Fprintf(os.Stderr, "S3 download copy failed (attempt %d/%d): %v, retrying...\n", retryCount, c.config.MaxRetries, err)
+				redact.Fprintf(os.Stderr, "S3 download copy failed (attempt %d/%d): %v, retrying...\n", retryCount, c.config.MaxRetries, err)
 				return err // Trigger retry
 			} else {
 				// Non-retryable error (disk full, permission error, etc.)
-				fmt.Fprintf(os.Stderr, "S3 download copy failed with non-retryable error: %v\n", err)
+				redact.Fprintf(os.Stderr, "S3 download copy failed with non-retryable error: %v\n", err)
 				return backoff.Permanent(fmt.Errorf("failed to write to local file: %w", err))
 			}
 		}
 
 		if retryCount > 1 {
-			fmt.Fprintf(os.Stderr, "S3 download succeeded after %d attempts: key=%s -> %s\n", retryCount, key, filePath)
+			redact.Fprintf(os.Stderr, "S3 download succeeded after %d attempts: key=%s -> %s\n", retryCount, key, filePath)
 		} else {
-			fmt.Fprintf(os.Stderr, "S3 download succeeded: key=%s -> %s\n", key, filePath)
+			redact.Fprintf(os.Stderr, "S3 download succeeded: key=%s -> %s\n", key, filePath)
 		}
 		return nil
 	}

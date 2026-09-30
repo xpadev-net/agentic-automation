@@ -115,7 +115,7 @@ git checkout -b feature/issue-123 master
   Please fix the issue and ensure all tests pass."
   ```
   - 書き込み可能な実装実行では `--dangerously-bypass-approvals-and-sandbox`、plan creation では `--sandbox read-only` を使用（両者は排他的）
-  - `--json`: JSONL stdout を最終出力解析用に保持しながら runner ログへ逐次出力
+  - `--json`: JSONL stdout は最終出力解析用に保持し、runner ログには許可リスト内のイベント種別のみを出力（生の本文・tool output・stderr は出力しない）
   - `-m <model>`: `CODEX_MODEL` を付与（未設定時は `gpt-5.6-luna`）
 - 必須環境変数:
   - `CODEX_API_KEY` または `OPENAI_API_KEY`（いずれか）

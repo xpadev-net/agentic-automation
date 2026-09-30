@@ -124,6 +124,8 @@ func setupPlanExecutionTestFixtures(t *testing.T) (*gorm.DB, *models.AgentRun, *
 		ReviewFeedbackID: &reviewFeedback.ID,
 	}
 	require.NoError(t, db.Create(agentRun).Error)
+	reviewFeedback.ExecutionAgentRunID = &agentRun.ID
+	require.NoError(t, db.Save(reviewFeedback).Error)
 
 	return db, agentRun, reviewFeedback, issue
 }

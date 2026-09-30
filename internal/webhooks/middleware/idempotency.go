@@ -9,340 +9,86 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const deliveryHeader = "X-GitHub-Delivery"
-const eventHeader = "X-GitHub-Event"
 
-// webhookPayload represents a minimal structure to extract issue information from webhook payloads
 type webhookPayload struct {
 	Issue struct {
-		ID     uint64 `json:"id"`     // GitHub issue ID (numeric ID)
-		Number int    `json:"number"` // Issue number
-		Title  string `json:"title"`  // Issue title
-		State  string `json:"state"`  // Issue state (open/closed)
+		ID     uint64 `json:"id"`
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		State  string `json:"state"`
 	} `json:"issue"`
 	Repository struct {
-		FullName string `json:"full_name"` // Repository full name, e.g., "owner/repo"
+		FullName string `json:"full_name"`
 	} `json:"repository"`
 }
 
-// IdempotencyMiddleware is a Gin middleware that prevents duplicate processing
-// of GitHub webhook events by checking if an AgentRun with the same idempotency key
-// (X-GitHub-Delivery header) already exists in the database.
-//
-// For new events that have an issue ID in the payload, it creates a new AgentRun
-// record with state="queued" to persist the delivery ID for idempotency.
-//
-// If a record is found, it returns 200 OK and aborts the request to prevent
-// GitHub from retrying the webhook.
-// If no record is found and issue ID cannot be extracted, it continues processing
-// (for non-issue related events like pull_request, check_suite, etc.).
+// IdempotencyMiddleware separates webhook receipt deduplication from execution
+// admission. Ignored, denied, and coalesced deliveries never reserve AgentRuns.
+// Receipts are claimed before dispatch, preserving at-most-once side effects even
+// for approval comments that do not create an execution.
 func IdempotencyMiddleware() gin.HandlerFunc {
-	logger := config.GetLogger()
-
-	// Get database connection
 	db := config.GetDB()
-
-	// Initialize repositories
-	agentRunRepo := repositories.NewAgentRunRepository(db)
-	issueRepo := repositories.NewIssueRepository()
-
+	repo := repositories.NewAgentRunRepository(db)
 	return func(c *gin.Context) {
-		// Get delivery ID from header
 		deliveryID := c.GetHeader(deliveryHeader)
-
-		// Validate delivery ID
-		if deliveryID == "" {
-			logger.Warn("Missing X-GitHub-Delivery header",
-				config.String("path", c.Request.URL.Path),
-				config.String("method", c.Request.Method),
-			)
-			// Continue processing even without delivery ID (defensive programming)
-			// GitHub should always send this header, but we don't want to block
-			// in case of unusual circumstances
-			c.Next()
-			return
-		}
-
-		// An issues webhook is not itself an agent execution. In particular,
-		// ordinary assignments, unassignments, closes, and reopens must not
-		// reserve a queued AgentRun: doing so makes a later assignment to the
-		// configured bot look like an already-running execution. HandleIssues
-		// creates the idempotency record only after it has established that an
-		// eligible bot assignment should run.
-		if c.GetHeader(eventHeader) == models.EventTypeIssues {
-			// Keep the Issue projection up to date for close/reopen/dependency
-			// handling, but do not create an execution record for the event.
-			if payloadData, exists := c.Get("webhook_payload"); exists {
-				if payloadBytes, ok := payloadData.([]byte); ok {
-					var payload webhookPayload
-					if err := json.Unmarshal(payloadBytes, &payload); err == nil && payload.Repository.FullName != "" && payload.Issue.Number != 0 {
-						if err := issueRepo.UpsertSelective(payload.Repository.FullName, payload.Issue.Number, map[string]interface{}{
-							"title": payload.Issue.Title,
-							"state": payload.Issue.State,
-						}); err != nil {
-							logger.Error("Failed to upsert issue for issues webhook", config.Error(err), config.String("delivery_id", deliveryID))
-						}
-					}
-				}
-			}
-			c.Set("delivery_id", deliveryID)
-			c.Next()
-			return
-		}
-
-		// Check if this delivery ID has already been processed
-		existingRun, err := agentRunRepo.GetByIDempotencyKey(deliveryID)
-
-		if err != nil {
-			// Check if it's a "not found" error (expected case for new events)
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				// New event - try to persist the delivery ID by creating an AgentRun record
-				// This ensures that duplicate requests with the same delivery ID will be detected
-
-				// Get payload from context (set by signature middleware)
-				payloadBytes, exists := c.Get("webhook_payload")
-				if !exists {
-					// If payload is not in context, we cannot extract issue ID
-					// Continue processing - downstream handlers may handle this
-					logger.Debug("Processing new webhook delivery (no payload in context)",
-						config.String("delivery_id", deliveryID),
-						config.String("path", c.Request.URL.Path),
-					)
-					c.Set("delivery_id", deliveryID)
-					c.Next()
-					return
-				}
-
-				// Try to parse payload and extract issue ID
-				var payload webhookPayload
-				if err := json.Unmarshal(payloadBytes.([]byte), &payload); err != nil {
-					// Payload parsing failed - continue processing
-					// This may happen for non-issue related events
-					logger.Debug("Processing new webhook delivery (cannot parse payload for issue ID)",
-						config.String("delivery_id", deliveryID),
-						config.String("path", c.Request.URL.Path),
-						config.Error(err),
-					)
-					c.Set("delivery_id", deliveryID)
-					c.Next()
-					return
-				}
-
-				// Check if issue information was found in payload
-				if payload.Repository.FullName == "" || payload.Issue.Number == 0 {
-					// No repository or issue number in payload - this is not an issue-related event
-					// Continue processing without creating AgentRun
-					logger.Debug("Processing new webhook delivery (no repository or issue number in payload)",
-						config.String("delivery_id", deliveryID),
-						config.String("path", c.Request.URL.Path),
-					)
-					c.Set("delivery_id", deliveryID)
-					c.Next()
-					return
-				}
-
-				// Extract issue information from payload
-				repoFullName := payload.Repository.FullName
-				issueNumber := payload.Issue.Number
-				githubIssueID := payload.Issue.ID
-				issueTitle := payload.Issue.Title
-				issueState := payload.Issue.State
-
-				// Validate issue state
-				if issueState != "open" && issueState != "closed" {
-					issueState = "open" // Default to open if invalid state
-				}
-
-				// Look up or create Issue record using repo and number
-				// First, try to find existing issue
-				existingIssue, findErr := issueRepo.FindByRepoAndNumber(repoFullName, issueNumber)
-				var issue *models.Issue
-
-				if findErr != nil && errors.Is(findErr, gorm.ErrRecordNotFound) {
-					// Issue not found, create new one
-					issue = &models.Issue{
-						Repo:          repoFullName,
-						Number:        issueNumber,
-						GitHubIssueID: githubIssueID,
-						Title:         issueTitle,
-						State:         issueState,
-						Labels:        "[]",
-					}
-				} else if findErr != nil {
-					// Some other error occurred
-					logger.Error("Failed to find issue for idempotency",
-						config.Error(findErr),
-						config.String("delivery_id", deliveryID),
-						config.String("repo", repoFullName),
-						config.Int("issue_number", issueNumber),
-						config.String("path", c.Request.URL.Path),
-					)
-
-					// Return 200 OK to prevent GitHub from retrying
-					c.JSON(http.StatusOK, gin.H{
-						"error":       "failed to find issue",
-						"delivery_id": deliveryID,
-					})
-					c.Abort()
-					return
-				} else {
-					// Issue exists, update it (preserve existing GitHubIssueID if not set)
-					issue = existingIssue
-					issue.Title = issueTitle
-					issue.State = issueState
-					// Only update GitHubIssueID if it's not already set (0 means not set)
-					if existingIssue.GitHubIssueID == 0 {
-						issue.GitHubIssueID = githubIssueID
-					}
-
-					// Update the issue
-					if err := issueRepo.Update(issue); err != nil {
-						logger.Error("Failed to update issue for idempotency",
-							config.Error(err),
-							config.String("delivery_id", deliveryID),
-							config.String("repo", repoFullName),
-							config.Int("issue_number", issueNumber),
-							config.String("path", c.Request.URL.Path),
-						)
-
-						// Return 200 OK to prevent GitHub from retrying
-						c.JSON(http.StatusOK, gin.H{
-							"error":       "failed to update issue",
-							"delivery_id": deliveryID,
-						})
-						c.Abort()
-						return
-					}
-				}
-
-				// Create new issue if it doesn't exist
-				if issue.ID == 0 {
-					if err := issueRepo.Create(issue); err != nil {
-						// Failed to create issue - log error and abort
-						logger.Error("Failed to create issue for idempotency",
-							config.Error(err),
-							config.String("delivery_id", deliveryID),
-							config.String("repo", repoFullName),
-							config.Int("issue_number", issueNumber),
-							config.Uint64("github_issue_id", githubIssueID),
-							config.String("path", c.Request.URL.Path),
-						)
-
-						// Return 200 OK to prevent GitHub from retrying
-						c.JSON(http.StatusOK, gin.H{
-							"error":       "failed to create issue",
-							"delivery_id": deliveryID,
-						})
-						c.Abort()
-						return
-					}
-				}
-
-				// Use the internal database ID from the upserted issue
-				issueDBID := issue.ID
-
-				// Create AgentRun record to persist delivery ID
-				newRun := &models.AgentRun{
-					IssueID: issueDBID,
-					State:   "queued",                     // Initial state - will be updated by downstream handlers
-					Input:   datatypes.JSON([]byte("{}")), // Ensure valid JSON for MySQL JSON column
-					Output:  datatypes.JSON([]byte("{}")), // Ensure valid JSON for MySQL JSON column
-				}
-
-				createdRun, isNew, createErr := agentRunRepo.CreateOrGet(deliveryID, newRun)
-				if createErr != nil {
-					// Failed to create/get record - log error but continue processing
-					// The downstream handler may handle this or retry
-					logger.Error("Failed to persist delivery ID for idempotency",
-						config.Error(createErr),
-						config.String("delivery_id", deliveryID),
-						config.Int("issue_db_id", issueDBID),
-						config.String("repo", repoFullName),
-						config.Int("issue_number", issueNumber),
-						config.String("path", c.Request.URL.Path),
-					)
-
-					// Return 200 OK to prevent GitHub from retrying
-					c.JSON(http.StatusOK, gin.H{
-						"error":       "failed to persist idempotency record",
-						"delivery_id": deliveryID,
-					})
-					c.Abort()
-					return
-				}
-
-				if !isNew {
-					// Record already exists (race condition - another request created it)
-					logger.Info("Webhook already processed (race condition detected), skipping",
-						config.String("delivery_id", deliveryID),
-						config.Int("agent_run_id", createdRun.ID),
-						config.String("agent_run_state", createdRun.State),
-						config.String("path", c.Request.URL.Path),
-					)
-
-					// Return 200 OK to acknowledge receipt and prevent GitHub from retrying
-					c.JSON(http.StatusOK, gin.H{
-						"status":      "already_processed",
-						"delivery_id": deliveryID,
-					})
-					c.Abort()
-					return
-				}
-
-				// Successfully created new record
-				logger.Debug("Created idempotency record for new webhook delivery",
-					config.String("delivery_id", deliveryID),
-					config.Int("agent_run_id", createdRun.ID),
-					config.Int("issue_db_id", issueDBID),
-					config.String("repo", repoFullName),
-					config.Int("issue_number", issueNumber),
-					config.String("path", c.Request.URL.Path),
-				)
-
-				// Store delivery ID and agent run ID in context for downstream handlers
-				c.Set("delivery_id", deliveryID)
-				c.Set("agent_run_id", createdRun.ID)
-
-				// Continue to next handler
-				c.Next()
+		c.Set("delivery_id", deliveryID)
+		if deliveryID != "" {
+			run, err := repo.GetByIDempotencyKey(deliveryID)
+			if err == nil {
+				c.AbortWithStatusJSON(http.StatusOK, gin.H{"status": "already_processed", "delivery_id": deliveryID, "agent_run_id": run.ID})
 				return
 			}
-
-			// Database error (unexpected)
-			logger.Error("Failed to check idempotency",
-				config.Error(err),
-				config.String("delivery_id", deliveryID),
-				config.String("path", c.Request.URL.Path),
-				config.String("method", c.Request.Method),
-			)
-
-			// Return 200 OK to prevent GitHub from retrying
-			// We log the error but don't want GitHub to keep retrying
-			c.JSON(http.StatusOK, gin.H{
-				"error":       "idempotency check failed",
-				"delivery_id": deliveryID,
-			})
-			c.Abort()
-			return
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "failed to check idempotency"})
+				return
+			}
 		}
 
-		// Existing record found - this webhook has already been processed
-		logger.Info("Webhook already processed, skipping",
-			config.String("delivery_id", deliveryID),
-			config.Int("agent_run_id", existingRun.ID),
-			config.String("agent_run_state", existingRun.State),
-			config.String("path", c.Request.URL.Path),
-		)
-
-		// Return 200 OK to acknowledge receipt and prevent GitHub from retrying
-		c.JSON(http.StatusOK, gin.H{
-			"status":      "already_processed",
-			"delivery_id": deliveryID,
+		duplicate := false
+		err := db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			if deliveryID != "" {
+				claimed, err := repositories.ClaimWebhookDelivery(tx, deliveryID, c.GetHeader("X-GitHub-Event"))
+				if err != nil {
+					return err
+				}
+				if !claimed {
+					duplicate = true
+					return nil
+				}
+			}
+			// Claim and projection commit together. A duplicate old delivery must not
+			// overwrite the projection (for example, close an already reopened Issue).
+			if raw, exists := c.Get("webhook_payload"); exists {
+				if body, ok := raw.([]byte); ok {
+					var payload webhookPayload
+					if json.Unmarshal(body, &payload) == nil && payload.Repository.FullName != "" && payload.Issue.Number > 0 {
+						state := payload.Issue.State
+						if state != "open" && state != "closed" {
+							state = "open"
+						}
+						issue := models.Issue{Repo: payload.Repository.FullName, Number: payload.Issue.Number, GitHubIssueID: payload.Issue.ID, Title: payload.Issue.Title, State: state, Labels: "[]"}
+						return tx.Clauses(clause.OnConflict{
+							Columns:   []clause.Column{{Name: "repo"}, {Name: "number"}},
+							DoUpdates: clause.AssignmentColumns([]string{"title", "state", "updated_at"}),
+						}).Create(&issue).Error
+					}
+				}
+			}
+			return nil
 		})
-		c.Abort()
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "failed to persist webhook receipt"})
+			return
+		}
+		if duplicate {
+			c.AbortWithStatusJSON(http.StatusOK, gin.H{"status": "already_processed", "delivery_id": deliveryID})
+			return
+		}
+		c.Next()
 	}
 }

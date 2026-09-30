@@ -6,22 +6,27 @@ hooks:
 
 validation:
   - name: "deps"
-    command: "go mod download && go mod tidy"
-    description: "Download and tidy Go module dependencies"
+    command: "bash scripts/check-go-modules.sh deps"
+    description: "Verify dependencies and tidiness for both Go modules"
     timeout: "3m"
     required: true
   - name: "fmt"
-    command: "gofmt -s -w ."
+    command: "bash scripts/check-go-modules.sh fmt"
     description: "Check Go code formatting"
     timeout: "1m"
     required: true
+  - name: "vet"
+    command: "bash scripts/check-go-modules.sh vet"
+    description: "Run go vet in both Go modules"
+    timeout: "5m"
+    required: true
   - name: "test"
-    command: "go test ./... -v"
-    description: "Run all tests"
+    command: "bash scripts/check-go-modules.sh test"
+    description: "Run tests in both Go modules"
     timeout: "10m"
     required: true
   - name: "build"
-    command: "go build ./..."
-    description: "Compile all packages"
+    command: "bash scripts/check-go-modules.sh build"
+    description: "Build operator and agent-runner binaries"
     timeout: "5m"
     required: true

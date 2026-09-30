@@ -156,6 +156,7 @@ func setupDBForUS4(t *testing.T) *gorm.DB {
 		CREATE INDEX IF NOT EXISTS idx_review_feedback_pr_id ON review_feedback(pr_id);
 	`).Error)
 
+	require.NoError(t, db.AutoMigrate(&models.WebhookDelivery{}))
 	return db
 }
 

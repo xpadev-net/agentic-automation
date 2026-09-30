@@ -101,6 +101,7 @@ func setupDBForUS5(t *testing.T) *gorm.DB {
     `).Error
 	require.NoError(t, err)
 
+	require.NoError(t, db.AutoMigrate(&models.WebhookDelivery{}))
 	return db
 }
 

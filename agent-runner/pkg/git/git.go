@@ -523,7 +523,7 @@ func GeneratePRTitleAndBody(workDir string, repo string, issueNumber int, issueP
 	}
 
 	// Parse output to extract title and body
-	title, body, err := utils.ParsePRTitleAndBody(output)
+	title, body, err := utils.ParsePRTitleAndBody(output, utils.OutputModeForAgent(agentType))
 	if err != nil {
 		return "", "", fmt.Errorf("failed to parse PR title and body: %w", err)
 	}
@@ -586,7 +586,7 @@ func GenerateCommitMessage(workDir string, repo string, issueNumber int, issuePr
 	}
 
 	// Parse output to extract commit message
-	commitMsg, err := utils.ParseCommitMessage(output)
+	commitMsg, err := utils.ParseCommitMessage(output, utils.OutputModeForAgent(agentType))
 	if err != nil {
 		return "", fmt.Errorf("failed to parse commit message: %w", err)
 	}

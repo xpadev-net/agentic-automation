@@ -1,6 +1,7 @@
 package hooks
 
 import (
+	"agent-runner/pkg/redact"
 	"bufio"
 	"context"
 	"fmt"
@@ -74,6 +75,19 @@ func runCommand(cmd config.Command, workDir string) error {
 		}
 	}
 
+	// Context cancellation must also close inherited read pipes. Killing the
+	// shell alone does not unblock scanners when a child still owns a pipe.
+	pipesDone := make(chan struct{})
+	defer close(pipesDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = stdout.Close()
+			_ = stderr.Close()
+		case <-pipesDone:
+		}
+	}()
+
 	// Ring buffer to store only the last N lines for error reporting.
 	// Since output is already streamed to stdout/stderr, we don't need to keep all output.
 	// This prevents excessive memory consumption when commands produce large amounts of output.
@@ -122,13 +136,13 @@ func runCommand(cmd config.Command, workDir string) error {
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			lineWithPrefix := prefix + line + "\n"
+			lineWithPrefix := fmt.Sprintf("%soutput received (%d bytes suppressed)\n", prefix, len(line))
 
 			// Append to ring buffer (keeps only last N lines for error reporting)
 			appendToRingBuffer(outputLines, line)
 
 			// Stream to os.Stdout in real-time
-			fmt.Fprint(os.Stdout, lineWithPrefix)
+			redact.Fprintf(os.Stdout, "%s", lineWithPrefix)
 			os.Stdout.Sync()
 		}
 		if err := scanner.Err(); err != nil {
@@ -147,13 +161,13 @@ func runCommand(cmd config.Command, workDir string) error {
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			lineWithPrefix := prefix + line + "\n"
+			lineWithPrefix := fmt.Sprintf("%soutput received (%d bytes suppressed)\n", prefix, len(line))
 
 			// Append to ring buffer (keeps only last N lines for error reporting)
 			appendToRingBuffer(stderrLines, line)
 
 			// Stream to os.Stderr in real-time
-			fmt.Fprint(os.Stderr, lineWithPrefix)
+			redact.Fprintf(os.Stderr, "%s", lineWithPrefix)
 			os.Stderr.Sync()
 		}
 		if err := scanner.Err(); err != nil {
@@ -217,10 +231,13 @@ func runCommand(cmd config.Command, workDir string) error {
 
 		// Add notice that only last N lines are shown (output is already streamed)
 		if outputStr != "" {
-			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Full output was streamed to stdout/stderr.]\n\n%s",
+			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Raw output was not published to progress logs.]\n\n%s",
 				maxErrorOutputLines, outputStr)
 		}
 
+		if ctx.Err() != nil {
+			return &HookError{Name: cmd.Name, Command: cmd.Command, Output: outputStr, Err: ctx.Err()}
+		}
 		if killErr != nil {
 			return &HookError{
 				Name:    cmd.Name,
@@ -256,10 +273,13 @@ func runCommand(cmd config.Command, workDir string) error {
 
 		// Add notice that only last N lines are shown (output is already streamed)
 		if outputStr != "" {
-			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Full output was streamed to stdout/stderr.]\n\n%s",
+			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Raw output was not published to progress logs.]\n\n%s",
 				maxErrorOutputLines, outputStr)
 		}
 
+		if ctx.Err() != nil {
+			return &HookError{Name: cmd.Name, Command: cmd.Command, Output: outputStr, Err: ctx.Err()}
+		}
 		if killErr != nil {
 			return &HookError{
 				Name:    cmd.Name,
@@ -293,7 +313,7 @@ func runCommand(cmd config.Command, workDir string) error {
 
 		// Add notice that only last N lines are shown (output is already streamed)
 		if outputStr != "" {
-			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Full output was streamed to stdout/stderr.]\n\n%s",
+			outputStr = fmt.Sprintf("[Showing last %d lines of output for error context. Raw output was not published to progress logs.]\n\n%s",
 				maxErrorOutputLines, outputStr)
 		}
 
@@ -322,7 +342,7 @@ func RunPreHooks(commands []config.Command, workDir string) error {
 				return err
 			}
 			// Optional hook failed - log warning and continue
-			fmt.Fprintf(os.Stderr, "WARNING: Optional pre-hook '%s' failed: %v\n", cmd.Name, err)
+			redact.Fprintf(os.Stderr, "WARNING: Optional pre-hook '%s' failed: %v\n", cmd.Name, err)
 		}
 	}
 
@@ -345,7 +365,7 @@ func RunValidations(commands []config.Command, workDir string) error {
 				errorMsg := err.Error()
 				failedValidations = append(failedValidations, errorMsg)
 			} else {
-				fmt.Fprintf(os.Stderr, "WARNING: Optional validation '%s' failed: %v\n", cmd.Name, err)
+				redact.Fprintf(os.Stderr, "WARNING: Optional validation '%s' failed: %v\n", cmd.Name, err)
 			}
 		}
 	}
@@ -367,7 +387,7 @@ func RunPostHooks(commands []config.Command, workDir string) error {
 
 	for _, cmd := range commands {
 		if err := runCommand(cmd, workDir); err != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Post-hook '%s' failed: %v\n", cmd.Name, err)
+			redact.Fprintf(os.Stderr, "WARNING: Post-hook '%s' failed: %v\n", cmd.Name, err)
 		}
 	}
 

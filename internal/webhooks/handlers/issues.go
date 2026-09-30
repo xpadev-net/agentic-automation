@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/datatypes"
 )
 
 const issuesDeliveryHeader = "X-GitHub-Delivery"
@@ -190,60 +189,8 @@ func HandleIssuesWithDeps(c *gin.Context, deps IssuesDeps) {
 			return
 		}
 
-		issueRepo := repositories.NewIssueRepository()
-		runRepo := repositories.NewAgentRunRepository(config.GetDB())
-		// The idempotency middleware deliberately does not reserve AgentRuns for
-		// issues events. Upsert the issue here, after eligibility checks, so a
-		// non-bot assignment cannot affect execution state.
-		if err := issueRepo.UpsertSelective(payload.Repository.FullName, payload.Issue.Number, map[string]interface{}{
-			"title": payload.Issue.Title,
-			"state": payload.Issue.State,
-		}); err != nil {
-			logger.Error("Failed to upsert assignment Issue", config.Error(err), config.String("delivery_id", deliveryID))
-			c.Error(err)
-			return
-		}
-		issue, err := issueRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.Issue.Number)
-		if err != nil {
-			logger.Error("Failed to load assignment Issue", config.Error(err), config.String("delivery_id", deliveryID))
-			c.Error(err)
-			return
-		}
-
-		activeRuns, err := runRepo.GetByIssueID(issue.ID)
-		if err != nil {
-			logger.Error("Failed to check active AgentRuns for assignment", config.Error(err), config.Int("issue_id", issue.ID))
-			c.Error(err)
-			return
-		}
-		for _, run := range activeRuns {
-			if run.State == "queued" || run.State == "started" {
-				logger.Info("Skipping assignment because an AgentRun is already active", config.Int("issue_id", issue.ID), config.Int("agent_run_id", run.ID), config.String("delivery_id", deliveryID))
-				c.JSON(http.StatusOK, gin.H{"status": "already_running", "agent_run_id": run.ID, "delivery_id": deliveryID})
-				return
-			}
-		}
-
-		// Reserve the delivery only after the active-run check. The issues
-		// idempotency middleware intentionally does not create AgentRuns, since
-		// most issues events are not execution requests. The existing
-		// issue_comment flow expects this record to exist before it is called.
-		currentRun, isNew, err := runRepo.CreateOrGet(deliveryID, &models.AgentRun{
-			IssueID: issue.ID,
-			State:   "queued",
-			Input:   datatypes.JSON([]byte("{}")),
-			Output:  datatypes.JSON([]byte("{}")),
-		})
-		if err != nil {
-			logger.Error("Failed to reserve assignment AgentRun", config.Error(err), config.String("delivery_id", deliveryID))
-			c.Error(err)
-			return
-		}
-		if !isNew {
-			logger.Info("Assignment webhook already processed", config.String("delivery_id", deliveryID), config.Int("agent_run_id", currentRun.ID))
-			c.JSON(http.StatusOK, gin.H{"status": "already_processed", "agent_run_id": currentRun.ID, "delivery_id": deliveryID})
-			return
-		}
+		// Qualification and permission checks, then atomic admission, belong to
+		// the shared execution handler. Assignment receipt is not an AgentRun.
 
 		synthetic := IssueCommentPayload{
 			Action:     models.IssueCommentActionCreated,

@@ -97,10 +97,13 @@ func setupIssueCommentDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.Exec(`
         CREATE TABLE IF NOT EXISTS blocker_graph_edges (
             task_id INTEGER,
-            depends_on_task_id INTEGER
+            depends_on_task_id INTEGER,
+            created_at DATETIME
         );
     `).Error)
 
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_issue_repo_number ON issues(repo, number)").Error)
+	require.NoError(t, db.AutoMigrate(&models.WebhookDelivery{}))
 	return db
 }
 
@@ -131,6 +134,7 @@ func TestIssueComment_BlockedDependencies_PreventsStart(t *testing.T) {
 
 	// Prepare deps
 	deps := handlers.IssueCommentDeps{
+		KubernetesClient:         clients.NewKubernetesClientWithClientset(logger),
 		Logger:                   logger,
 		AuthorizationService:     &allowAuth{},
 		IssueContextService:      &simpleIssueCtx{},
@@ -147,7 +151,12 @@ func TestIssueComment_BlockedDependencies_PreventsStart(t *testing.T) {
 	router.POST("/webhooks/issue_comment",
 		middleware.VerifyWebhookSignature(),
 		middleware.IdempotencyMiddleware(),
-		func(c *gin.Context) { handlers.HandleIssueCommentWithDeps(c, deps) },
+		func(c *gin.Context) {
+			handlers.HandleIssueCommentWithDeps(c, deps)
+			if len(c.Errors) > 0 {
+				require.ErrorIs(t, c.Errors.Last().Err, services.ErrBlockedDependencies)
+			}
+		},
 	)
 
 	// Construct payload

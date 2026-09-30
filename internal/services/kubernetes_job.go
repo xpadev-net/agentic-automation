@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"agentic-automation/internal/clients"
 	"agentic-automation/internal/config"
@@ -195,6 +196,8 @@ func extractPreviousAttemptsJSON(agentRun *models.AgentRun, logger *config.AppLo
 
 // CreateJobForAgentRun creates a Kubernetes Job for the given AgentRun and Issue
 func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, branchName string) (*batchv1.Job, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	// Input validation
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil",
@@ -253,7 +256,14 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 
 	// Check for existing active job to prevent duplicate creation
 	existingJob, err := s.kubernetesClient.FindActiveJobByAgentRunID(ctx, agentRun.ID)
-	if err == nil && existingJob != nil {
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if err == nil && existingJob != nil && !isPriorReportedAttempt(existingJob, agentRun) {
+		if existingJob.Labels["retry-count"] == strconv.Itoa(agentRun.RetryCount) {
+			agentRun.JobName = &existingJob.Name
+			return existingJob, nil
+		}
 		// Active job already exists, return AlreadyExists error
 		s.logger.Info("Active job already exists for agent run, skipping creation",
 			config.Int("agent_run_id", agentRun.ID),
@@ -265,19 +275,10 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 			existingJob.Name,
 		)
 	}
-	// If error is not nil, it means no active job was found, which is expected for new jobs
-	// Continue with job creation
+	// NotFound is expected for a new attempt; other lookup errors stop dispatch.
 
 	// Generate job name
-	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
-	if err != nil {
-		s.logger.Error("Failed to generate job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate job name: %w", err)
-	}
+	jobName := agentRun.AttemptJobName()
 
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
@@ -325,6 +326,8 @@ func (s *kubernetesJobService) CreateJobForAgentRun(ctx context.Context, agentRu
 
 // CreateJobForAgentRunWithFeedback creates a Kubernetes Job with aggregated feedback for retry
 func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, prompt string, feedback *AggregatedFeedback, branchName string) (*batchv1.Job, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	// Input validation
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil",
@@ -413,7 +416,14 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 
 	// Check for existing active job to prevent duplicate creation
 	existingJob, err := s.kubernetesClient.FindActiveJobByAgentRunID(ctx, agentRun.ID)
-	if err == nil && existingJob != nil {
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if err == nil && existingJob != nil && !isPriorReportedAttempt(existingJob, agentRun) {
+		if existingJob.Labels["retry-count"] == strconv.Itoa(agentRun.RetryCount) {
+			agentRun.JobName = &existingJob.Name
+			return existingJob, nil
+		}
 		// Active job already exists, return AlreadyExists error
 		s.logger.Info("Active job already exists for agent run, skipping creation",
 			config.Int("agent_run_id", agentRun.ID),
@@ -425,19 +435,10 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 			existingJob.Name,
 		)
 	}
-	// If error is not nil, it means no active job was found, which is expected for new jobs
-	// Continue with job creation
+	// NotFound is expected for a new attempt; other lookup errors stop dispatch.
 
 	// Generate job name
-	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
-	if err != nil {
-		s.logger.Error("Failed to generate job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate job name: %w", err)
-	}
+	jobName := agentRun.AttemptJobName()
 
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
@@ -487,6 +488,8 @@ func (s *kubernetesJobService) CreateJobForAgentRunWithFeedback(ctx context.Cont
 // CreateJobForPlanCreation creates a Kubernetes Job that generates a plan from review feedback content or issue content.
 // reviewFeedback can be nil for issue-triggered plan creation (e.g., /run-agent from issue).
 func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, reviewFeedback *models.ReviewFeedback, branchName string) (*batchv1.Job, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil for plan creation",
 			config.String("service", "kubernetes_job"),
@@ -583,7 +586,14 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 
 	// Check for existing active job to prevent duplicate creation
 	existingJob, err := s.kubernetesClient.FindActiveJobByAgentRunID(ctx, agentRun.ID)
-	if err == nil && existingJob != nil {
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if err == nil && existingJob != nil && !isPriorReportedAttempt(existingJob, agentRun) {
+		if existingJob.Labels["retry-count"] == strconv.Itoa(agentRun.RetryCount) {
+			agentRun.JobName = &existingJob.Name
+			return existingJob, nil
+		}
 		// Active job already exists, return AlreadyExists error
 		s.logger.Info("Active job already exists for agent run, skipping plan creation",
 			config.Int("agent_run_id", agentRun.ID),
@@ -597,19 +607,9 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 			existingJob.Name,
 		)
 	}
-	// If error is not nil, it means no active job was found, which is expected for new jobs
-	// Continue with job creation
+	// NotFound is expected for a new attempt; other lookup errors stop dispatch.
 
-	jobName, err := s.kubernetesClient.GeneratePlanCreationJobName(agentRun.ID, reviewFeedbackID)
-	if err != nil {
-		s.logger.Error("Failed to generate plan creation job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Int("review_feedback_id", reviewFeedbackID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate plan creation job name: %w", err)
-	}
+	jobName := fmt.Sprintf("agent-runner-%d-plan-%d-attempt-%d", agentRun.ID, reviewFeedbackID, agentRun.RetryCount)
 
 	jobConfig := &clients.JobConfig{
 		AgentRunID:            agentRun.ID,
@@ -660,6 +660,8 @@ func (s *kubernetesJobService) CreateJobForPlanCreation(ctx context.Context, age
 
 // CreateJobForPlanExecution creates a Kubernetes Job for executing a previously generated plan.
 func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, agentRun *models.AgentRun, issue *models.Issue, planContent string, branchName string) (*batchv1.Job, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	if agentRun == nil {
 		s.logger.Error("agentRun must not be nil for plan execution",
 			config.String("service", "kubernetes_job"),
@@ -724,16 +726,18 @@ func (s *kubernetesJobService) CreateJobForPlanExecution(ctx context.Context, ag
 		prompt = buildPlanExecutionPrompt(issue)
 	}
 
-	// Generate job name
-	jobName, err := s.kubernetesClient.GenerateJobName(agentRun.ID)
-	if err != nil {
-		s.logger.Error("Failed to generate job name",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Error(err),
-			config.String("service", "kubernetes_job"),
-		)
-		return nil, fmt.Errorf("failed to generate job name: %w", err)
+	if existing, err := s.kubernetesClient.FindActiveJobByAgentRunID(ctx, agentRun.ID); err == nil && existing != nil && !isPriorReportedAttempt(existing, agentRun) {
+		if existing.Labels["retry-count"] == strconv.Itoa(agentRun.RetryCount) {
+			agentRun.JobName = &existing.Name
+			return existing, nil
+		}
+		return nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "jobs"}, existing.Name)
+	} else if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
 	}
+
+	// Generate job name
+	jobName := agentRun.AttemptJobName()
 
 	jobConfig := &clients.JobConfig{
 		AgentRunID:       agentRun.ID,
@@ -802,4 +806,19 @@ func buildPlanExecutionPrompt(issue *models.Issue) string {
 	}
 
 	return fmt.Sprintf("%s\n\n%s", title, body)
+}
+
+// A new retry is admitted only by CAS from a terminal reported attempt. That
+// older Pod can still be finishing its report HTTP call/cleanup; it must not
+// strand the admitted next attempt. Same/future attempts remain protected.
+func isPriorReportedAttempt(job *batchv1.Job, run *models.AgentRun) bool {
+	attempt := 0
+	if value, exists := job.Labels["retry-count"]; exists {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return false
+		}
+		attempt = parsed
+	}
+	return attempt < run.RetryCount
 }

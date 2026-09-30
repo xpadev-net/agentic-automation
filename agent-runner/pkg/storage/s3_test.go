@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -274,12 +276,16 @@ func createTempDir(t *testing.T) (string, func()) {
 
 // createMockS3Client creates a mock S3 client that can be used for testing
 // Note: This is a simplified approach. In practice, we need to work with the actual *s3.Client type.
+type offlineS3HTTPClient struct{}
+
+func (offlineS3HTTPClient) Do(req *http.Request) (*http.Response, error) {
+	const payload = "fixture object bytes"
+	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(payload)), ContentLength: int64(len(payload)), Request: req}, nil
+}
 func createMockS3Client() *s3.Client {
-	// Create a minimal real S3 client with fake credentials
-	// This will fail on actual operations, but allows us to test the structure
-	awsCfg := aws.Config{
-		Region: "us-east-1",
-	}
+	// Exercise the SDK through an injected deterministic transport. No fixture
+	// may contact an external bucket or credential endpoint.
+	awsCfg := aws.Config{Region: "us-east-1", HTTPClient: offlineS3HTTPClient{}}
 	return s3.NewFromConfig(awsCfg)
 }
 
@@ -795,15 +801,9 @@ func TestClient_Download_DirectoryCreation(t *testing.T) {
 	// Create a nested directory path
 	nestedPath := filepath.Join(tmpDir, "nested", "directory", "output.txt")
 
-	// This will fail on S3 operation, but we can verify directory creation
-	// Note: The actual S3 operation will fail, but ensureDir is called first
 	err = client.Download(context.Background(), "test-key", nestedPath)
-
-	// The S3 operation will fail (no real S3), but the directory should be created first
-	// Verify that the directory exists (even if the download failed)
-	dir := filepath.Dir(nestedPath)
-	_, statErr := os.Stat(dir)
-	// The directory might be created or the operation might fail before directory creation
-	// depending on when the S3 error occurs. This is a limitation of testing without mocking.
-	_ = statErr // We note this limitation but don't assert on it
+	require.NoError(t, err)
+	data, err := os.ReadFile(nestedPath)
+	require.NoError(t, err)
+	assert.Equal(t, "fixture object bytes", string(data))
 }

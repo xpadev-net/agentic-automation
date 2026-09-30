@@ -1,6 +1,8 @@
 package models
 
 import (
+	"fmt"
+	"gorm.io/gorm"
 	"time"
 
 	"gorm.io/datatypes"
@@ -8,6 +10,9 @@ import (
 
 // AgentRun represents an execution of an AI agent for an Issue
 type AgentRun struct {
+	// observedLifecycle is an optimistic lock snapshot. It is not a DB column.
+	observedLifecycle *AgentRunLifecycle
+
 	ID             int    `gorm:"primaryKey;autoIncrement"`
 	IdempotencyKey string `gorm:"column:idempotency_key;uniqueIndex;size:191"`
 	IssueID        int    `gorm:"column:issue_id;index"`
@@ -46,4 +51,41 @@ type AgentRun struct {
 // TableName specifies the table name for AgentRun
 func (AgentRun) TableName() string {
 	return "agent_runs"
+}
+
+// AgentRunLifecycle identifies one observed state of one execution attempt.
+type AgentRunLifecycle struct {
+	State      string
+	RetryCount int
+	JobName    *string
+}
+
+func (r *AgentRun) CaptureLifecycle() {
+	snapshot := AgentRunLifecycle{State: r.State, RetryCount: r.RetryCount}
+	if r.JobName != nil {
+		name := *r.JobName
+		snapshot.JobName = &name
+	}
+	r.observedLifecycle = &snapshot
+}
+func (r *AgentRun) ObservedLifecycle() (AgentRunLifecycle, bool) {
+	if r.observedLifecycle == nil {
+		return AgentRunLifecycle{}, false
+	}
+	return *r.observedLifecycle, true
+}
+func (r *AgentRun) AfterFind(_ *gorm.DB) error   { r.CaptureLifecycle(); return nil }
+func (r *AgentRun) AfterCreate(_ *gorm.DB) error { r.CaptureLifecycle(); return nil }
+
+// AttemptJobName is stable for retries of the same Kubernetes Create operation.
+// Increment RetryCount only for an explicitly admitted new execution attempt.
+func (r *AgentRun) AttemptJobName() string {
+	if r.ExecutionMode == "plan_creation" {
+		feedbackID := 0
+		if r.ReviewFeedbackID != nil {
+			feedbackID = *r.ReviewFeedbackID
+		}
+		return fmt.Sprintf("agent-runner-%d-plan-%d-attempt-%d", r.ID, feedbackID, r.RetryCount)
+	}
+	return fmt.Sprintf("agent-runner-%d-attempt-%d", r.ID, r.RetryCount)
 }

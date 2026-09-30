@@ -15,10 +15,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/datatypes"
-	"gorm.io/gorm"
 )
 
 // IssueCommentPayload represents the GitHub webhook payload for issue_comment events
@@ -262,7 +262,8 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 
 	// Create context
-	ctx := c.Request.Context()
+	ctx, cancelPreparation := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancelPreparation()
 
 	// Step 2: Payload parsing
 	payloadData, exists := c.Get("webhook_payload")
@@ -772,78 +773,43 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		config.String("delivery_id", deliveryID),
 	)
 
-	// Step 7: Get AgentRun (created by idempotency middleware)
-	agentRun, err := repositories.NewAgentRunRepository(db).GetByIDempotencyKey(deliveryID)
-	if err != nil {
-		if stderrors.Is(err, gorm.ErrRecordNotFound) {
-			logger.Error("AgentRun not found for delivery ID (should be created by middleware)",
-				config.Error(err),
-				config.String("delivery_id", deliveryID),
-				config.Int("issue_number", payload.Issue.Number),
-				config.String("repo", payload.Repository.FullName),
-			)
-			c.Error(errors.NewCodedError(errors.ERR_AGENT_RUN_NOT_FOUND, "agent run not found for delivery ID", nil))
-			return
-		}
-		logger.Error("Failed to get AgentRun by idempotency key",
-			config.Error(err),
-			config.String("delivery_id", deliveryID),
-		)
-		c.Error(err)
-		return
-	}
-
-	logger.Info("AgentRun retrieved",
-		config.Int("agent_run_id", agentRun.ID),
-		config.String("state", agentRun.State),
-		config.String("delivery_id", deliveryID),
-	)
-
-	// Check if AgentRun is already processed
-	if agentRun.State != "queued" {
-		logger.Info("AgentRun already processed",
-			config.Int("agent_run_id", agentRun.ID),
-			config.String("state", agentRun.State),
-			config.String("delivery_id", deliveryID),
-		)
-		c.JSON(http.StatusOK, gin.H{
-			"status":       "already_processed",
-			"agent_run_id": agentRun.ID,
-			"state":        agentRun.State,
-			"delivery_id":  deliveryID,
-		})
-		return
-	}
-
-	// Step 8: Get Issue (created by idempotency middleware)
+	// Only qualified, authorized requests can reserve an execution. Admission
+	// locks the Issue row so concurrent deliveries cannot both start a job.
 	issue, err := issueRepo.FindByRepoAndNumber(payload.Repository.FullName, payload.Issue.Number)
 	if err != nil {
-		if stderrors.Is(err, gorm.ErrRecordNotFound) {
-			logger.Error("Issue not found (should be created by middleware)",
-				config.Error(err),
-				config.String("delivery_id", deliveryID),
-				config.Int("issue_number", payload.Issue.Number),
-				config.String("repo", payload.Repository.FullName),
-			)
-			c.Error(errors.NewCodedError(errors.ERR_DB_RECORD_NOT_FOUND, "issue not found", nil))
-			return
-		}
-		logger.Error("Failed to get Issue",
-			config.Error(err),
-			config.String("delivery_id", deliveryID),
-			config.Int("issue_number", payload.Issue.Number),
-			config.String("repo", payload.Repository.FullName),
-		)
 		c.Error(err)
 		return
 	}
+	agentRun, admitted, err := repositories.ReserveIssueRun(db.WithContext(ctx), deliveryID, issue.ID)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+	if !admitted {
+		status := "already_running"
+		if agentRun.IdempotencyKey == deliveryID {
+			status = "already_processed"
+		}
+		c.JSON(http.StatusOK, gin.H{"status": status, "agent_run_id": agentRun.ID, "delivery_id": deliveryID})
+		return
+	}
 
-	logger.Info("Issue retrieved",
-		config.Int("issue_id", issue.ID),
-		config.Int("issue_number", issue.Number),
-		config.String("repo", issue.Repo),
-		config.String("delivery_id", deliveryID),
-	)
+	jobSubmissionAttempted := false
+	defer func() {
+		if len(c.Errors) > 0 && !jobSubmissionAttempted {
+			snapshot, _ := agentRun.ObservedLifecycle()
+			if stderrors.Is(c.Errors.Last().Err, services.ErrBlockedDependencies) {
+				// An intentional dependency wait has not attempted dispatch.
+				if err := repositories.LifecycleQuery(db, agentRun.ID, snapshot).Update("job_name", nil).Error; err != nil {
+					logger.Warn("Failed to record dependency wait", config.Error(err))
+				}
+				return
+			}
+			if result := repositories.LifecycleQuery(db, agentRun.ID, snapshot).Updates(map[string]interface{}{"state": "failed", "completed_at": time.Now().UTC(), "error_message": "execution preparation failed"}); result.Error != nil {
+				logger.Warn("Failed to finalize preparation error", config.Error(result.Error))
+			}
+		}
+	}()
 
 	// Step 9: Collect Issue context
 	issueContext, err := issueContextService.CollectIssueContext(ctx, owner, repo, payload.Issue.Number)
@@ -965,9 +931,9 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 		config.String("delivery_id", deliveryID),
 	)
 
-	// Step 12: Reuse middleware-created AgentRun for plan creation
+	// Step 12: Reuse admitted AgentRun for plan creation
 	// For /run-agent from issue, we first create a plan, then execute it
-	// Reuse the agentRun created by idempotency middleware to avoid leaving orphaned queued records
+	// Reuse the agentRun admitted after authorization to avoid leaving orphaned queued records
 	planAgentRun := agentRun
 
 	// Reload agentRun from database to ensure we have the latest state
@@ -999,7 +965,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 	}
 	planAgentRun = reloadedForConfig
 
-	logger.Info("Reusing middleware-created AgentRun for plan creation",
+	logger.Info("Reusing admitted AgentRun for plan creation",
 		config.Int("plan_agent_run_id", planAgentRun.ID),
 		config.String("idempotency_key", planAgentRun.IdempotencyKey),
 		config.String("delivery_id", deliveryID),
@@ -1180,26 +1146,17 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 
 	// Step 14: Create Kubernetes Job for plan creation
 	// Note: reviewFeedback is nil for issue-triggered plan creation
+	jobSubmissionAttempted = true
 	job, err := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, nil, existingBranchName)
 	if err != nil {
-		logger.Error("Failed to create plan creation Kubernetes Job, rolling back state",
+		logger.Error("Failed to create plan creation Kubernetes Job; retaining dispatch reservation",
 			config.Error(err),
 			config.Int("plan_agent_run_id", planAgentRun.ID),
 			config.String("delivery_id", deliveryID),
 		)
-		// Rollback state to queued for retry
-		if rollbackErr := stateMachine.TransitionToQueued(planAgentRun.ID); rollbackErr != nil {
-			logger.Error("Failed to rollback plan creation AgentRun state",
-				config.Error(rollbackErr),
-				config.Int("plan_agent_run_id", planAgentRun.ID),
-				config.String("delivery_id", deliveryID),
-			)
-		} else {
-			logger.Info("Plan creation AgentRun state rolled back to queued for retry",
-				config.Int("plan_agent_run_id", planAgentRun.ID),
-				config.String("delivery_id", deliveryID),
-			)
-		}
+		// Keep the attempt reserved. A create timeout may have succeeded on
+		// Kubernetes; reconciliation observes the stable name before closing it.
+
 		c.Error(err)
 		return
 	}

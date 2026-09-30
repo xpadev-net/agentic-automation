@@ -110,6 +110,7 @@ func setupTestDBForCheckSuite(t *testing.T) *gorm.DB {
 	`).Error
 	require.NoError(t, err, "Failed to create ci_status table")
 
+	require.NoError(t, db.AutoMigrate(&models.WebhookDelivery{}))
 	return db
 }
 

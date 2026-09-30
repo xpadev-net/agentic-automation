@@ -1,6 +1,7 @@
 package reporter
 
 import (
+	"agent-runner/pkg/redact"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -57,6 +57,7 @@ func (e *MaxRetriesExceededError) Unwrap() error {
 
 // ReportRequest represents the request body for agent execution report
 type ReportRequest struct {
+	JobName      string `json:"job_name,omitempty"`
 	Status       string `json:"status"`                  // "succeeded" | "failed"
 	AgentType    string `json:"agent_type"`              // "claude-code" | "cursor-agent" | "codex"
 	PRNumber     *int   `json:"pr_number,omitempty"`     // Optional: PR number if succeeded
@@ -74,6 +75,7 @@ type ReportResponse struct {
 
 // PlanReportRequest represents the request body for plan creation/execution results.
 type PlanReportRequest struct {
+	JobName         string `json:"job_name,omitempty"`
 	Status          string `json:"status"` // "plan_created" | "plan_rejected"
 	AgentType       string `json:"agent_type"`
 	PlanContent     string `json:"plan_content,omitempty"`
@@ -136,27 +138,7 @@ func validatePlanReportRequest(req *PlanReportRequest) error {
 	return nil
 }
 
-func sanitizeLogs(logs string) string {
-	if logs == "" {
-		return logs
-	}
-	patterns := []string{
-		`ghp_[A-Za-z0-9]{36}`,
-		`gho_[A-Za-z0-9]{36}`,
-		`ghs_[A-Za-z0-9]{36}`,
-		`sk-[A-Za-z0-9]{48}`,
-		`ANTHROPIC_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-		`CURSOR_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-		`CODEX_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-		`OPENAI_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-	}
-	sanitized := logs
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		sanitized = re.ReplaceAllString(sanitized, "***")
-	}
-	return sanitized
-}
+func sanitizeLogs(logs string) string { return redact.Text(logs) }
 
 // validateReportRequest validates the report request
 func validateReportRequest(req *ReportRequest) error {
@@ -249,7 +231,14 @@ func calculateBackoffDelay(attempt int) time.Duration {
 // buildHTTPRequest builds an HTTP POST request with the report data
 func buildHTTPRequest(url string, req *ReportRequest, token string) (*http.Request, error) {
 	// Encode request body as JSON
-	bodyBytes, err := json.Marshal(req)
+	safe := *req
+	if safe.JobName == "" {
+		safe.JobName = os.Getenv("JOB_NAME")
+	}
+	safe.ErrorMessage = redact.Text(safe.ErrorMessage, token)
+	safe.Logs = redact.Text(safe.Logs, token)
+	safe.Branch = redact.Text(safe.Branch, token)
+	bodyBytes, err := json.Marshal(&safe)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode request body: %w", err)
 	}
@@ -268,7 +257,14 @@ func buildHTTPRequest(url string, req *ReportRequest, token string) (*http.Reque
 }
 
 func buildPlanHTTPRequest(url string, req *PlanReportRequest, token string) (*http.Request, error) {
-	bodyBytes, err := json.Marshal(req)
+	safe := *req
+	if safe.JobName == "" {
+		safe.JobName = os.Getenv("JOB_NAME")
+	}
+	safe.PlanContent = redact.Text(safe.PlanContent, token)
+	safe.RejectionReason = redact.Text(safe.RejectionReason, token)
+	safe.Logs = redact.Text(safe.Logs, token)
+	bodyBytes, err := json.Marshal(&safe)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode plan report body: %w", err)
 	}
@@ -282,7 +278,7 @@ func buildPlanHTTPRequest(url string, req *PlanReportRequest, token string) (*ht
 }
 
 // parseHTTPResponse parses the HTTP response and returns either a ReportResponse or an error
-func parseHTTPResponse(resp *http.Response) (*ReportResponse, error) {
+func parseHTTPResponse(resp *http.Response, secrets ...string) (*ReportResponse, error) {
 	// Read response body with size limit
 	bodyReader := io.LimitReader(resp.Body, maxResponseBodySize)
 	bodyBytes, err := io.ReadAll(bodyReader)
@@ -292,7 +288,7 @@ func parseHTTPResponse(resp *http.Response) (*ReportResponse, error) {
 	}
 	resp.Body.Close()
 
-	bodyStr := string(bodyBytes)
+	bodyStr := redact.Text(string(bodyBytes), secrets...)
 
 	// Check status code
 	if resp.StatusCode == http.StatusOK {
@@ -301,6 +297,7 @@ func parseHTTPResponse(resp *http.Response) (*ReportResponse, error) {
 		if err := json.Unmarshal(bodyBytes, &reportResp); err != nil {
 			return nil, fmt.Errorf("failed to decode response body: %v (body: %s)", err, bodyStr)
 		}
+		reportResp.Message = redact.Text(reportResp.Message, secrets...)
 		return &reportResp, nil
 	}
 
@@ -321,7 +318,7 @@ func parseHTTPResponse(resp *http.Response) (*ReportResponse, error) {
 
 	return nil, &HTTPError{
 		StatusCode: resp.StatusCode,
-		Message:    errorMsg,
+		Message:    redact.Text(errorMsg, secrets...),
 		Body:       bodyStr,
 	}
 }
@@ -363,7 +360,7 @@ func sendReport(client *Client, req *ReportRequest) error {
 			if isRetryableError(err, statusCode) {
 				lastErr = err
 				// Log retry attempt
-				fmt.Fprintf(os.Stderr, "Retry attempt %d/%d failed: %v\n", attempt, maxRetries, err)
+				redact.Fprintf(os.Stderr, "Retry attempt %d/%d failed: %v\n", attempt, maxRetries, err)
 
 				// Don't wait after the last attempt
 				if attempt >= maxRetries {
@@ -372,7 +369,7 @@ func sendReport(client *Client, req *ReportRequest) error {
 
 				// Calculate backoff delay
 				backoff := calculateBackoffDelay(attempt + 1) // +1 for next attempt
-				fmt.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
+				redact.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
 				time.Sleep(backoff)
 
 				continue
@@ -383,7 +380,7 @@ func sendReport(client *Client, req *ReportRequest) error {
 		}
 
 		// Parse response
-		reportResp, err := parseHTTPResponse(resp)
+		reportResp, err := parseHTTPResponse(resp, client.apiToken)
 		if err != nil {
 			// Check if it's an HTTP error
 			var httpErr *HTTPError
@@ -392,7 +389,7 @@ func sendReport(client *Client, req *ReportRequest) error {
 				if isRetryableError(httpErr, httpErr.StatusCode) {
 					lastErr = httpErr
 					// Log retry attempt
-					fmt.Fprintf(os.Stderr, "Retry attempt %d/%d failed: %v\n", attempt, maxRetries, httpErr)
+					redact.Fprintf(os.Stderr, "Retry attempt %d/%d failed: %v\n", attempt, maxRetries, httpErr)
 
 					// Don't wait after the last attempt
 					if attempt >= maxRetries {
@@ -401,7 +398,7 @@ func sendReport(client *Client, req *ReportRequest) error {
 
 					// Calculate backoff delay
 					backoff := calculateBackoffDelay(attempt + 1) // +1 for next attempt
-					fmt.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
+					redact.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
 					time.Sleep(backoff)
 
 					continue
@@ -417,9 +414,9 @@ func sendReport(client *Client, req *ReportRequest) error {
 
 		// Success
 		if attempt > 1 {
-			fmt.Fprintf(os.Stderr, "Report sent successfully after %d attempts\n", attempt)
+			redact.Fprintf(os.Stderr, "Report sent successfully after %d attempts\n", attempt)
 		}
-		fmt.Fprintf(os.Stderr, "Report received: %s (AgentRun ID: %d)\n", reportResp.Message, reportResp.AgentRunID)
+		redact.Fprintf(os.Stderr, "Report received: %s (AgentRun ID: %d)\n", reportResp.Message, reportResp.AgentRunID)
 		return nil
 	}
 
@@ -453,29 +450,29 @@ func sendPlanReport(client *Client, req *PlanReportRequest) error {
 			}
 			if isRetryableError(err, statusCode) {
 				lastErr = err
-				fmt.Fprintf(os.Stderr, "Plan report retry attempt %d/%d failed: %v\n", attempt, maxRetries, err)
+				redact.Fprintf(os.Stderr, "Plan report retry attempt %d/%d failed: %v\n", attempt, maxRetries, err)
 				if attempt >= maxRetries {
 					break
 				}
 				backoff := calculateBackoffDelay(attempt + 1)
-				fmt.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
+				redact.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
 				time.Sleep(backoff)
 				continue
 			}
 			return fmt.Errorf("non-retryable error: %w", err)
 		}
-		reportResp, err := parseHTTPResponse(resp)
+		reportResp, err := parseHTTPResponse(resp, client.apiToken)
 		if err != nil {
 			var httpErr *HTTPError
 			if errors.As(err, &httpErr) {
 				if isRetryableError(httpErr, httpErr.StatusCode) {
 					lastErr = httpErr
-					fmt.Fprintf(os.Stderr, "Plan report retry attempt %d/%d failed: %v\n", attempt, maxRetries, httpErr)
+					redact.Fprintf(os.Stderr, "Plan report retry attempt %d/%d failed: %v\n", attempt, maxRetries, httpErr)
 					if attempt >= maxRetries {
 						break
 					}
 					backoff := calculateBackoffDelay(attempt + 1)
-					fmt.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
+					redact.Fprintf(os.Stderr, "Waiting %v before retry...\n", backoff)
 					time.Sleep(backoff)
 					continue
 				}
@@ -484,9 +481,9 @@ func sendPlanReport(client *Client, req *PlanReportRequest) error {
 			return fmt.Errorf("failed to parse plan report response: %w", err)
 		}
 		if attempt > 1 {
-			fmt.Fprintf(os.Stderr, "Plan report sent successfully after %d attempts\n", attempt)
+			redact.Fprintf(os.Stderr, "Plan report sent successfully after %d attempts\n", attempt)
 		}
-		fmt.Fprintf(os.Stderr, "Plan report received: %s (AgentRun ID: %d)\n", reportResp.Message, reportResp.AgentRunID)
+		redact.Fprintf(os.Stderr, "Plan report received: %s (AgentRun ID: %d)\n", reportResp.Message, reportResp.AgentRunID)
 		return nil
 	}
 	return &MaxRetriesExceededError{MaxAttempts: maxRetries, LastError: lastErr}
@@ -514,8 +511,8 @@ func (c *Client) ReportFailure(errorMsg, logs, agentType string) error {
 	req := &ReportRequest{
 		Status:       "failed",
 		AgentType:    agentType,
-		ErrorMessage: errorMsg,
-		Logs:         logs,
+		ErrorMessage: redact.Text(errorMsg, c.apiToken),
+		Logs:         redact.Text(logs, c.apiToken),
 	}
 
 	if err := sendReport(c, req); err != nil {
@@ -527,10 +524,6 @@ func (c *Client) ReportFailure(errorMsg, logs, agentType string) error {
 
 // ReportPlanCreation reports a successfully generated plan to the Operator API.
 func (c *Client) ReportPlanCreation(planContent, agentType, logs string) error {
-	preview := strings.TrimSpace(planContent)
-	if len(preview) > 100 {
-		preview = preview[:100] + "..."
-	}
 	req := &PlanReportRequest{
 		Status:      "plan_created",
 		AgentType:   agentType,
@@ -538,7 +531,7 @@ func (c *Client) ReportPlanCreation(planContent, agentType, logs string) error {
 		Logs:        sanitizeLogs(logs),
 	}
 	if err := sendPlanReport(c, req); err != nil {
-		return fmt.Errorf("failed to report plan creation (preview: %s): %w", preview, err)
+		return fmt.Errorf("failed to report plan creation: %w", redact.Error(err))
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"agentic-automation/internal/models"
 )
@@ -137,27 +138,47 @@ func (r *agentRunRepository) GetByIDempotencyKey(key string) (*models.AgentRun, 
 }
 
 // Update updates an existing AgentRun record
+// ErrConcurrentLifecycle means a callback, retry or reconciler won the state change.
+var ErrConcurrentLifecycle = errors.New("agent run lifecycle changed concurrently")
+
+// LifecycleQuery matches the observed attempt, including NULL JobName. Callers
+// must not use full Save without this guard after reading lifecycle state.
+func LifecycleQuery(db *gorm.DB, id int, snapshot models.AgentRunLifecycle) *gorm.DB {
+	query := db.Model(&models.AgentRun{}).Where("id = ? AND state = ? AND retry_count = ?", id, snapshot.State, snapshot.RetryCount)
+	if snapshot.JobName == nil {
+		return query.Where("job_name IS NULL")
+	}
+	return query.Where("job_name = ?", *snapshot.JobName)
+}
+
 func (r *agentRunRepository) Update(run *models.AgentRun) error {
 	if run.ID == 0 {
 		return errors.New("cannot update AgentRun with zero ID")
 	}
-	result := r.db.Save(run)
+	snapshot, ok := run.ObservedLifecycle()
+	if !ok {
+		current, err := r.GetByID(run.ID)
+		if err != nil {
+			return err
+		}
+		snapshot, _ = current.ObservedLifecycle()
+	}
+	result := LifecycleQuery(r.db, run.ID, snapshot).Select("*").Omit("id", "created_at", clause.Associations).Updates(run)
 	if result.Error != nil {
 		return result.Error
 	}
-	// MySQL returns RowsAffected=0 when UPDATE writes the same values (idempotent update)
-	// Check if record exists to distinguish between unchanged update and missing record
 	if result.RowsAffected == 0 {
-		_, err := r.GetByID(run.ID)
+		current, err := r.GetByID(run.ID)
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return gorm.ErrRecordNotFound
-			}
 			return err
 		}
-		// Record exists, update succeeded (even if no values changed)
-		return nil
+		observed, _ := current.ObservedLifecycle()
+		sameName := (snapshot.JobName == nil && observed.JobName == nil) || (snapshot.JobName != nil && observed.JobName != nil && *snapshot.JobName == *observed.JobName)
+		if observed.State != snapshot.State || observed.RetryCount != snapshot.RetryCount || !sameName {
+			return ErrConcurrentLifecycle
+		}
 	}
+	run.CaptureLifecycle()
 	return nil
 }
 

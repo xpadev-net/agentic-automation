@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -501,6 +502,7 @@ func (c *KubernetesClient) BuildJobSpec(jobCfg *JobConfig) *batchv1.JobSpec {
 				Labels: map[string]string{
 					"app":          "agent-runner",
 					"agent-run-id": strconv.Itoa(jobCfg.AgentRunID),
+					"retry-count":  strconv.Itoa(jobCfg.RetryCount),
 					"issue-id":     strconv.Itoa(jobCfg.IssueID),
 				},
 			},
@@ -751,6 +753,7 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, jobCfg
 			Labels: map[string]string{
 				"app":          "agent-runner",
 				"agent-run-id": strconv.Itoa(jobCfg.AgentRunID),
+				"retry-count":  strconv.Itoa(jobCfg.RetryCount),
 				"issue-id":     strconv.Itoa(jobCfg.IssueID),
 			},
 		},
@@ -907,6 +910,16 @@ func (c *KubernetesClient) CreateJob(ctx context.Context, jobName string, jobCfg
 	)
 
 	createdJob, err := c.clientset.BatchV1().Jobs(c.namespace).Create(ctx, job, metav1.CreateOptions{})
+	if errors.IsAlreadyExists(err) {
+		existing, getErr := c.GetJob(ctx, jobName)
+		if getErr != nil {
+			return nil, getErr
+		}
+		if existing.Labels["agent-run-id"] == strconv.Itoa(jobCfg.AgentRunID) && existing.Labels["retry-count"] == strconv.Itoa(jobCfg.RetryCount) {
+			return existing, nil
+		}
+		return nil, fmt.Errorf("existing job does not match execution attempt: %s", jobName)
+	}
 	if err != nil {
 		c.logger.Error("Failed to create Job",
 			config.String("name", jobName),
@@ -1033,29 +1046,26 @@ func (c *KubernetesClient) FindActiveJobByAgentRunID(ctx context.Context, agentR
 	}
 
 	if len(jobs.Items) == 0 {
-		return nil, fmt.Errorf("no active job found with agent-run-id=%d", agentRunID)
+		return nil, errors.NewNotFound(schema.GroupResource{Resource: "jobs"}, fmt.Sprintf("agent-run-id=%d", agentRunID))
 	}
 
-	// Find active jobs (Running or Pending status)
+	// Failed Pod counts are not terminal Job evidence.
 	var activeJobs []*batchv1.Job
 	for i := range jobs.Items {
 		job := &jobs.Items[i]
-		status, err := c.GetJobStatus(ctx, job.Name)
-		if err != nil {
-			c.logger.Warn("Failed to get job status while checking for active jobs",
-				config.String("job_name", job.Name),
-				config.Int("agent_run_id", agentRunID),
-				config.Error(err),
-			)
-			continue
+		terminal := false
+		for _, condition := range job.Status.Conditions {
+			if condition.Status == corev1.ConditionTrue && (condition.Type == batchv1.JobComplete || condition.Type == batchv1.JobFailed) {
+				terminal = true
+			}
 		}
-		if status == "Running" || status == "Pending" {
+		if !terminal {
 			activeJobs = append(activeJobs, job)
 		}
 	}
 
 	if len(activeJobs) == 0 {
-		return nil, fmt.Errorf("no active job found with agent-run-id=%d", agentRunID)
+		return nil, errors.NewNotFound(schema.GroupResource{Resource: "jobs"}, fmt.Sprintf("agent-run-id=%d", agentRunID))
 	}
 
 	// Return the first active job

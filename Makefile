@@ -56,15 +56,15 @@ build: ## Build all binaries
 	@echo "Building binaries..."
 	@mkdir -p $(BIN_DIR)
 	go build -o $(OPERATOR_BIN) ./cmd/operator
-	go build -o $(AGENT_RUNNER_BIN) ./cmd/agent-runner
+	cd agent-runner && go build -o $(abspath $(AGENT_RUNNER_BIN)) .
 
 test: ## Run all tests
 	@echo "Running tests..."
-	CGO_ENABLED=1 go test ./... -v
+	bash scripts/check-go-modules.sh test
 
 vet: ## Run go vet
 	@echo "Running go vet..."
-	go vet ./...
+	bash scripts/check-go-modules.sh vet
 
 migrate-up: ## Run database migrations up
 	@echo "Running migrations up..."

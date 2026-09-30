@@ -157,7 +157,7 @@ jobs:
         run: go mod download
 
       - name: Run go vet
-        run: go vet ./...
+        run: bash scripts/check-go-modules.sh vet
 
   # テスト実行
   test:
@@ -206,7 +206,7 @@ jobs:
       - name: Run tests
         env:
           CGO_ENABLED: 1
-        run: go test ./... -v
+        run: bash scripts/check-go-modules.sh test
 
   # ビルド検証
   build:
@@ -241,12 +241,5 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Build binaries
-        run: |
-          mkdir -p bin
-          if find ./cmd/operator -name "*.go" -type f 2>/dev/null | grep -q .; then
-            go build -o bin/operator ./cmd/operator
-          fi
-          if find ./cmd/agent-runner -name "*.go" -type f 2>/dev/null | grep -q .; then
-            go build -o bin/agent-runner ./cmd/agent-runner
-          fi
+      - name: Build both module binaries
+        run: bash scripts/check-go-modules.sh build
