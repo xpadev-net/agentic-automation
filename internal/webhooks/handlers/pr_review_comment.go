@@ -814,6 +814,16 @@ func startPlanCreationIfNeeded(
 		return nil, err
 	}
 
+	if !started && isNew {
+		// This receipt lost PR-wide plan admission. Only discard its unused
+		// queued row if no concurrent winner linked that exact row as creating.
+		if err := config.GetDB().Model(&models.AgentRun{}).Where("id = ? AND state = ?", planAgentRun.ID, "queued").
+			Where("NOT EXISTS (SELECT 1 FROM review_feedback WHERE plan_agent_run_id = ? AND plan_creation_status = ?)", planAgentRun.ID, "creating").
+			Updates(map[string]interface{}{"state": "failed", "completed_at": time.Now().UTC(), "error_message": "plan admission coalesced with active review"}).Error; err != nil {
+			return nil, err
+		}
+	}
+
 	if !started {
 		// Another process already started plan creation for this PR, or this ReviewFeedback is not in 'pending' state
 		// Check if there's an existing plan creation in progress for this PR
@@ -974,6 +984,14 @@ func startPlanCreationIfNeeded(
 		branchName = fmt.Sprintf("feature/issue-%d", issue.Number)
 	}
 
+	dispatchName := planAgentRun.AttemptJobName()
+	planAgentRun.JobName = &dispatchName
+	dispatchTime := time.Now().UTC()
+	planAgentRun.State = "started"
+	planAgentRun.StartedAt = &dispatchTime
+	if err := agentRunRepo.Update(planAgentRun); err != nil {
+		return nil, err
+	}
 	job, jobErr := jobService.CreateJobForPlanCreation(ctx, planAgentRun, issue, reviewFeedback, branchName)
 	if jobErr != nil {
 		logger.Error("Failed to create plan creation job",
@@ -982,13 +1000,8 @@ func startPlanCreationIfNeeded(
 			config.Int("review_feedback_id", reviewFeedback.ID),
 			config.String("delivery_id", deliveryID),
 		)
-		// Rollback: reset PlanCreationStatus to 'pending'
-		if rollbackErr := reviewFeedbackRepo.UpdatePlanCreationStatus(reviewFeedback.ID, "pending"); rollbackErr != nil {
-			logger.Error("Failed to rollback plan creation status after job creation failure",
-				config.Error(rollbackErr),
-				config.Int("review_feedback_id", reviewFeedback.ID),
-			)
-		}
+		// Keep this attempt reserved on an ambiguous create error.
+
 		return nil, jobErr
 	}
 

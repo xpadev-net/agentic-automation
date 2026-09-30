@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -125,4 +127,35 @@ func stringContains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+type recordingFailureReporter struct {
+	calls   int
+	message string
+	err     error
+}
+
+func (r *recordingFailureReporter) ReportFailure(message, logs, agent string) error {
+	r.calls++
+	r.message = message
+	return r.err
+}
+func TestValidationExhaustionReportsBothPhases(t *testing.T) {
+	for _, phase := range []string{"validation", "validation after post-commit sync"} {
+		t.Run(phase, func(t *testing.T) {
+			client := &recordingFailureReporter{}
+			cause := errors.New("fixture validation error")
+			err := reportValidationExhaustion(client, "codex", phase, 3, cause)
+			if !errors.Is(err, cause) || client.calls != 1 || !strings.Contains(client.message, phase) {
+				t.Fatalf("terminal outcome not reported once: calls=%d, err=%v", client.calls, err)
+			}
+		})
+	}
+}
+func TestValidationExhaustionPreservesReportFailure(t *testing.T) {
+	reportErr := errors.New("fixture report unavailable")
+	client := &recordingFailureReporter{err: reportErr}
+	if err := reportValidationExhaustion(client, "codex", "validation", 3, errors.New("fixture test failed")); !errors.Is(err, reportErr) {
+		t.Fatalf("report failure hidden: %v", err)
+	}
 }

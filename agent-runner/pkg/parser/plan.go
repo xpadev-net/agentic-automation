@@ -20,8 +20,8 @@ var (
 // If multiple tags are present, the last one found (from the end of the output) is used.
 // This ensures that the actual ASSISTANT output is used instead of example text from the prompt.
 // Returns planContent, rejected flag, rejectionReason.
-func ParsePlanResult(output string) (string, bool, string) {
-	assistantText, err := utils.ExtractAssistantText(output)
+func ParsePlanResult(output string, mode utils.OutputMode) (string, bool, string) {
+	assistantText, err := utils.ExtractAssistantText(output, mode)
 	if err != nil {
 		return "", true, "プラン出力の解析に失敗しました"
 	}

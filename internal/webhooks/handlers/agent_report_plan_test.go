@@ -287,7 +287,7 @@ func TestHandleAgentReportDispatchesPlanReport(t *testing.T) {
 	require.NotNil(t, reviewFeedback.ExecutionAgentRunID)
 }
 
-func TestHandlePlanCreatedRollsBackWhenJobCreationFails(t *testing.T) {
+func TestHandlePlanCreatedRetainsAttemptWhenJobCreationFails(t *testing.T) {
 	fixtures := setupPlanTestFixtures(t)
 	fakeJob := &fakePlanJobService{planErr: fmt.Errorf("boom")}
 
@@ -332,22 +332,23 @@ func TestHandlePlanCreatedRollsBackWhenJobCreationFails(t *testing.T) {
 
 	var storedFeedback models.ReviewFeedback
 	require.NoError(t, fixtures.db.First(&storedFeedback, fixtures.reviewFeedback.ID).Error)
-	require.Equal(t, "pending", storedFeedback.PlanCreationStatus)
-	require.Nil(t, storedFeedback.PlanContent)
-	require.Nil(t, storedFeedback.PlanAgentRunID)
-	require.Nil(t, storedFeedback.ExecutionAgentRunID)
+	require.Equal(t, "creating", storedFeedback.PlanCreationStatus)
+	require.NotNil(t, storedFeedback.PlanContent)
+	require.NotNil(t, storedFeedback.PlanAgentRunID)
+	require.NotNil(t, storedFeedback.ExecutionAgentRunID)
 
 	var storedRun models.AgentRun
 	require.NoError(t, fixtures.db.First(&storedRun, fixtures.agentRun.ID).Error)
-	require.Equal(t, "queued", storedRun.State)
-	require.Nil(t, storedRun.PlanContent)
+	require.Equal(t, "succeeded", storedRun.State)
+	require.NotNil(t, storedRun.PlanContent)
 
-	var executionRuns int64
-	require.NoError(t, fixtures.db.Model(&models.AgentRun{}).Where("execution_mode = ?", "plan_execution").Count(&executionRuns).Error)
-	require.Equal(t, int64(0), executionRuns)
+	var execution models.AgentRun
+	require.NoError(t, fixtures.db.First(&execution, *storedFeedback.ExecutionAgentRunID).Error)
+	require.Equal(t, "started", execution.State)
+	require.NotNil(t, execution.JobName)
 }
 
-func TestHandlePlanRejectedRollsBackWhenCommentFails(t *testing.T) {
+func TestHandlePlanRejectedRemainsTerminalWhenCommentFails(t *testing.T) {
 	fixtures := setupPlanTestFixtures(t)
 	originalPost := postPlanRejectionComment
 	defer func() { postPlanRejectionComment = originalPost }()
@@ -392,16 +393,16 @@ func TestHandlePlanRejectedRollsBackWhenCommentFails(t *testing.T) {
 
 	var refreshedFeedback models.ReviewFeedback
 	require.NoError(t, fixtures.db.First(&refreshedFeedback, fixtures.reviewFeedback.ID).Error)
-	require.Equal(t, "pending", refreshedFeedback.PlanCreationStatus)
-	require.Nil(t, refreshedFeedback.PlanAgentRunID)
+	require.Equal(t, "rejected", refreshedFeedback.PlanCreationStatus)
+	require.NotNil(t, refreshedFeedback.PlanAgentRunID)
 	require.Nil(t, refreshedFeedback.PlanContent)
 	require.Nil(t, refreshedFeedback.ExecutionAgentRunID)
 
 	var refreshedRun models.AgentRun
 	require.NoError(t, fixtures.db.First(&refreshedRun, fixtures.agentRun.ID).Error)
-	require.Equal(t, "queued", refreshedRun.State)
+	require.Equal(t, "failed", refreshedRun.State)
 	require.Nil(t, refreshedRun.PlanContent)
-	require.Nil(t, refreshedRun.ErrorMessage)
+	require.NotNil(t, refreshedRun.ErrorMessage)
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))

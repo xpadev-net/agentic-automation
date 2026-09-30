@@ -346,6 +346,12 @@ func TriggerJobsForUnblockedTasks(
 			}
 		}
 
+		dispatchName := agentRun.AttemptJobName()
+		agentRun.JobName = &dispatchName
+		if err := agents.Update(agentRun); err != nil {
+			return err
+		}
+
 		// Transition to started before Job creation (align with comment-trigger flow)
 		logger.Info("blocked_task.run_transition_started",
 			config.Int("agentRunId", agentRun.ID),
@@ -373,8 +379,7 @@ func TriggerJobsForUnblockedTasks(
 				)
 				continue
 			}
-			// Rollback to queued only when Job was not created
-			_ = stateMachine.TransitionToQueued(agentRun.ID)
+			// Preserve started reservation; create failure may be an ambiguous timeout.
 			logger.Error("blocked_task.job_creation_failed",
 				config.Int("agentRunId", agentRun.ID),
 				config.Int("taskId", is.ID),

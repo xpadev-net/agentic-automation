@@ -145,6 +145,7 @@ func setupDBCheckSuite(t *testing.T) *gorm.DB {
 		CREATE INDEX IF NOT EXISTS idx_review_feedback_pr_id ON review_feedback(pr_id);
 	`).Error)
 
+	require.NoError(t, db.AutoMigrate(&models.WebhookDelivery{}))
 	return db
 }
 
@@ -206,13 +207,13 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
-// createStartedAgentRun creates a test AgentRun in "started" state
-func createStartedAgentRun(t *testing.T, db *gorm.DB, issueID int, prID *int) *models.AgentRun {
+// createCompletedAgentRun creates a finished execution eligible for a CI retry.
+func createCompletedAgentRun(t *testing.T, db *gorm.DB, issueID int, prID *int) *models.AgentRun {
 	run := &models.AgentRun{
 		IdempotencyKey: "test-delivery-" + uuid.NewString(),
 		IssueID:        issueID,
 		PRID:           prID,
-		State:          "started",
+		State:          "succeeded",
 		AgentType:      "claude-code",
 		Input:          datatypes.JSON([]byte("{}")),
 		Output:         datatypes.JSON([]byte("{}")),
@@ -220,6 +221,7 @@ func createStartedAgentRun(t *testing.T, db *gorm.DB, issueID int, prID *int) *m
 	}
 	now := time.Now()
 	run.StartedAt = &now
+	run.CompletedAt = &now
 	require.NoError(t, db.Create(run).Error)
 	return run
 }
@@ -277,7 +279,7 @@ func Test_CheckSuite_CIFailure_TriggersRetry(t *testing.T) {
 
 	// Create test data
 	issue, pr := createIssueWithPR(t, db)
-	agentRun := createStartedAgentRun(t, db, issue.ID, &pr.ID)
+	agentRun := createCompletedAgentRun(t, db, issue.ID, &pr.ID)
 
 	// Setup stubs
 	k8sJobService := &tu.StubKubernetesJobService{
@@ -362,7 +364,7 @@ func Test_CheckSuite_CIFailure_TriggersRetry(t *testing.T) {
 	var updatedRun models.AgentRun
 	require.NoError(t, db.First(&updatedRun, agentRun.ID).Error)
 	assert.Equal(t, 1, updatedRun.RetryCount)
-	assert.Equal(t, "queued", updatedRun.State)
+	assert.Equal(t, "started", updatedRun.State)
 
 	// Verify CIStatus was created
 	var ciStatus models.CIStatus
@@ -376,7 +378,7 @@ func createAgentRunWithRetryCount(t *testing.T, db *gorm.DB, issueID int, prID *
 		IdempotencyKey: "test-delivery-" + uuid.NewString(),
 		IssueID:        issueID,
 		PRID:           prID,
-		State:          "started",
+		State:          "succeeded",
 		AgentType:      "claude-code",
 		Input:          datatypes.JSON([]byte("{}")),
 		Output:         datatypes.JSON([]byte("{}")),
@@ -384,6 +386,7 @@ func createAgentRunWithRetryCount(t *testing.T, db *gorm.DB, issueID int, prID *
 	}
 	now := time.Now()
 	run.StartedAt = &now
+	run.CompletedAt = &now
 	require.NoError(t, db.Create(run).Error)
 	return run
 }
@@ -516,7 +519,7 @@ func Test_CheckSuite_CISuccess_RecordsStatus(t *testing.T) {
 
 	// Create test data
 	issue, pr := createIssueWithPR(t, db)
-	agentRun := createStartedAgentRun(t, db, issue.ID, &pr.ID)
+	agentRun := createCompletedAgentRun(t, db, issue.ID, &pr.ID)
 
 	// Setup repositories
 	prRepo := repositories.NewPullRequestRepository(db)
@@ -575,7 +578,7 @@ func Test_CheckSuite_CISuccess_RecordsStatus(t *testing.T) {
 	// Verify AgentRun state was NOT changed
 	var updatedRun models.AgentRun
 	require.NoError(t, db.First(&updatedRun, agentRun.ID).Error)
-	assert.Equal(t, "started", updatedRun.State)
+	assert.Equal(t, "succeeded", updatedRun.State)
 	assert.Equal(t, 0, updatedRun.RetryCount)
 }
 
@@ -607,7 +610,7 @@ func Test_CheckSuite_CIFailure_Retry_Success_Flow(t *testing.T) {
 
 	// Create test data
 	issue, pr := createIssueWithPR(t, db)
-	agentRun := createStartedAgentRun(t, db, issue.ID, &pr.ID)
+	agentRun := createCompletedAgentRun(t, db, issue.ID, &pr.ID)
 
 	// Setup stubs
 	k8sJobService := &tu.StubKubernetesJobService{
@@ -678,7 +681,7 @@ func Test_CheckSuite_CIFailure_Retry_Success_Flow(t *testing.T) {
 	var runAfterFailure models.AgentRun
 	require.NoError(t, db.First(&runAfterFailure, agentRun.ID).Error)
 	assert.Equal(t, 1, runAfterFailure.RetryCount)
-	assert.Equal(t, "queued", runAfterFailure.State)
+	assert.Equal(t, "started", runAfterFailure.State)
 
 	// Verify K8s Job was created
 	assert.True(t, k8sJobService.CreateJobCalled)
@@ -724,6 +727,112 @@ func Test_CheckSuite_CIFailure_Retry_Success_Flow(t *testing.T) {
 	// Verify AgentRun state is still queued (retry in progress)
 	var runAfterSuccess models.AgentRun
 	require.NoError(t, db.First(&runAfterSuccess, agentRun.ID).Error)
-	assert.Equal(t, "queued", runAfterSuccess.State)
+	assert.Equal(t, "started", runAfterSuccess.State)
 	assert.Equal(t, 1, runAfterSuccess.RetryCount) // Still 1, not incremented by success
+}
+
+func Test_CheckSuite_FailureWhileRunnerActiveDoesNotOverlap(t *testing.T) {
+	// Setup environment variables
+	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
+	os.Setenv("GITHUB_APP_TEST_MODE", "1")
+	os.Setenv("OPERATOR_SERVICE_NAME", "agent-operator")
+	os.Setenv("OPERATOR_SERVICE_PORT", "3000")
+	os.Setenv("AGENT_RUNNER_IMAGE", "test/agent-runner:latest")
+	os.Setenv("AGENT_RUNNER_TIMEOUT_MINUTES", "30")
+	t.Cleanup(func() {
+		os.Unsetenv("GITHUB_WEBHOOK_SECRET")
+		os.Unsetenv("GITHUB_APP_TEST_MODE")
+		os.Unsetenv("OPERATOR_SERVICE_NAME")
+		os.Unsetenv("OPERATOR_SERVICE_PORT")
+		os.Unsetenv("AGENT_RUNNER_IMAGE")
+		os.Unsetenv("AGENT_RUNNER_TIMEOUT_MINUTES")
+	})
+
+	// Setup logger and DB
+	logger := config.NewNopLogger()
+	config.SetLoggerForTesting(logger)
+
+	db := setupDBCheckSuite(t)
+	defer teardownDBCheckSuite(db)
+	config.SetDBForTesting(db)
+
+	// Create test data
+	issue, pr := createIssueWithPR(t, db)
+	agentRun := createCompletedAgentRun(t, db, issue.ID, &pr.ID)
+	require.NoError(t, db.Model(&models.AgentRun{}).Where("id = ?", agentRun.ID).Update("state", "started").Error)
+
+	// Setup stubs
+	k8sJobService := &tu.StubKubernetesJobService{
+		CreatedJobs: []tu.CreatedJobInfo{},
+		Error:       nil,
+	}
+
+	// Setup repositories
+	prRepo := repositories.NewPullRequestRepository(db)
+	ciStatusRepo := repositories.NewCIStatusRepositoryWithDB(db)
+	agentRunRepo := repositories.NewAgentRunRepository(db)
+	issueRepo := repositories.NewIssueRepository()
+
+	// Setup services
+	// Create dummy GitHubClient for IssueContextService (it requires non-nil client)
+	dummyGitHubClient := tu.NewDummyGitHubClient()
+	issueContextService := services.NewIssueContextService(dummyGitHubClient, logger)
+	retryOrchestrator := services.NewRetryOrchestrator(
+		agentRunRepo,
+		k8sJobService,
+		issueContextService,
+		logger,
+	)
+
+	feedbackAggregator := services.NewFeedbackAggregator(nil, logger)
+
+	// Build dependencies
+	// Inject stubbed CIFailureAnalyzer and dummy GitHub client so handler executes deterministically
+	deps := handlers.CheckSuiteDeps{
+		Logger:                    logger,
+		GitHubClient:              dummyGitHubClient,
+		PullRequestRepository:     prRepo,
+		CIStatusRepository:        ciStatusRepo,
+		CIFailureAnalyzer:         nil, // Handler will create analyzer using provided GitHubClient
+		FeedbackAggregator:        feedbackAggregator,
+		RetryOrchestrator:         retryOrchestrator,
+		KubernetesJobService:      k8sJobService,
+		GitHubNotificationService: nil, // Not needed for this test
+		IssueContextService:       issueContextService,
+		AgentRunRepository:        agentRunRepo,
+		IssueRepository:           issueRepo,
+	}
+
+	// Setup router
+	router := setupRouterForCheckSuite(deps)
+
+	// Build webhook payload
+	conclusion := "failure"
+	payload := buildCheckSuitePayload("completed", &conclusion, 789)
+	deliveryID := uuid.NewString()
+
+	// Create request
+	req := httptest.NewRequest("POST", "/webhooks/github", bytes.NewBuffer(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-GitHub-Event", "check_suite")
+	req.Header.Set("X-GitHub-Delivery", deliveryID)
+	req.Header.Set("X-Hub-Signature-256", tu.ComputeGitHubSignature("secret123", payload))
+
+	// Execute request
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Verify response
+	require.Equal(t, http.StatusOK, w.Code)
+	var response map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.Equal(t, "retry_deferred", response["status"])
+	require.False(t, k8sJobService.CreateJobCalled)
+	var current models.AgentRun
+	require.NoError(t, db.First(&current, agentRun.ID).Error)
+	require.Equal(t, "started", current.State)
+	require.Zero(t, current.RetryCount)
+	var recorded models.CIStatus
+	require.NoError(t, db.Where("pr_id = ? AND check_suite_id = ?", pr.ID, "789").First(&recorded).Error)
+	require.Equal(t, "failure", *recorded.Conclusion)
 }

@@ -105,6 +105,8 @@ func setupTestDBForStatus(t *testing.T) *gorm.DB {
             updated_at DATETIME NOT NULL
         )
     `).Error)
+	require.NoError(t, db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_issue_repo_number ON issues(repo, number)").Error)
+	require.NoError(t, db.AutoMigrate(&models.WebhookDelivery{}))
 	return db
 }
 

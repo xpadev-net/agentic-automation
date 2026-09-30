@@ -294,11 +294,26 @@ func HandleAgentReport(c *gin.Context) {
 		return
 	}
 
+	if !validateReportAttempt(c, agentRun, req.JobName) {
+		return
+	}
+	if agentRun.State == "succeeded" || agentRun.State == "failed" {
+		c.JSON(http.StatusOK, ReportResponse{Message: "Report already processed", AgentRunID: agentRun.ID})
+		return
+	}
+	if req.Status == "succeeded" && (req.PRNumber == nil || *req.PRNumber <= 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "pr_number is required and must be > 0 when status is succeeded"})
+		return
+	}
+	var afterCompletion func()
+
 	// Prepare values common to both success and failure
 	now := time.Now()
 	agentRun.State = req.Status
 	agentRun.AgentType = req.AgentType
-	agentRun.CompletedAt = &now
+	if agentRun.CompletedAt == nil {
+		agentRun.CompletedAt = &now
+	}
 
 	var prURL string
 	var logsExcerpt string
@@ -390,62 +405,65 @@ func HandleAgentReport(c *gin.Context) {
 		agentRun.PRID = &savedPR.ID
 		prURL = fmt.Sprintf("https://github.com/%s/pull/%d", issue.Repo, savedPR.Number)
 
-		// Request Codex review using RequestReview (idempotent)
-		// Parse owner/repo from Issue.Repo (format: owner/repo)
-		owner := ""
-		repo := ""
-		if parts := strings.SplitN(issue.Repo, "/", 2); len(parts) == 2 {
-			owner, repo = parts[0], parts[1]
-		}
-
-		if owner != "" && repo != "" {
-			// Initialize GitHub App client (DI/global), then per-repo client
-			if appGitHubClient == nil {
-				if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
-					appGitHubClient = ghApp
-				} else {
-					logger.Warn("Failed to init GitHub App client; skip Codex review request", config.Error(err))
-				}
+		afterCompletion = func() {
+			// Request Codex review using RequestReview (idempotent)
+			// Parse owner/repo from Issue.Repo (format: owner/repo)
+			owner := ""
+			repo := ""
+			if parts := strings.SplitN(issue.Repo, "/", 2); len(parts) == 2 {
+				owner, repo = parts[0], parts[1]
 			}
 
-			if appGitHubClient != nil {
-				rawClient, err := appGitHubClient.ForRepo(c.Request.Context(), owner, repo)
-				if err != nil {
-					logger.Warn("Failed to init per-repo GitHub client; skip Codex review request", config.Error(err))
-				} else {
-					githubClient := clients.NewFromGitHub(rawClient, logger)
-					reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
-					codexReviewService := services.NewCodexReviewService(githubClient, reviewFeedbackRepo, logger)
-
-					if _, err := codexReviewService.RequestReview(
-						c.Request.Context(),
-						owner,
-						repo,
-						savedPR.Number,
-						savedPR.ID,
-						agentRun.IdempotencyKey,
-					); err != nil {
-						logger.Warn("Failed to request Codex review",
-							config.Error(err),
-							config.String("owner", owner),
-							config.String("repo", repo),
-							config.Int("pr_number", savedPR.Number),
-							config.Int("pr_id", savedPR.ID),
-							config.Int("agent_run_id", agentRunID),
-						)
-						// Continue processing even if RequestReview fails (non-blocking)
+			if owner != "" && repo != "" {
+				// Initialize GitHub App client (DI/global), then per-repo client
+				if appGitHubClient == nil {
+					if ghApp, err := clients.NewGitHubAppClient(logger); err == nil {
+						appGitHubClient = ghApp
 					} else {
-						logger.Info("Requested Codex review",
-							config.String("owner", owner),
-							config.String("repo", repo),
-							config.Int("pr_number", savedPR.Number),
-							config.Int("pr_id", savedPR.ID),
-							config.Int("agent_run_id", agentRunID),
-						)
+						logger.Warn("Failed to init GitHub App client; skip Codex review request", config.Error(err))
+					}
+				}
+
+				if appGitHubClient != nil {
+					rawClient, err := appGitHubClient.ForRepo(c.Request.Context(), owner, repo)
+					if err != nil {
+						logger.Warn("Failed to init per-repo GitHub client; skip Codex review request", config.Error(err))
+					} else {
+						githubClient := clients.NewFromGitHub(rawClient, logger)
+						reviewFeedbackRepo := repositories.NewReviewFeedbackRepository()
+						codexReviewService := services.NewCodexReviewService(githubClient, reviewFeedbackRepo, logger)
+
+						if _, err := codexReviewService.RequestReview(
+							c.Request.Context(),
+							owner,
+							repo,
+							savedPR.Number,
+							savedPR.ID,
+							agentRun.IdempotencyKey,
+						); err != nil {
+							logger.Warn("Failed to request Codex review",
+								config.Error(err),
+								config.String("owner", owner),
+								config.String("repo", repo),
+								config.Int("pr_number", savedPR.Number),
+								config.Int("pr_id", savedPR.ID),
+								config.Int("agent_run_id", agentRunID),
+							)
+							// Continue processing even if RequestReview fails (non-blocking)
+						} else {
+							logger.Info("Requested Codex review",
+								config.String("owner", owner),
+								config.String("repo", repo),
+								config.Int("pr_number", savedPR.Number),
+								config.Int("pr_id", savedPR.ID),
+								config.Int("agent_run_id", agentRunID),
+							)
+						}
 					}
 				}
 			}
 		}
+
 	}
 
 	// Validate required fields for succeeded status (after ensuring AgentRun exists)
@@ -498,9 +516,12 @@ func HandleAgentReport(c *gin.Context) {
 			)
 		}
 		logsExcerpt = excerpt
-		if err := services.RecordAgentRunFailure(agentRun, summary, excerpt); err != nil {
-			config.GetLogger().Warn("Failed to record audit log for agent-run failure", config.Error(err))
+		afterCompletion = func() {
+			if err := services.RecordAgentRunFailure(agentRun, summary, excerpt); err != nil {
+				config.GetLogger().Warn("Failed to record audit log for agent-run failure", config.Error(err))
+			}
 		}
+
 	}
 
 	// Build structured output JSON (schema v1)
@@ -551,6 +572,17 @@ func HandleAgentReport(c *gin.Context) {
 
 	// Save updated AgentRun
 	if err := agentRunRepo.Update(agentRun); err != nil {
+		if goerrors.Is(err, repositories.ErrConcurrentLifecycle) {
+			current, loadErr := agentRunRepo.GetByID(agentRun.ID)
+			if loadErr == nil && (current.State == "failed" || current.State == "succeeded") {
+				c.JSON(http.StatusOK, ReportResponse{Message: "Report already processed", AgentRunID: agentRun.ID})
+			} else {
+				// Same-attempt metadata recovery is not completion. Ask the
+				// reporter to retry rather than discarding a valid result.
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "LIFECYCLE_CHANGED", "message": "retry report against current lifecycle state"})
+			}
+			return
+		}
 		logger.Error("Failed to update AgentRun",
 			config.Error(err),
 			config.Int("agent_run_id", agentRunID),
@@ -562,6 +594,15 @@ func HandleAgentReport(c *gin.Context) {
 			"message": "Failed to update agent run",
 		})
 		return
+	}
+
+	if req.Status == "failed" && agentRun.ExecutionMode == "plan_creation" && agentRun.ReviewFeedbackID != nil {
+		if err := db.Model(&models.ReviewFeedback{}).Where("id = ? AND plan_agent_run_id = ? AND plan_creation_status = ?", *agentRun.ReviewFeedbackID, agentRun.ID, "creating").Update("plan_creation_status", "rejected").Error; err != nil {
+			logger.Warn("Failed to release review plan latch", config.Error(err))
+		}
+	}
+	if afterCompletion != nil {
+		afterCompletion()
 	}
 
 	// Log successful report
@@ -615,7 +656,7 @@ func HandleAgentReport(c *gin.Context) {
 					)
 				}
 
-				if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+				if err := db.Model(&models.ReviewFeedback{}).Where("id = ? AND execution_agent_run_id = ?", reviewFeedback.ID, agentRun.ID).Update("plan_creation_status", reviewFeedback.PlanCreationStatus).Error; err != nil {
 					logger.Warn("Failed to update ReviewFeedback after plan execution",
 						config.Error(err),
 						config.Int("review_feedback_id", reviewFeedback.ID),
@@ -882,25 +923,7 @@ func HandleAgentReport(c *gin.Context) {
 					config.String("execution_mode", agentRun.ExecutionMode),
 				)
 			} else {
-				// Fallback: Find job by agent-run-id label (for backward compatibility when JobName is not stored)
-				job, findErr := kubernetesClient.FindJobByAgentRunID(c.Request.Context(), agentRunID)
-				if findErr != nil {
-					logger.Warn("Failed to find job by agent-run-id for deletion (job may already be deleted)",
-						config.Error(findErr),
-						config.Int("agent_run_id", agentRunID),
-						config.String("execution_mode", agentRun.ExecutionMode),
-					)
-					// Continue without deleting job (non-blocking - job may already be deleted)
-				} else {
-					jobName = job.Name
-					jobNameSource = "fallback"
-					logger.Info("Found job by agent-run-id for cleanup (fallback)",
-						config.Int("agent_run_id", agentRunID),
-						config.String("job_name", jobName),
-						config.String("job_name_source", jobNameSource),
-						config.String("execution_mode", agentRun.ExecutionMode),
-					)
-				}
+				logger.Warn("Skipping cleanup without a verified original Job name", config.Int("agent_run_id", agentRunID))
 			}
 
 			if jobName != "" {
@@ -1047,6 +1070,13 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 		return
 	}
 
+	if !validateReportAttempt(c, agentRun, req.JobName) {
+		return
+	}
+	if agentRun.State == "failed" {
+		c.JSON(http.StatusOK, ReportResponse{Message: "Report already processed", AgentRunID: agentRun.ID})
+		return
+	}
 	if agentRun.ExecutionMode != "plan_creation" {
 		logger.Warn("Plan report received for non plan-creation run",
 			config.Int("agent_run_id", agentRunID),
@@ -1206,7 +1236,9 @@ func handlePlanReport(c *gin.Context, agentRunID int, req *PlanReportRequest, ag
 	sanitizedLogs := sanitizePlanLogs(req.Logs)
 	now := time.Now()
 	agentRun.AgentType = req.AgentType
-	agentRun.CompletedAt = &now
+	if agentRun.CompletedAt == nil {
+		agentRun.CompletedAt = &now
+	}
 
 	// Get ReviewFeedbackRepository only if needed
 	var reviewFeedbackRepo *repositories.ReviewFeedbackRepository
@@ -1248,6 +1280,8 @@ func handlePlanCreated(
 	var planCreationJobNameFromRequest string
 	if req.JobName != nil && *req.JobName != "" {
 		planCreationJobNameFromRequest = *req.JobName
+	} else if agentRun.JobName != nil {
+		planCreationJobNameFromRequest = *agentRun.JobName
 	}
 	planContent := strings.TrimSpace(req.PlanContent)
 	if planContent == "" {
@@ -1363,20 +1397,18 @@ func handlePlanCreated(
 	agentRunUpdated := false
 	reviewFeedbackUpdated := false
 	persistRollback := func() {
+		// An accepted terminal plan report is durable. A later notification or
+		// setup error must not reopen it or overwrite a peer's execution.
 		if agentRunUpdated {
-			if err := agentRunRepo.Update(agentRun); err != nil {
-				logger.Warn("Failed to rollback plan AgentRun state",
-					config.Error(err),
-					config.Int("agent_run_id", agentRunID),
-				)
+			if latest, err := agentRunRepo.GetByID(agentRun.ID); err == nil {
+				*agentRun = *latest
 			}
 		}
 		if reviewFeedbackUpdated && reviewFeedback != nil && reviewFeedbackRepo != nil {
-			if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-				logger.Warn("Failed to rollback ReviewFeedback plan state",
-					config.Error(err),
-					config.Int("review_feedback_id", reviewFeedback.ID),
-				)
+			if err := db.Model(&models.ReviewFeedback{}).
+				Where("id = ? AND plan_agent_run_id = ? AND execution_agent_run_id IS NULL AND plan_creation_status = ?", reviewFeedback.ID, agentRunID, "creating").
+				Updates(map[string]interface{}{"plan_creation_status": previousStatus, "plan_content": previousPlanContent, "plan_agent_run_id": previousPlanAgentRunID}).Error; err != nil {
+				logger.Warn("Failed to rollback unclaimed review preparation", config.Error(err))
 			}
 		}
 	}
@@ -1421,7 +1453,9 @@ func handlePlanCreated(
 		reviewFeedback.PlanCreationStatus = "creating"
 		reviewFeedback.PlanAgentRunID = &planRunID
 
-		if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+		if err := db.Model(&models.ReviewFeedback{}).
+			Where("id = ? AND execution_agent_run_id IS NULL AND (plan_agent_run_id IS NULL OR plan_agent_run_id = ?) AND plan_creation_status IN ?", reviewFeedback.ID, agentRunID, []string{"pending", "creating"}).
+			Updates(map[string]interface{}{"plan_content": planContentForStorage, "plan_creation_status": "creating", "plan_agent_run_id": agentRunID}).Error; err != nil {
 			logger.Error("Failed to update ReviewFeedback with plan content",
 				config.Error(err),
 				config.Int("review_feedback_id", reviewFeedback.ID),
@@ -1434,6 +1468,17 @@ func handlePlanCreated(
 			})
 			return
 		}
+		latestFeedback, loadErr := reviewFeedbackRepo.FindByID(reviewFeedback.ID)
+		if loadErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "REVIEW_RELOAD_FAILED"})
+			return
+		}
+		if latestFeedback.ExecutionAgentRunID != nil || latestFeedback.PlanCreationStatus != "creating" || latestFeedback.PlanAgentRunID == nil || *latestFeedback.PlanAgentRunID != agentRunID {
+			c.JSON(http.StatusOK, gin.H{"message": "Review execution setup already claimed or superseded"})
+			return
+		}
+		*reviewFeedback = *latestFeedback
+
 		reviewFeedbackUpdated = true
 	}
 
@@ -1457,65 +1502,8 @@ func handlePlanCreated(
 	// This handles early returns when new reviews invalidate the plan
 	defer func() {
 		if kubernetesClient != nil && agentRunID > 0 {
-			// Reload agentRun to get the actual job name
-			reloadedAgentRun, reloadErr := agentRunRepo.GetByID(agentRunID)
-			var planCreationJobName string
-			var jobNameSource string
-
-			// Priority: 1) planCreationJobNameFromRequest (from reporting attempt), 2) reloadedAgentRun.JobName (stored), 3) FindJobByAgentRunID (fallback)
-			if planCreationJobNameFromRequest != "" {
-				planCreationJobName = planCreationJobNameFromRequest
-				jobNameSource = "request"
-				logFields := []config.Field{
-					config.Int("plan_agent_run_id", agentRunID),
-					config.String("job_name", planCreationJobName),
-					config.String("job_name_source", jobNameSource),
-				}
-				if reviewFeedback != nil {
-					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
-				}
-				logger.Info("Using job name from request for plan creation cleanup", logFields...)
-			} else if reloadErr == nil && reloadedAgentRun != nil && reloadedAgentRun.JobName != nil && *reloadedAgentRun.JobName != "" {
-				planCreationJobName = *reloadedAgentRun.JobName
-				jobNameSource = "stored"
-				logFields := []config.Field{
-					config.Int("plan_agent_run_id", agentRunID),
-					config.String("job_name", planCreationJobName),
-					config.String("job_name_source", jobNameSource),
-				}
-				if reviewFeedback != nil {
-					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
-				}
-				logger.Info("Using stored job name for plan creation cleanup", logFields...)
-			} else {
-				// Fallback: Find job by agent-run-id label (for backward compatibility when JobName is not stored)
-				job, findErr := kubernetesClient.FindJobByAgentRunID(ctx, agentRunID)
-				if findErr != nil {
-					logFields := []config.Field{
-						config.Error(findErr),
-						config.Int("plan_agent_run_id", agentRunID),
-					}
-					if reviewFeedback != nil {
-						logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
-					}
-					logger.Warn("Failed to find plan creation job by agent-run-id for deletion (job may already be deleted)", logFields...)
-					// Continue without deleting job (non-blocking - job may already be deleted)
-					return
-				}
-
-				planCreationJobName = job.Name
-				jobNameSource = "fallback"
-				logFields := []config.Field{
-					config.Int("plan_agent_run_id", agentRunID),
-					config.String("job_name", planCreationJobName),
-					config.String("job_name_source", jobNameSource),
-				}
-				if reviewFeedback != nil {
-					logFields = append(logFields, config.Int("review_feedback_id", reviewFeedback.ID))
-				}
-				logger.Info("Found plan creation job by agent-run-id for cleanup (fallback)", logFields...)
-			}
-
+			// Freeze cleanup to the original, validated reporting attempt.
+			planCreationJobName := planCreationJobNameFromRequest
 			if planCreationJobName == "" {
 				return
 			}
@@ -1834,7 +1822,7 @@ func handlePlanCreated(
 		// Create plan execution AgentRun for review-triggered plan creation
 		executionPRID := reviewFeedback.PRID
 		executionRun := &models.AgentRun{
-			IdempotencyKey:   fmt.Sprintf("plan-exec-%d-%d-%d", reviewFeedback.ID, agentRunID, time.Now().UnixNano()),
+			IdempotencyKey:   fmt.Sprintf("plan-exec-review-%d-plan-%d", reviewFeedback.ID, agentRunID),
 			IssueID:          agentRun.IssueID,
 			PRID:             &executionPRID,
 			State:            "queued",
@@ -1844,7 +1832,8 @@ func handlePlanCreated(
 			ReviewFeedbackID: &reviewFeedback.ID,
 		}
 
-		if err := db.Create(executionRun).Error; err != nil {
+		executionRun, _, err = agentRunRepo.CreateOrGet(executionRun.IdempotencyKey, executionRun)
+		if err != nil {
 			logger.Error("Failed to create execution AgentRun",
 				config.Error(err),
 				config.Int("review_feedback_id", reviewFeedback.ID),
@@ -1858,6 +1847,11 @@ func handlePlanCreated(
 			return
 		}
 
+		if executionRun.State != "queued" {
+			c.JSON(http.StatusOK, gin.H{"message": "Execution attempt already reserved", "execution_agent_run_id": executionRun.ID})
+			return
+		}
+
 		branchName := fmt.Sprintf("feature/issue-%d", issue.Number)
 		if trimmed := strings.TrimSpace(pr.Branch); trimmed != "" {
 			branchName = trimmed
@@ -1868,19 +1862,42 @@ func handlePlanCreated(
 			logger.Error("Failed to initialize Kubernetes client for plan execution",
 				config.Error(err),
 			)
-			restoreReviewAndAgent()
-			persistRollback()
-			if deleteErr := db.Delete(executionRun).Error; deleteErr != nil {
-				logger.Warn("Failed to delete execution AgentRun after Kubernetes client error",
-					config.Error(deleteErr),
-					config.Int("execution_agent_run_id", executionRun.ID),
-				)
-			}
+			// Keep the shared deterministic reservation available for a retry.
+
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "KUBERNETES_CLIENT_ERROR",
 				"message": "Failed to initialize Kubernetes client",
 			})
 			return
+		}
+
+		dispatchName := executionRun.AttemptJobName()
+		executionRun.JobName = &dispatchName
+		dispatchTime := time.Now().UTC()
+		executionRun.State = "started"
+		executionRun.StartedAt = &dispatchTime
+		if err := agentRunRepo.Update(executionRun); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "DISPATCH_RESERVATION_FAILED"})
+			return
+		}
+		reviewFeedback.ExecutionAgentRunID = &executionRun.ID
+		claim := db.Model(&models.ReviewFeedback{}).
+			Where("id = ? AND plan_agent_run_id = ? AND plan_creation_status = ? AND (execution_agent_run_id IS NULL OR execution_agent_run_id = ?)", reviewFeedback.ID, agentRunID, "creating", executionRun.ID).
+			Update("execution_agent_run_id", executionRun.ID)
+		if claim.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "DISPATCH_LINK_FAILED"})
+			return
+		}
+		if claim.RowsAffected == 0 {
+			latest, err := reviewFeedbackRepo.FindByID(reviewFeedback.ID)
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "REVIEW_CLAIM_RELOAD_FAILED"})
+				return
+			}
+			if latest.PlanAgentRunID == nil || *latest.PlanAgentRunID != agentRunID || latest.ExecutionAgentRunID == nil || *latest.ExecutionAgentRunID != executionRun.ID || latest.PlanCreationStatus != "creating" {
+				c.JSON(http.StatusOK, gin.H{"message": "Execution claim superseded; dispatch skipped"})
+				return
+			}
 		}
 
 		jobService := kubernetesJobServiceFactory(kubernetesClient, logger)
@@ -1890,24 +1907,8 @@ func handlePlanCreated(
 				config.Error(err),
 				config.Int("execution_agent_run_id", executionRun.ID),
 			)
-			failureReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(err.Error()), utils.GetDBOutputLimitBytes(), "… [truncated]")
-			executionRun.State = "failed"
-			executionRun.ErrorMessage = &failureReason
-			if updateErr := agentRunRepo.Update(executionRun); updateErr != nil {
-				logger.Warn("Failed to record execution AgentRun failure state",
-					config.Error(updateErr),
-					config.Int("execution_agent_run_id", executionRun.ID),
-				)
-			}
+			// Keep linked started attempt on ambiguous create failure.
 
-			restoreReviewAndAgent()
-			persistRollback()
-			if deleteErr := db.Delete(executionRun).Error; deleteErr != nil {
-				logger.Warn("Failed to delete execution AgentRun after job creation failure",
-					config.Error(deleteErr),
-					config.Int("execution_agent_run_id", executionRun.ID),
-				)
-			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "PLAN_EXECUTION_JOB_CREATION_FAILED",
 				"message": "Failed to create plan execution job",
@@ -1926,7 +1927,9 @@ func handlePlanCreated(
 
 		reviewFeedback.PlanCreationStatus = "created"
 		reviewFeedback.ExecutionAgentRunID = &executionRun.ID
-		if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
+		if err := db.Model(&models.ReviewFeedback{}).
+			Where("id = ? AND plan_agent_run_id = ? AND execution_agent_run_id = ? AND plan_creation_status = ?", reviewFeedback.ID, agentRunID, executionRun.ID, "creating").
+			Update("plan_creation_status", "created").Error; err != nil {
 			logger.Error("Failed to link execution AgentRun to ReviewFeedback",
 				config.Error(err),
 				config.Int("execution_agent_run_id", executionRun.ID),
@@ -2092,8 +2095,8 @@ func handlePlanCreated(
 
 		// Persist plan creation run state to database
 		// Use optimistic locking with WHERE condition to ensure state hasn't changed
-		result := db.Model(&models.AgentRun{}).
-			Where("id = ? AND state = ?", agentRunID, originalState).
+		snapshot, _ := agentRun.ObservedLifecycle()
+		result := repositories.LifecycleQuery(db, agentRunID, snapshot).
 			Updates(map[string]interface{}{
 				"state":         "succeeded",
 				"plan_content":  planContentForStorage,
@@ -2248,8 +2251,8 @@ func handlePlanCreated(
 
 			// Transition plan creation run to "succeeded" state within transaction
 			// Use optimistic locking with WHERE condition to ensure state hasn't changed
-			result := tx.Model(&models.AgentRun{}).
-				Where("id = ? AND state = ?", agentRunID, agentRun.State).
+			snapshot, _ := agentRun.ObservedLifecycle()
+			result := repositories.LifecycleQuery(tx, agentRunID, snapshot).
 				Updates(map[string]interface{}{
 					"state":         "succeeded",
 					"plan_content":  planContentForStorage,
@@ -2356,6 +2359,13 @@ func handlePlanCreated(
 		)
 	}
 
+	dispatchName := executionRun.AttemptJobName()
+	executionRun.JobName = &dispatchName
+	if err := agentRunRepo.Update(executionRun); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "DISPATCH_RESERVATION_FAILED"})
+		return
+	}
+
 	// Transition plan execution AgentRun to started state
 	// Note: execution run and plan creation run state transition are already committed in transaction
 	// If this fails, execution run exists and can be retried
@@ -2372,6 +2382,12 @@ func handlePlanCreated(
 			"error":   "STATE_TRANSITION_ERROR",
 			"message": "Failed to transition execution agent run to started",
 		})
+		return
+	}
+
+	executionRun, err = agentRunRepo.GetByID(executionRun.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "DISPATCH_RELOAD_FAILED"})
 		return
 	}
 
@@ -2404,34 +2420,8 @@ func handlePlanCreated(
 			config.Error(err),
 			config.Int("execution_agent_run_id", executionRun.ID),
 		)
-		// Rollback execution run state to queued so it can be retried
-		// The execution run should be in "started" state at this point
-		if rollbackErr := stateMachine.TransitionToQueued(executionRun.ID); rollbackErr != nil {
-			logger.Warn("Failed to rollback execution AgentRun state",
-				config.Error(rollbackErr),
-				config.Int("execution_agent_run_id", executionRun.ID),
-			)
-			// If rollback fails because state is not "started", try direct reset to queued
-			// This handles edge cases where the state might have changed
-			currentRun, getErr := agentRunRepo.GetByID(executionRun.ID)
-			if getErr == nil && currentRun != nil && currentRun.State != "queued" {
-				currentRun.State = "queued"
-				currentRun.StartedAt = nil
-				currentRun.CompletedAt = nil
-				currentRun.ErrorMessage = nil
-				if directUpdateErr := agentRunRepo.Update(currentRun); directUpdateErr != nil {
-					logger.Warn("Failed to reset execution AgentRun to queued state directly",
-						config.Error(directUpdateErr),
-						config.Int("execution_agent_run_id", executionRun.ID),
-						config.String("current_state", currentRun.State),
-					)
-				} else {
-					logger.Info("Reset execution AgentRun to queued state directly after TransitionToQueued failed",
-						config.Int("execution_agent_run_id", executionRun.ID),
-					)
-				}
-			}
-		}
+		// Keep started reservation on an ambiguous Kubernetes create error.
+
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "PLAN_EXECUTION_JOB_CREATION_FAILED",
 			"message": "Failed to create plan execution job",
@@ -2466,145 +2456,54 @@ func handlePlanCreated(
 }
 
 func handlePlanRejected(
-	c *gin.Context,
-	ctx context.Context,
-	agentRunID int,
-	agentRun *models.AgentRun,
-	reviewFeedback *models.ReviewFeedback,
-	req *PlanReportRequest,
-	sanitizedLogs string,
-	agentRunRepo repositories.AgentRunRepository,
-	reviewFeedbackRepo *repositories.ReviewFeedbackRepository,
-	db *gorm.DB,
+	c *gin.Context, ctx context.Context, agentRunID int, agentRun *models.AgentRun,
+	reviewFeedback *models.ReviewFeedback, req *PlanReportRequest, sanitizedLogs string,
+	agentRunRepo repositories.AgentRunRepository, reviewFeedbackRepo *repositories.ReviewFeedbackRepository, db *gorm.DB,
 ) {
 	logger := config.GetLogger()
 	reason := strings.TrimSpace(req.RejectionReason)
 	if reason == "" {
-		code := errorcodes.ERR_VALIDATION_MISSING_REQUIRED
-		userMsg := errorcodes.GetUserMessage(errorcodes.NewCodedError(code, "", nil), "ja")
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":      string(code),
-			"message":    userMsg,
-			"error_code": string(code),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REJECTION_REASON", "message": "rejection_reason is required when status is plan_rejected"})
 		return
 	}
-
-	sanitizedReason := utils.TruncateWithSuffix(utils.SanitizeUTF8(reason), utils.GetDBOutputLimitBytes(), "… [truncated]")
-	planRunID := agentRunID
-
-	// Prepare rollback functions (only for reviewFeedback if it exists)
-	var previousStatus string
-	var previousPlanContent *string
-	var previousPlanAgentRunID *int
-	var previousExecutionID *int
-	if reviewFeedback != nil {
-		previousStatus = reviewFeedback.PlanCreationStatus
-		previousPlanContent = reviewFeedback.PlanContent
-		previousPlanAgentRunID = reviewFeedback.PlanAgentRunID
-		previousExecutionID = reviewFeedback.ExecutionAgentRunID
-	}
-
-	previousAgentRunPlan := agentRun.PlanContent
-	previousAgentRunState := agentRun.State
-	previousAgentRunError := agentRun.ErrorMessage
-	previousAgentRunOutput := agentRun.Output
-	previousAgentRunCompletedAt := agentRun.CompletedAt
-
-	restoreAgentRun := func() {
-		agentRun.PlanContent = previousAgentRunPlan
-		agentRun.State = previousAgentRunState
-		agentRun.ErrorMessage = previousAgentRunError
-		agentRun.Output = previousAgentRunOutput
-		agentRun.CompletedAt = previousAgentRunCompletedAt
-	}
-
-	restoreReviewFeedback := func() {
-		if reviewFeedback != nil {
-			reviewFeedback.PlanCreationStatus = previousStatus
-			reviewFeedback.PlanContent = previousPlanContent
-			reviewFeedback.PlanAgentRunID = previousPlanAgentRunID
-			reviewFeedback.ExecutionAgentRunID = previousExecutionID
-		}
-	}
-
+	sanitized := utils.TruncateWithSuffix(utils.SanitizeUTF8(reason), utils.GetDBOutputLimitBytes(), "… [truncated]")
 	agentRun.PlanContent = nil
 	agentRun.State = "failed"
-	agentRun.ErrorMessage = &sanitizedReason
-	agentRun.Output = buildPlanOutputJSON("plan_rejected", req.AgentType, "", sanitizedLogs, sanitizedReason)
-
-	if err := agentRunRepo.Update(agentRun); err != nil {
-		logger.Error("Failed to update plan creation AgentRun after rejection",
-			config.Error(err),
-			config.Int("agent_run_id", agentRunID),
-		)
-		restoreAgentRun()
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "Failed to update plan agent run",
-		})
+	agentRun.ErrorMessage = &sanitized
+	if agentRun.CompletedAt == nil {
+		now := time.Now().UTC()
+		agentRun.CompletedAt = &now
+	}
+	agentRun.Output = buildPlanOutputJSON("plan_rejected", req.AgentType, "", sanitizedLogs, sanitized)
+	// Persist the accepted terminal outcome and release its review latch together.
+	// Failure to post an optional comment must not reopen an already-finished Job.
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := repositories.NewAgentRunRepository(tx).Update(agentRun); err != nil {
+			return err
+		}
+		if reviewFeedback != nil {
+			return tx.Model(&models.ReviewFeedback{}).
+				Where("id = ? AND (plan_agent_run_id IS NULL OR plan_agent_run_id = ?) AND execution_agent_run_id IS NULL AND plan_creation_status IN ?", reviewFeedback.ID, agentRunID, []string{"pending", "creating"}).
+				Updates(map[string]interface{}{"plan_creation_status": "rejected", "plan_agent_run_id": agentRunID, "plan_content": nil}).Error
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Warn("Failed to persist plan rejection", config.Error(err))
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "PLAN_REJECTION_PERSIST_FAILED"})
 		return
 	}
-
-	// Post rejection comment only if ReviewFeedback exists (for review-triggered plan creation)
 	if reviewFeedback != nil && reviewFeedbackRepo != nil {
-		if err := postPlanRejectionComment(ctx, logger, db, reviewFeedback, sanitizedReason); err != nil {
-			restoreAgentRun()
-			if updateErr := agentRunRepo.Update(agentRun); updateErr != nil {
-				logger.Warn("Failed to rollback plan AgentRun state after rejection error",
-					config.Error(updateErr),
-					config.Int("agent_run_id", agentRunID),
-				)
-			}
+		if err := postPlanRejectionComment(ctx, logger, db, reviewFeedback, sanitized); err != nil {
 			if httpErr, ok := err.(*planRejectionHTTPError); ok {
-				c.JSON(httpErr.status, gin.H{
-					"error":   httpErr.code,
-					"message": httpErr.message,
-				})
+				c.JSON(httpErr.status, gin.H{"error": httpErr.code, "message": httpErr.message})
 				return
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "GITHUB_COMMENT_ERROR",
-				"message": "Failed to post plan rejection comment",
-			})
-			return
-		}
-
-		reviewFeedback.PlanCreationStatus = "rejected"
-		reviewFeedback.PlanAgentRunID = &planRunID
-		reviewFeedback.ExecutionAgentRunID = nil
-		reviewFeedback.PlanContent = nil
-
-		if err := reviewFeedbackRepo.Update(reviewFeedback); err != nil {
-			logger.Error("Failed to update ReviewFeedback for plan rejection",
-				config.Error(err),
-				config.Int("review_feedback_id", reviewFeedback.ID),
-			)
-			restoreReviewFeedback()
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "INTERNAL_ERROR",
-				"message": "Failed to update review feedback",
-			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "GITHUB_COMMENT_ERROR", "message": "Plan rejection saved, but comment posting failed"})
 			return
 		}
 	}
-
-	if reviewFeedback != nil {
-		logger.Info("Plan creation rejected",
-			config.Int("plan_agent_run_id", agentRunID),
-			config.Int("review_feedback_id", reviewFeedback.ID),
-			config.String("reason_preview", previewString(sanitizedReason, planPreviewLogLimit)),
-		)
-	} else {
-		logger.Info("Plan creation rejected (issue-triggered)",
-			config.Int("plan_agent_run_id", agentRunID),
-			config.String("reason_preview", previewString(sanitizedReason, planPreviewLogLimit)),
-		)
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Plan rejected",
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "Plan rejected"})
 }
 
 var planLogSanitizePatterns = []*regexp.Regexp{
@@ -2683,4 +2582,23 @@ func buildPlanOutputJSON(status, agentType, planContent, logs, rejectionReason s
 	}
 
 	return datatypes.JSON(bytes[:limit])
+}
+
+// validateReportAttempt prevents stale Pods from reporting or cleaning up a newer
+// attempt. Upgrade the runner image first: unscoped legacy reports are accepted
+// only for first attempts with pre-hardening Job names.
+func validateReportAttempt(c *gin.Context, run *models.AgentRun, reported *string) bool {
+	if reported != nil && *reported != "" {
+		expected := run.AttemptJobName()
+		if run.JobName != nil && *run.JobName != "" {
+			expected = *run.JobName
+		}
+		if *reported == expected {
+			return true
+		}
+	} else if run.RetryCount == 0 && (run.JobName == nil || !strings.Contains(*run.JobName, "-attempt-")) {
+		return true
+	}
+	c.JSON(http.StatusConflict, gin.H{"error": "STALE_EXECUTION_ATTEMPT", "message": "report does not identify the current Job attempt"})
+	return false
 }

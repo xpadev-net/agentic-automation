@@ -65,6 +65,9 @@ func NewAgentRunStateMachine(repo repositories.AgentRunRepository, logger *confi
 // TransitionToStarted transitions an AgentRun from "queued" to "started" state
 // and sets the StartedAt timestamp.
 func (s *agentRunStateMachine) TransitionToStarted(id int) error {
+	if atomic, ok := s.repo.(repositories.AtomicAgentRunLifecycle); ok {
+		return atomic.TransitionLifecycle(id, "started", nil, nil, nil)
+	}
 	s.logger.Info("Transitioning AgentRun to started state",
 		config.Int("agent_run_id", id),
 		config.String("current_state", "queued"),
@@ -143,6 +146,9 @@ func (s *agentRunStateMachine) TransitionToStarted(id int) error {
 // TransitionToSucceeded transitions an AgentRun from "started" to "succeeded" state,
 // sets the CompletedAt timestamp, and optionally updates PRID and CommitSHA.
 func (s *agentRunStateMachine) TransitionToSucceeded(id int, prID *int, commitSHA *string) error {
+	if atomic, ok := s.repo.(repositories.AtomicAgentRunLifecycle); ok {
+		return atomic.TransitionLifecycle(id, "succeeded", prID, commitSHA, nil)
+	}
 	s.logger.Info("Transitioning AgentRun to succeeded state",
 		config.Int("agent_run_id", id),
 		config.String("current_state", "started"),
@@ -270,6 +276,9 @@ func (s *agentRunStateMachine) TransitionToSucceeded(id int, prID *int, commitSH
 // TransitionToFailed transitions an AgentRun from "started" to "failed" state,
 // sets the CompletedAt timestamp, and optionally sets an error message.
 func (s *agentRunStateMachine) TransitionToFailed(id int, errorMessage *string) error {
+	if atomic, ok := s.repo.(repositories.AtomicAgentRunLifecycle); ok {
+		return atomic.TransitionLifecycle(id, "failed", nil, nil, errorMessage)
+	}
 	s.logger.Info("Transitioning AgentRun to failed state",
 		config.Int("agent_run_id", id),
 		config.String("current_state", "started"),
@@ -391,6 +400,9 @@ func (s *agentRunStateMachine) TransitionToFailed(id int, errorMessage *string) 
 // It directly updates the state using Update() instead of UpdateState() to
 // bypass normal state transition validation.
 func (s *agentRunStateMachine) TransitionToQueued(id int) error {
+	if atomic, ok := s.repo.(repositories.AtomicAgentRunLifecycle); ok {
+		return atomic.TransitionLifecycle(id, "queued", nil, nil, nil)
+	}
 	s.logger.Info("Rolling back AgentRun to queued state",
 		config.Int("agent_run_id", id),
 		config.String("current_state", "started"),

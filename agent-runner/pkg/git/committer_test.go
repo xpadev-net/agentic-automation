@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"regexp"
@@ -10,6 +11,10 @@ import (
 
 // setupTestRepoWithRemote creates a temporary git repository with a remote configured.
 func setupTestRepoWithRemote(t *testing.T, remoteURL string) (string, func()) {
+	oldPush := runPush
+	runPush = func(*exec.Cmd) error { return errors.New("fixture push rejected without network access") }
+	t.Cleanup(func() { runPush = oldPush })
+
 	repoDir, cleanup := setupTestRepo(t)
 
 	// Add remote

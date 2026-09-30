@@ -2,6 +2,7 @@ package clients
 
 import (
 	"context"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"regexp"
 	"strconv"
 	"testing"
@@ -422,7 +423,7 @@ func TestFindActiveJobByAgentRunID(t *testing.T) {
 
 		_, err := client.FindActiveJobByAgentRunID(ctx, agentRunID)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no active job found with agent-run-id=999")
+		assert.True(t, errors.IsNotFound(err))
 	})
 
 	t.Run("ignores completed jobs", func(t *testing.T) {
@@ -454,7 +455,8 @@ func TestFindActiveJobByAgentRunID(t *testing.T) {
 				},
 			},
 			Status: batchv1.JobStatus{
-				Succeeded: 1, // Completed job
+				Succeeded:  1,
+				Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}, // Completed job
 			},
 		}
 
@@ -464,7 +466,7 @@ func TestFindActiveJobByAgentRunID(t *testing.T) {
 		// Should not find completed job
 		_, err = client.FindActiveJobByAgentRunID(ctx, agentRunID)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no active job found with agent-run-id=456")
+		assert.True(t, errors.IsNotFound(err))
 	})
 
 	t.Run("returns first active job when multiple active jobs found", func(t *testing.T) {

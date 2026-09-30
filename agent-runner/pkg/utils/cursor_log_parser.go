@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"agent-runner/pkg/redact"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -387,7 +388,7 @@ func ParseAndFormatOutput(output string) {
 		entry, err := ParseLogEntry([]byte(line))
 		if err != nil {
 			// If parsing fails, output the raw line with a warning
-			fmt.Fprintf(os.Stderr, "[PARSE ERROR] %v: %s\n", err, line)
+			redact.Fprintf(os.Stderr, "[PARSE ERROR] %v: %s\n", err, line)
 			continue
 		}
 
@@ -397,16 +398,16 @@ func ParseAndFormatOutput(output string) {
 			isProcessingPiece := strings.HasPrefix(formatted, "[THINKING] processing") || formatted == "."
 			if isProcessingPiece {
 				// processing 系は改行しない（同一行で進捗を更新）
-				fmt.Fprintf(os.Stderr, "%s", formatted)
+				redact.Fprintf(os.Stderr, "%s", formatted)
 				os.Stderr.Sync()
 				inProgress = true
 			} else {
 				// 非 processing が来たら、直前が進捗連結中なら行を確定
 				if inProgress {
-					fmt.Fprintf(os.Stderr, "\n")
+					redact.Fprintf(os.Stderr, "\n")
 					inProgress = false
 				}
-				fmt.Fprintf(os.Stderr, "%s\n", formatted)
+				redact.Fprintf(os.Stderr, "%s\n", formatted)
 			}
 		}
 	}

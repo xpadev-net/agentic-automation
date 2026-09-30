@@ -8,11 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
-	"time"
 
-	"agent-runner/pkg/utils"
+	"agent-runner/pkg/redact"
+	"encoding/json"
 )
 
 // CommandRunner defines the interface for executing commands.
@@ -38,6 +37,9 @@ const defaultCodexModel = "gpt-5.6-luna"
 func (w *synchronizedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.writer == nil {
+		return len(p), nil
+	}
 	return w.writer.Write(p)
 }
 
@@ -110,14 +112,14 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 		cmd.Env = os.Environ()
 
 		// Execute and capture combined output (stdout + stderr)
-		output, err = cmd.CombinedOutput()
+		output, err = cmd.Output()
 	}
 
 	outputStr := string(output)
 
 	// If command execution failed, wrap the error with output context
 	if err != nil {
-		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput: %s", err, outputStr)
+		return outputStr, fmt.Errorf("claude-code execution failed: %w", redact.Error(err))
 	}
 
 	return outputStr, nil
@@ -166,92 +168,14 @@ func (e *Executor) executeCodex(workDir, prompt, model string, allowWrite bool) 
 	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return "", fmt.Errorf("failed to create codex stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return "", fmt.Errorf("failed to create codex stderr pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start codex: %w", err)
-	}
-
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-	progressWriter := &synchronizedWriter{writer: e.progressWriter}
-	type readerResult struct {
-		stream string
-		err    error
-	}
-	readerResults := make(chan readerResult, 2)
-
-	go func() {
-		reader := bufio.NewReader(stdout)
-		for {
-			line, readErr := reader.ReadString('\n')
-			if len(line) > 0 {
-				stdoutBuf.WriteString(line)
-				_, writeErr := fmt.Fprintf(progressWriter, "[CODEX] %s", line)
-				if !strings.HasSuffix(line, "\n") {
-					_, newlineErr := fmt.Fprintln(progressWriter)
-					if writeErr == nil {
-						writeErr = newlineErr
-					}
-				}
-				if writeErr != nil {
-					readerResults <- readerResult{stream: "stdout", err: fmt.Errorf("error streaming codex stdout: %w", writeErr)}
-					return
-				}
-			}
-			if readErr != nil {
-				if readErr == io.EOF {
-					readerResults <- readerResult{stream: "stdout"}
-				} else {
-					readerResults <- readerResult{stream: "stdout", err: fmt.Errorf("error reading codex stdout: %w", readErr)}
-				}
-				return
-			}
-		}
-	}()
-
-	go func() {
-		_, copyErr := io.Copy(io.MultiWriter(&stderrBuf, progressWriter), stderr)
-		if copyErr != nil {
-			readerResults <- readerResult{stream: "stderr", err: fmt.Errorf("error reading codex stderr: %w", copyErr)}
-			return
-		}
-		readerResults <- readerResult{stream: "stderr"}
-	}()
-
-	var streamErr error
-	for range 2 {
-		result := <-readerResults
-		if result.err != nil {
-			if streamErr == nil {
-				streamErr = result.err
-			}
-			// Stop the child immediately on the first reader/writer error. This
-			// closes both pipes so the other goroutine can finish and be joined.
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-		}
-	}
-	cmdErr := cmd.Wait()
-
-	outputStr := stdoutBuf.String() + stderrBuf.String()
-	if streamErr != nil {
-		return outputStr, streamErr
-	}
-	return codexResult(outputStr, cmdErr)
+	output, err := e.runStreaming(cmd, "CODEX")
+	return codexResult(output, err)
 }
 
 func codexResult(output string, err error) (string, error) {
 	// If command execution failed, wrap the error with output context
 	if err != nil {
-		return output, fmt.Errorf("codex execution failed: %w\nOutput: %s", err, output)
+		return output, fmt.Errorf("codex execution failed: %w", redact.Error(err))
 	}
 	return output, nil
 }
@@ -283,7 +207,7 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 		output, err = e.cmdRunner.Run("cursor-agent", args, workDir)
 		outputStr := string(output)
 		if err != nil {
-			return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput: %s", err, outputStr)
+			return outputStr, fmt.Errorf("cursor agent execution failed: %w", redact.Error(err))
 		}
 		return outputStr, nil
 	}
@@ -295,197 +219,98 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 	// Preserve existing environment and ensure CURSOR_API_KEY is set
 	cmd.Env = os.Environ()
 
-	// Get stdout and stderr pipes for streaming
+	outputStr, err := e.runStreaming(cmd, "CURSOR")
+	if err != nil {
+		return outputStr, fmt.Errorf("cursor agent execution failed: %w", redact.Error(err))
+	}
+	return outputStr, nil
+}
+
+// progressSummary emits only an allowlisted event name, never model text, tool
+// output, commands, paths, or malformed raw input. Unknown data stays private.
+func progressSummary(line string) string {
+	var event struct {
+		Type string `json:"type"`
+		Item struct {
+			Type string `json:"type"`
+		} `json:"item"`
+	}
+	if json.Unmarshal([]byte(line), &event) != nil {
+		return "unrecognized output received"
+	}
+	switch event.Type {
+	case "thread.started", "turn.started", "turn.completed", "turn.failed", "error", "system", "user", "assistant", "thinking", "tool_call", "result":
+		return event.Type
+	case "item.started", "item.updated", "item.completed":
+		switch event.Item.Type {
+		case "agent_message", "reasoning", "command_execution", "file_change", "mcp_tool_call", "web_search", "todo_list", "error":
+			return event.Type + " (" + event.Item.Type + ")"
+		default:
+			return event.Type
+		}
+	default:
+		return "event received"
+	}
+}
+
+// runStreaming keeps stdout for parsing and stderr only as a byte count. Both
+// streams are drained and joined before return, including progress sink failures.
+func (e *Executor) runStreaming(cmd *exec.Cmd, label string) (string, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stdout pipe: %w", err)
+		return "", err
 	}
-
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to create stderr pipe: %w", err)
+		return "", err
 	}
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start cursor-agent: %w", err)
+	if err = cmd.Start(); err != nil {
+		return "", redact.Error(err)
 	}
-
-	// Buffer to store all output
-	var outputBuf bytes.Buffer
-	var outputMu sync.Mutex
-
-	// Create log formatter for suppressing duplicate thinking logs
-	logFormatter := utils.NewLogFormatter()
-
-	// Channels for goroutine errors
-	stdoutErrCh := make(chan error, 1)
-	stderrErrCh := make(chan error, 1)
-
-	// Goroutine to read and parse stdout stream
+	var output bytes.Buffer
+	progress := &synchronizedWriter{writer: e.progressWriter}
+	results := make(chan error, 2)
 	go func() {
-		scanner := bufio.NewScanner(stdout)
-		// Set buffer size to handle large JSON lines (initial 1MB, max 10MB)
-		// This prevents ErrTooLong errors when cursor-agent outputs large messages
-		buf := make([]byte, 0, 1024*1024) // 1MB initial buffer
-		scanner.Buffer(buf, 10*1024*1024) // 10MB max buffer
-		inProgress := false
-		for scanner.Scan() {
-			line := scanner.Bytes()
-			lineCopy := make([]byte, len(line))
-			copy(lineCopy, line)
-
-			// Append to output buffer
-			outputMu.Lock()
-			outputBuf.Write(lineCopy)
-			outputBuf.WriteByte('\n')
-			outputMu.Unlock()
-
-			// Parse and format the line in real-time
-			entry, parseErr := utils.ParseLogEntry(lineCopy)
-			if parseErr != nil {
-				// If parsing fails, output the raw line with a warning
-				fmt.Fprintf(os.Stderr, "[PARSE ERROR] %v: %s\n", parseErr, string(lineCopy))
-			} else {
-				// Format and output the parsed entry with suppression of duplicate thinking progress logs
-				formatted, shouldOutput := logFormatter.FormatAndOutput(entry)
-				if shouldOutput {
-					isProcessingPiece := strings.HasPrefix(formatted, "[THINKING] processing") || formatted == "."
-					if isProcessingPiece {
-						// processing 系は改行しない（同一行で進捗を更新）
-						fmt.Fprintf(os.Stderr, "%s", formatted)
-						os.Stderr.Sync()
-						inProgress = true
-					} else {
-						if inProgress {
-							// 直前が進捗連結中なら行を確定
-							fmt.Fprintf(os.Stderr, "\n")
-							inProgress = false
-						}
-						fmt.Fprintf(os.Stderr, "%s\n", formatted)
-					}
+		reader := bufio.NewReader(stdout)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if len(line) > 0 {
+				output.WriteString(line)
+				if _, err := fmt.Fprintf(progress, "[%s] %s\n", label, progressSummary(line)); err != nil {
+					results <- fmt.Errorf("progress sink failed: %w", redact.Error(err))
+					return
 				}
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			stdoutErrCh <- fmt.Errorf("error reading stdout: %w", err)
-		} else {
-			stdoutErrCh <- nil
-		}
-	}()
-
-	// Goroutine to read stderr
-	stderrBuf := &bytes.Buffer{}
-	go func() {
-		_, copyErr := io.Copy(stderrBuf, stderr)
-		if copyErr != nil {
-			stderrErrCh <- fmt.Errorf("error reading stderr: %w", copyErr)
-		} else {
-			stderrErrCh <- nil
-		}
-	}()
-
-	// Helper function to kill process and wait with timeout
-	killAndWait := func() error {
-		if cmd.Process != nil {
-			// Kill the process to prevent deadlock
-			if killErr := cmd.Process.Kill(); killErr != nil {
-				return fmt.Errorf("failed to kill process: %w", killErr)
+			if readErr != nil {
+				if readErr == io.EOF {
+					readErr = nil
+				}
+				results <- readErr
+				return
 			}
 		}
-
-		// Wait for process to exit with timeout to prevent hanging
-		waitDone := make(chan error, 1)
-		go func() {
-			waitDone <- cmd.Wait()
-		}()
-
-		select {
-		case err := <-waitDone:
-			return err
-		case <-time.After(5 * time.Second):
-			// Process didn't exit within 5 seconds, but we already killed it
-			// This shouldn't happen, but we return an error to be safe
-			return fmt.Errorf("process did not exit within timeout after kill")
-		}
-	}
-
-	// Wait for stdout reading to complete
-	stdoutErr := <-stdoutErrCh
-	if stdoutErr != nil {
-		// Kill the process to prevent deadlock from pipe filling up
-		killErr := killAndWait()
-
-		// Get any output that was successfully read before the error
-		outputMu.Lock()
-		outputStr := outputBuf.String()
-		outputMu.Unlock()
-
-		if stderrBuf.Len() > 0 {
-			outputStr += stderrBuf.String()
-		}
-
-		if killErr != nil {
-			return outputStr, fmt.Errorf("%v (process kill failed: %v)", stdoutErr, killErr)
-		}
-		return outputStr, fmt.Errorf("%v (process killed due to stream error)", stdoutErr)
-	}
-
-	// Wait for stderr reading to complete
-	stderrErr := <-stderrErrCh
-	if stderrErr != nil {
-		// Kill the process to prevent deadlock from pipe filling up
-		killErr := killAndWait()
-
-		// Get any output that was successfully read before the error
-		outputMu.Lock()
-		outputStr := outputBuf.String()
-		outputMu.Unlock()
-
-		if stderrBuf.Len() > 0 {
-			outputStr += stderrBuf.String()
-		}
-
-		if killErr != nil {
-			return outputStr, fmt.Errorf("%v (process kill failed: %v)", stderrErr, killErr)
-		}
-		return outputStr, fmt.Errorf("%v (process killed due to stream error)", stderrErr)
-	}
-
-	// Wait for command to complete with timeout to prevent hanging
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- cmd.Wait()
 	}()
-
-	var cmdErr error
-	select {
-	case cmdErr = <-waitDone:
-		// Process completed normally
-	case <-time.After(1 * time.Hour):
-		// This is a very long timeout for safety, but if it happens something is wrong
-		// Kill the process and return error
-		if cmd.Process != nil {
-			cmd.Process.Kill()
+	go func() {
+		n, err := io.Copy(io.Discard, stderr)
+		if err == nil && n > 0 {
+			_, err = fmt.Fprintf(progress, "[%s] stderr received (%d bytes suppressed)\n", label, n)
 		}
-		cmdErr = fmt.Errorf("command did not complete within 1 hour timeout")
+		results <- err
+	}()
+	var streamErr error
+	for range 2 {
+		if err := <-results; err != nil {
+			if streamErr == nil {
+				streamErr = err
+			}
+			_ = cmd.Process.Kill()
+			_ = stdout.Close()
+			_ = stderr.Close()
+		}
 	}
-
-	// Get final output
-	outputMu.Lock()
-	outputStr := outputBuf.String()
-	outputMu.Unlock()
-
-	// Append stderr output if any
-	if stderrBuf.Len() > 0 {
-		outputStr += stderrBuf.String()
-		fmt.Fprintf(os.Stderr, "[STDERR] %s", stderrBuf.String())
+	waitErr := cmd.Wait()
+	if streamErr != nil {
+		return output.String(), redact.Error(streamErr)
 	}
-
-	// If command execution failed, wrap the error with output context
-	if cmdErr != nil {
-		return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput: %s", cmdErr, outputStr)
-	}
-
-	return outputStr, nil
+	return output.String(), redact.Error(waitErr)
 }

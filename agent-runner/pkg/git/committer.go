@@ -11,6 +11,9 @@ import (
 	githubutil "agent-runner/pkg/github"
 )
 
+// runPush is a narrow test seam so remote-URL unit tests never contact a server.
+var runPush = func(cmd *exec.Cmd) error { return cmd.Run() }
+
 // CommitChanges commits all changes with the given message and returns the commit SHA.
 // If skipHooks is true, the --no-verify flag is added to skip pre-commit hooks.
 func CommitChanges(workDir, message string, skipHooks bool) (string, error) {
@@ -117,7 +120,7 @@ func PushBranch(workDir, branchName, token string) error {
 	// Push branch
 	pushCmd := exec.Command("git", "push", "-u", "origin", branchName)
 	pushCmd.Dir = workDir
-	if err := pushCmd.Run(); err != nil {
+	if err := runPush(pushCmd); err != nil {
 		// Retry once with refreshed token and remote URL if possible
 		if token == "" {
 			// Try to refresh token based on remote URL
@@ -134,7 +137,7 @@ func PushBranch(workDir, branchName, token string) error {
 						// Retry push once
 						pushCmd = exec.Command("git", "push", "-u", "origin", branchName)
 						pushCmd.Dir = workDir
-						if rerr := pushCmd.Run(); rerr == nil {
+						if rerr := runPush(pushCmd); rerr == nil {
 							return nil
 						}
 					}

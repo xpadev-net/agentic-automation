@@ -408,8 +408,8 @@ func TestExecutor_Execute_ClaudeCode_CommandFailure(t *testing.T) {
 	if !strings.Contains(errorMsg, "claude-code execution failed") {
 		t.Errorf("Expected error message to contain 'claude-code execution failed', got %q", errorMsg)
 	}
-	if !strings.Contains(errorMsg, "Output: Command failed with exit code 1") {
-		t.Errorf("Expected error message to contain output, got %q", errorMsg)
+	if strings.Contains(errorMsg, "Command failed with exit code 1") {
+		t.Errorf("error must not copy raw agent output: %q", errorMsg)
 	}
 
 	// Verify output is still returned
@@ -789,7 +789,7 @@ func TestExecutor_ExecuteWithOptions_Codex_ReadOnly(t *testing.T) {
 	}
 }
 
-func TestExecutor_ExecuteWithOptions_Codex_StreamsJSONLAndRetainsStderr(t *testing.T) {
+func TestExecutor_ExecuteWithOptions_Codex_StreamsSummariesAndKeepsStdoutSeparate(t *testing.T) {
 	cleanup := setupEnvVar(t, "CODEX_API_KEY", "test-key")
 	defer cleanup()
 
@@ -813,16 +813,16 @@ func TestExecutor_ExecuteWithOptions_Codex_StreamsJSONLAndRetainsStderr(t *testi
 	if !strings.HasPrefix(output, wantStdout) {
 		t.Fatalf("returned output must preserve complete JSONL stdout; got %q", output)
 	}
-	if !strings.Contains(output, "diagnostic from codex\n") {
-		t.Fatalf("returned output must retain stderr; got %q", output)
+	if strings.Contains(output, "diagnostic from codex") {
+		t.Fatalf("stderr must not contaminate the parser stream; got %q", output)
 	}
 	progressOutput := progress.String()
-	if !strings.Contains(progressOutput, "[CODEX] {\"type\":\"item.started\"}\n") ||
-		!strings.Contains(progressOutput, "[CODEX] {\"type\":\"item.completed\"}\n") {
-		t.Fatalf("progress must stream every JSONL line; got %q", progressOutput)
+	if !strings.Contains(progressOutput, "[CODEX] item.started\n") ||
+		!strings.Contains(progressOutput, "[CODEX] item.completed\n") {
+		t.Fatalf("progress must contain event summaries; got %q", progressOutput)
 	}
-	if !strings.Contains(progressOutput, "diagnostic from codex\n") {
-		t.Fatalf("progress must stream stderr; got %q", progressOutput)
+	if strings.Contains(progressOutput, "diagnostic from codex") || !strings.Contains(progressOutput, "bytes suppressed") {
+		t.Fatalf("progress must summarize stderr; got %q", progressOutput)
 	}
 }
 

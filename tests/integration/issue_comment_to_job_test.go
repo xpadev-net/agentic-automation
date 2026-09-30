@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,11 +31,14 @@ import (
 
 // Minimal in-memory DB setup (mirrors agent_report_test)
 func setupDB(t *testing.T) *gorm.DB {
-	dsn := "file::memory:?cache=shared"
+	dsn := filepath.Join(t.TempDir(), "webhooks.db") + "?_busy_timeout=5000&_journal_mode=WAL"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		NowFunc: func() time.Time { return time.Now().UTC() },
 	})
 	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	// Create minimal tables (subset required for this flow)
 	err = db.Exec(`
@@ -86,6 +90,7 @@ func setupDB(t *testing.T) *gorm.DB {
     `).Error
 	require.NoError(t, err)
 
+	require.NoError(t, db.AutoMigrate(&models.WebhookDelivery{}))
 	return db
 }
 
@@ -215,7 +220,7 @@ func Test_IssueComment_HappyPath_CreatesK8sJob(t *testing.T) {
 	expectedPrefix := fmt.Sprintf("agent-runner-%d-plan-0-", run.ID)
 	assert.True(t, strings.HasPrefix(job.Name, expectedPrefix),
 		"job name should start with %s, got: %s", expectedPrefix, job.Name)
-	assert.Len(t, job.Name, len(expectedPrefix)+6, "job name should have 6-character random suffix")
+	assert.Equal(t, fmt.Sprintf("%sattempt-%d", expectedPrefix, run.RetryCount), job.Name)
 	assert.Equal(t, "default", job.Namespace)
 
 	// Verify labels
@@ -389,7 +394,7 @@ func Test_IssueComment_ClosedIssue(t *testing.T) {
 	assert.Equal(t, "issue_not_open", resp["reason"])
 }
 
-func Test_IssueComment_K8sFailure_RollbackQueued(t *testing.T) {
+func Test_IssueComment_K8sFailure_PreservesDispatchReservation(t *testing.T) {
 	// Missing AGENT_RUNNER_IMAGE to force job creation error
 	os.Setenv("GITHUB_WEBHOOK_SECRET", "secret123")
 	os.Unsetenv("AGENT_RUNNER_IMAGE")
@@ -435,11 +440,12 @@ func Test_IssueComment_K8sFailure_RollbackQueued(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	// Expect error handled by middleware as 200 with error body, or bubbled
-	// Key assertion: AgentRun rolled back to queued
+	// A create error preserves the started reservation for reconciliation.
 	arRepo := repositories.NewAgentRunRepository(db)
 	run, err := arRepo.GetByIDempotencyKey(delivery)
 	require.NoError(t, err)
-	assert.Equal(t, "queued", run.State)
+	assert.Equal(t, "started", run.State)
+	assert.NotNil(t, run.JobName)
 }
 
 func Test_IssueComment_Idempotency_SecondIsNoop(t *testing.T) {

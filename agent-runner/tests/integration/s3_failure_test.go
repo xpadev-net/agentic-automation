@@ -3,6 +3,8 @@ package integration
 import (
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -14,17 +16,21 @@ import (
 	"agent-runner/pkg/storage"
 )
 
-// invalidS3Endpoint is an endpoint that will always fail to connect
-const invalidS3Endpoint = "http://invalid-host-that-does-not-exist:9000"
-
 // setupS3FailureEnv sets up environment variables with invalid S3 endpoint for failure testing
 func setupS3FailureEnv(t *testing.T, maxRetries int) (cleanup func()) {
 	t.Helper()
 
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<Error><Code>AccessDenied</Code><Message>deterministic S3 fixture failure</Message></Error>`))
+	}))
+	t.Cleanup(server.Close)
+
 	originalEnv := make(map[string]string)
 
 	envVars := map[string]string{
-		"S3_ENDPOINT":          invalidS3Endpoint,
+		"S3_ENDPOINT":          server.URL,
 		"S3_REGION":            "us-east-1",
 		"S3_BUCKET":            "test-bucket",
 		"S3_ACCESS_KEY_ID":     "test-key",

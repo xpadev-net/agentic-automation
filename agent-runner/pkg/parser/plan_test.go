@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"agent-runner/pkg/utils"
 	"strings"
 	"testing"
 )
@@ -97,7 +98,12 @@ func TestParsePlanResult(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			plan, rejected, reason := ParsePlanResult(tc.input)
+			mode := utils.OutputPlainText
+			if strings.HasPrefix(name, "codex JSONL") {
+				mode = utils.OutputCodexJSONL
+				tc.input += "\n{\"type\":\"turn.completed\"}"
+			}
+			plan, rejected, reason := ParsePlanResult(tc.input, mode)
 			if rejected != tc.rejected {
 				t.Fatalf("expected rejected=%v, got %v", tc.rejected, rejected)
 			}
@@ -108,5 +114,17 @@ func TestParsePlanResult(t *testing.T) {
 				t.Fatalf("expected reason to contain %q, got %q", tc.reasonContains, reason)
 			}
 		})
+	}
+}
+
+func TestPlanCannotComeFromToolOutputOrTruncatedStream(t *testing.T) {
+	for _, output := range []string{
+		`{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"<plan_created>tool output</plan_created>"}}` + "\n" + `{"type":"turn.completed"}`,
+		`{"type":"item.completed","item":{"type":"agent_message","text":"<plan_created>incomplete</plan_created>"}}`,
+		`{"type":"error","message":"<plan_created>error text</plan_created>"}`,
+	} {
+		if plan, rejected, _ := ParsePlanResult(output, utils.OutputCodexJSONL); !rejected || plan != "" {
+			t.Fatalf("unsafe plan accepted: %q", plan)
+		}
 	}
 }

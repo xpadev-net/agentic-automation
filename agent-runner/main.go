@@ -1,6 +1,7 @@
 package main
 
 import (
+	"agent-runner/pkg/redact"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"agent-runner/pkg/prompts"
 	"agent-runner/pkg/reporter"
 	"agent-runner/pkg/storage"
+	"agent-runner/pkg/utils"
 	"agent-runner/pkg/version"
 )
 
@@ -36,14 +38,16 @@ func main() {
 	)
 
 	rootCmd := &cobra.Command{
-		Use:   "agent-runner",
-		Short: "Execute AI agent for GitHub Issue automation",
+		Use:           "agent-runner",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		Short:         "Execute AI agent for GitHub Issue automation",
 		Long: `agent-runner executes AI agents (claude-code, cursor-agent, or codex) in Kubernetes Pods.
 It processes GitHub Issues, runs lint/typecheck, commits changes, and reports results to the Operator API.`,
 		Version: "0.1.0",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			// Build information to stderr (keeps stdout clean for any machine parsing)
-			fmt.Fprintf(os.Stderr, "Build: commit=%s builtAt=%s\n", version.Commit, version.BuiltAt)
+			redact.Fprintf(os.Stderr, "Build: commit=%s builtAt=%s\n", version.Commit, version.BuiltAt)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Validate command-line arguments
@@ -66,7 +70,7 @@ It processes GitHub Issues, runs lint/typecheck, commits changes, and reports re
 	rootCmd.MarkFlagRequired("prompt")
 
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		redact.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -153,7 +157,7 @@ func readContentFromEnvOrFile(envKey, fileKey string) (string, error) {
 }
 
 func handlePlanCreationResult(client *reporter.Client, agentType, output string) error {
-	planContent, rejected, reason := parser.ParsePlanResult(output)
+	planContent, rejected, reason := parser.ParsePlanResult(output, utils.OutputModeForAgent(agentType))
 	if rejected {
 		// 生成失敗判定: reasonが"[却下理由]"と完全一致する場合
 		if reason == "[却下理由]" {
@@ -323,7 +327,7 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 		return "", "", fmt.Errorf("file change check failed: %w", err)
 	}
 	if !hasChanges {
-		fmt.Fprintf(os.Stderr, "No file changes to commit\n")
+		redact.Fprintf(os.Stderr, "No file changes to commit\n")
 		return "", "", nil
 	}
 
@@ -348,7 +352,7 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 			generatedMsg, err := git.GenerateCommitMessage(workDir, repo, issueID, issuePrompt, agentType, model)
 			if err != nil {
 				// Log warning and fallback to default message
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to generate commit message with AI: %v (using default message)\n", err)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to generate commit message with AI: %v (using default message)\n", err)
 				commitMsg = fmt.Sprintf("feat: implement issue #%d", issueID)
 			} else {
 				// Issue番号が含まれているか検証
@@ -363,11 +367,11 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 						// その他の場合は末尾に付加
 						commitMsg = fmt.Sprintf("%s (#%d)", generatedMsg, issueID)
 					}
-					fmt.Fprintf(os.Stderr, "WARNING: Generated commit message did not include issue reference, appended: %s\n", commitMsg)
+					redact.Fprintf(os.Stderr, "WARNING: Generated commit message did not include issue reference, appended: %s\n", commitMsg)
 				} else {
 					commitMsg = generatedMsg
 				}
-				fmt.Fprintf(os.Stderr, "Generated commit message with AI: %s\n", commitMsg)
+				redact.Fprintf(os.Stderr, "Generated commit message with AI: %s\n", commitMsg)
 			}
 		} else {
 			// Use default message for agents without AI generation
@@ -376,12 +380,12 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 	}
 
 	// Commit changes
-	fmt.Fprintf(os.Stderr, "Committing changes: %s\n", commitMsg)
+	redact.Fprintf(os.Stderr, "Committing changes: %s\n", commitMsg)
 	commitSHA, err := git.CommitChanges(workDir, commitMsg, skipHooks)
 	if err != nil {
 		return "", "", fmt.Errorf("git commit failed: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
+	redact.Fprintf(os.Stderr, "Committed changes (SHA: %s)\n", commitSHA)
 	return commitSHA, commitMsg, nil
 }
 
@@ -390,7 +394,7 @@ func commitChangesIfNeeded(workDir, repo string, issueID int, commitMsgPrefix st
 // Note: This function does NOT push changes. The caller is responsible for pushing after validations succeed.
 // Returns (changed, error) where changed indicates if any merge or conflict resolution was performed.
 func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID int, agentType string) (bool, error) {
-	fmt.Fprintf(os.Stderr, "Syncing branch %s with base branch %s\n", branchName, baseBranch)
+	redact.Fprintf(os.Stderr, "Syncing branch %s with base branch %s\n", branchName, baseBranch)
 
 	// Check if branch is behind base branch
 	baseRef := fmt.Sprintf("origin/%s", baseBranch)
@@ -401,11 +405,11 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 	}
 
 	if !behind {
-		fmt.Fprintf(os.Stderr, "Branch %s is up-to-date with %s\n", branchName, baseBranch)
+		redact.Fprintf(os.Stderr, "Branch %s is up-to-date with %s\n", branchName, baseBranch)
 		return false, nil
 	}
 
-	fmt.Fprintf(os.Stderr, "Branch %s is behind %s, merging...\n", branchName, baseBranch)
+	redact.Fprintf(os.Stderr, "Branch %s is behind %s, merging...\n", branchName, baseBranch)
 
 	// Merge base branch into working branch
 	if err := git.MergeBranch(workDir, baseBranch); err != nil {
@@ -419,11 +423,11 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 	}
 
 	if len(conflicts) > 0 {
-		fmt.Fprintf(os.Stderr, "Merge conflicts detected in %d files, resolving with AI...\n", len(conflicts))
+		redact.Fprintf(os.Stderr, "Merge conflicts detected in %d files, resolving with AI...\n", len(conflicts))
 		// Resolve conflicts with AI (cursor-agent or codex)
 		if !isOptionAgentType(agentType) {
 			// Abort merge before returning error to clean up workspace
-			fmt.Fprintf(os.Stderr, "Conflict resolution requires cursor-agent or codex, but agent type is %s. Aborting merge...\n", agentType)
+			redact.Fprintf(os.Stderr, "Conflict resolution requires cursor-agent or codex, but agent type is %s. Aborting merge...\n", agentType)
 			if abortErr := git.AbortMerge(workDir); abortErr != nil {
 				return false, fmt.Errorf("conflict resolution requires cursor-agent or codex, but agent type is %s; failed to abort merge: %w", agentType, abortErr)
 			}
@@ -431,15 +435,15 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 		}
 		if err := git.ResolveConflictsWithAI(workDir, repo, issueID, agentType); err != nil {
 			// If conflict resolution fails, abort merge to clean up workspace
-			fmt.Fprintf(os.Stderr, "Failed to resolve conflicts with AI. Aborting merge...\n")
+			redact.Fprintf(os.Stderr, "Failed to resolve conflicts with AI. Aborting merge...\n")
 			if abortErr := git.AbortMerge(workDir); abortErr != nil {
 				return false, fmt.Errorf("failed to resolve conflicts with AI: %w; failed to abort merge: %w", err, abortErr)
 			}
 			return false, fmt.Errorf("failed to resolve conflicts with AI: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Conflicts resolved successfully\n")
+		redact.Fprintf(os.Stderr, "Conflicts resolved successfully\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "Merge completed without conflicts\n")
+		redact.Fprintf(os.Stderr, "Merge completed without conflicts\n")
 	}
 
 	// Return true to indicate that merge or conflict resolution was performed
@@ -477,17 +481,17 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			return fmt.Errorf("REVIEW_FEEDBACK_CONTENT is required for plan_creation mode")
 		}
 	} else if executionMode == "plan_execution" {
-		fmt.Fprintf(os.Stderr, "Loading plan content for plan_execution mode\n")
+		redact.Fprintf(os.Stderr, "Loading plan content for plan_execution mode\n")
 		planContentEnv := os.Getenv("PLAN_CONTENT")
 		planContentFile := os.Getenv("PLAN_CONTENT_FILE")
-		fmt.Fprintf(os.Stderr, "  PLAN_CONTENT env var: %s (length: %d)\n",
+		redact.Fprintf(os.Stderr, "  PLAN_CONTENT env var: %s (length: %d)\n",
 			func() string {
 				if planContentEnv == "" {
 					return "(not set)"
 				}
 				return "(set)"
 			}(), len(planContentEnv))
-		fmt.Fprintf(os.Stderr, "  PLAN_CONTENT_FILE env var: %s\n",
+		redact.Fprintf(os.Stderr, "  PLAN_CONTENT_FILE env var: %s\n",
 			func() string {
 				if planContentFile == "" {
 					return "(not set)"
@@ -498,7 +502,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		if err != nil {
 			return fmt.Errorf("failed to load plan content: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "  Loaded plan content length: %d characters\n", len(planContent))
+		redact.Fprintf(os.Stderr, "  Loaded plan content length: %d characters\n", len(planContent))
 		if planContent == "" {
 			return fmt.Errorf("PLAN_CONTENT is required for plan_execution mode (env var length: %d, file path: %q)",
 				len(planContentEnv), planContentFile)
@@ -506,24 +510,24 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	}
 
 	// 2. Log arguments for debugging (basic info only, no sensitive data)
-	fmt.Fprintf(os.Stderr, "Starting agent-runner:\n")
-	fmt.Fprintf(os.Stderr, "  Issue ID: %d\n", issueID)
-	fmt.Fprintf(os.Stderr, "  Repository: %s\n", repo)
-	fmt.Fprintf(os.Stderr, "  Agent Type: %s\n", envCfg.AgentType)
-	fmt.Fprintf(os.Stderr, "  Agent Run ID: %d\n", envCfg.AgentRunID)
-	fmt.Fprintf(os.Stderr, "  Retry Count: %d\n", envCfg.RetryCount)
-	fmt.Fprintf(os.Stderr, "  Workspace: %s\n", envCfg.WorkDir)
-	fmt.Fprintf(os.Stderr, "  Operator API URL: %s\n", envCfg.OperatorAPIURL)
+	redact.Fprintf(os.Stderr, "Starting agent-runner:\n")
+	redact.Fprintf(os.Stderr, "  Issue ID: %d\n", issueID)
+	redact.Fprintf(os.Stderr, "  Repository: %s\n", repo)
+	redact.Fprintf(os.Stderr, "  Agent Type: %s\n", envCfg.AgentType)
+	redact.Fprintf(os.Stderr, "  Agent Run ID: %d\n", envCfg.AgentRunID)
+	redact.Fprintf(os.Stderr, "  Retry Count: %d\n", envCfg.RetryCount)
+	redact.Fprintf(os.Stderr, "  Workspace: %s\n", envCfg.WorkDir)
+	redact.Fprintf(os.Stderr, "  Operator API URL: %s\n", envCfg.OperatorAPIURL)
 
 	// 3. Initialize reporter client
 	reporterClient, err := reporter.NewClient(envCfg.OperatorAPIURL, envCfg.OperatorAPIToken, envCfg.AgentRunID)
 	if err != nil {
 		return fmt.Errorf("failed to initialize reporter client: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Initialized reporter client for AgentRun ID: %d\n", envCfg.AgentRunID)
+	redact.Fprintf(os.Stderr, "Initialized reporter client for AgentRun ID: %d\n", envCfg.AgentRunID)
 
 	// 4. Clone repository
-	fmt.Fprintf(os.Stderr, "Cloning repository %s to %s\n", repo, envCfg.WorkDir)
+	redact.Fprintf(os.Stderr, "Cloning repository %s to %s\n", repo, envCfg.WorkDir)
 	if err := git.CloneRepo("", repo, envCfg.WorkDir); err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Repository clone failed: %v", err),
@@ -531,26 +535,26 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("repository clone failed: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Cloned repository %s to %s\n", repo, envCfg.WorkDir)
+	redact.Fprintf(os.Stderr, "Cloned repository %s to %s\n", repo, envCfg.WorkDir)
 
 	// 4.5. Get default branch (base branch) for PR generation and creation
-	fmt.Fprintf(os.Stderr, "Getting default branch for repository %s\n", repo)
+	redact.Fprintf(os.Stderr, "Getting default branch for repository %s\n", repo)
 	baseBranch, err := git.GetDefaultBranch(repo)
 	if err != nil {
 		// Log warning but continue with default (master)
-		fmt.Fprintf(os.Stderr, "WARNING: Failed to get default branch: %v (using 'master' as fallback)\n", err)
+		redact.Fprintf(os.Stderr, "WARNING: Failed to get default branch: %v (using 'master' as fallback)\n", err)
 		baseBranch = "master"
 	} else {
-		fmt.Fprintf(os.Stderr, "Default branch: %s\n", baseBranch)
+		redact.Fprintf(os.Stderr, "Default branch: %s\n", baseBranch)
 	}
 
 	// 5. Restore session from S3 (if retry_count > 0)
 	if envCfg.RetryCount > 0 {
-		fmt.Fprintf(os.Stderr, "Restoring session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
+		redact.Fprintf(os.Stderr, "Restoring session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
 		if err := storage.RestoreSession(envCfg.AgentRunID, envCfg.RetryCount); err != nil {
 			reportErr := reporterClient.ReportFailure(
 				fmt.Sprintf("Session restore failed: %v", err),
@@ -558,13 +562,13 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("session restore failed: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Restored session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
+		redact.Fprintf(os.Stderr, "Restored session for AgentRun ID: %d (retry_count: %d)\n", envCfg.AgentRunID, envCfg.RetryCount)
 	} else {
-		fmt.Fprintf(os.Stderr, "Initial execution, skipping session restore\n")
+		redact.Fprintf(os.Stderr, "Initial execution, skipping session restore\n")
 	}
 
 	// 6. Load manifest
@@ -576,24 +580,24 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("manifest load failed: %w", err)
 	}
 	if manifest == nil {
-		fmt.Fprintf(os.Stderr, "No manifest file found, skipping hooks/validations\n")
+		redact.Fprintf(os.Stderr, "No manifest file found, skipping hooks/validations\n")
 	} else {
-		fmt.Fprintf(os.Stderr, "Loaded manifest: version %s\n", manifest.Version)
+		redact.Fprintf(os.Stderr, "Loaded manifest: version %s\n", manifest.Version)
 	}
 
 	// 7. Create feature branch or checkout existing branch
 	branchName := fmt.Sprintf("feature/issue-%d", issueID)
 	existingBranchName := os.Getenv("EXISTING_BRANCH_NAME")
 	if existingBranchName != "" {
-		fmt.Fprintf(os.Stderr, "Checking out existing branch: %s\n", existingBranchName)
+		redact.Fprintf(os.Stderr, "Checking out existing branch: %s\n", existingBranchName)
 		branchName = existingBranchName
 	} else {
-		fmt.Fprintf(os.Stderr, "Creating/checking out branch: %s\n", branchName)
+		redact.Fprintf(os.Stderr, "Creating/checking out branch: %s\n", branchName)
 	}
 	if err := git.CreateBranch(envCfg.WorkDir, branchName, envCfg.RetryCount, existingBranchName, baseBranch); err != nil {
 		reportErr := reporterClient.ReportFailure(
@@ -602,31 +606,31 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("branch creation failed: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Created/checked out branch: %s\n", branchName)
+	redact.Fprintf(os.Stderr, "Created/checked out branch: %s\n", branchName)
 
 	// 8. Build prompt
-	fmt.Fprintf(os.Stderr, "Building prompt (mode: %s)\n", executionMode)
+	redact.Fprintf(os.Stderr, "Building prompt (mode: %s)\n", executionMode)
 	var fullPrompt string
 	switch executionMode {
 	case "plan_creation":
 		fullPrompt = prompts.BuildPlanCreationPrompt(reviewContent)
 	case "plan_execution":
-		fmt.Fprintf(os.Stderr, "  Plan content length for prompt: %d characters\n", len(planContent))
+		redact.Fprintf(os.Stderr, "  Plan content length for prompt: %d characters\n", len(planContent))
 		fullPrompt = prompts.BuildPlanExecutionPrompt(prompt, planContent)
 	default:
 		fullPrompt = prompts.BuildTaskPrompt(prompt, previousAttempts, ciLogs)
 	}
-	fmt.Fprintf(os.Stderr, "Built prompt (length: %d characters)\n", len(fullPrompt))
+	redact.Fprintf(os.Stderr, "Built prompt (length: %d characters)\n", len(fullPrompt))
 
 	// 9. Run pre-hooks
 	if executionMode == "plan_creation" {
-		fmt.Fprintf(os.Stderr, "Skipping pre-hooks in plan_creation mode\n")
+		redact.Fprintf(os.Stderr, "Skipping pre-hooks in plan_creation mode\n")
 	} else if manifest != nil && len(manifest.Hooks.Pre) > 0 {
-		fmt.Fprintf(os.Stderr, "Executing %d pre-hooks\n", len(manifest.Hooks.Pre))
+		redact.Fprintf(os.Stderr, "Executing %d pre-hooks\n", len(manifest.Hooks.Pre))
 		if err := hooks.RunPreHooks(manifest.Hooks.Pre, envCfg.WorkDir); err != nil {
 			// Extract hook output if it's a HookError
 			var hookErr *hooks.HookError
@@ -640,13 +644,13 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("pre-hook failed: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Executed %d pre-hooks\n", len(manifest.Hooks.Pre))
+		redact.Fprintf(os.Stderr, "Executed %d pre-hooks\n", len(manifest.Hooks.Pre))
 	} else {
-		fmt.Fprintf(os.Stderr, "No pre-hooks to execute\n")
+		redact.Fprintf(os.Stderr, "No pre-hooks to execute\n")
 	}
 
 	// 10. Execute agent with validation retry loop
@@ -662,15 +666,15 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	if executionMode == "plan_creation" {
 		for generationRetry := 0; generationRetry <= maxGenerationRetries; generationRetry++ {
 			if generationRetry > 0 {
-				fmt.Fprintf(os.Stderr, "Generation retry attempt #%d/%d\n", generationRetry, maxGenerationRetries)
+				redact.Fprintf(os.Stderr, "Generation retry attempt #%d/%d\n", generationRetry, maxGenerationRetries)
 			} else {
-				fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
+				redact.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 			}
 
 			// Record HEAD before agent execution for rollback on failure
 			preExecutionHEAD, headErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
 			if headErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
 			}
 
 			// Execute agent
@@ -686,9 +690,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 					if getErr == nil && currentHEAD != preExecutionHEAD {
 						// HEAD has advanced, meaning commits were created
 						if resetErr := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); resetErr != nil {
-							fmt.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
+							redact.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
 						} else {
-							fmt.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
+							redact.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
 						}
 					}
 				}
@@ -699,21 +703,21 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 					envCfg.AgentType,
 				)
 				if reportErr != nil {
-					fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+					redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 				}
 				return fmt.Errorf("agent execution failed: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+			redact.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
 
 			// Check if agent created a commit and rollback if needed
 			if preExecutionHEAD != "" {
 				currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
 				if getErr == nil && currentHEAD != preExecutionHEAD {
-					fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
+					redact.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
 					if err := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); err != nil {
 						return fmt.Errorf("failed to reset to initial HEAD: %w", err)
 					}
-					fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
+					redact.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
 				}
 			}
 
@@ -724,7 +728,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				if errors.Is(err, ErrGenerationFailure) {
 					if generationRetry >= maxGenerationRetries {
 						// リトライ上限に達した場合、通常の却下として扱う
-						fmt.Fprintf(os.Stderr, "Generation retry limit reached, reporting as plan rejection\n")
+						redact.Fprintf(os.Stderr, "Generation retry limit reached, reporting as plan rejection\n")
 						if reportErr := reporterClient.ReportPlanRejection(
 							"プラン生成に失敗しました（リトライ上限に達しました）",
 							envCfg.AgentType,
@@ -735,7 +739,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						return fmt.Errorf("plan generation failed after %d retries", maxGenerationRetries)
 					}
 					// リトライ可能な場合、ループを継続
-					fmt.Fprintf(os.Stderr, "Generation failure detected, retrying...\n")
+					redact.Fprintf(os.Stderr, "Generation failure detected, retrying...\n")
 					continue
 				}
 				// 生成失敗以外のエラー（通常の却下など）は即座に返す
@@ -751,7 +755,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	// 既存のvalidation retry loop（plan_creation以外のモード用）
 	for retryCount := 0; retryCount <= maxValidationRetries; retryCount++ {
 		if retryCount > 0 {
-			fmt.Fprintf(os.Stderr, "Validation retry attempt #%d/%d\n", retryCount, maxValidationRetries)
+			redact.Fprintf(os.Stderr, "Validation retry attempt #%d/%d\n", retryCount, maxValidationRetries)
 			// Build prompt with validation error for retry
 			validationErrMsg := validationErr.Error()
 			switch executionMode {
@@ -760,15 +764,15 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			default:
 				fullPrompt = prompts.BuildTaskPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
 			}
-			fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
+			redact.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 		} else {
-			fmt.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
+			redact.Fprintf(os.Stderr, "Agent execution started (initial attempt)\n")
 		}
 
 		// Record HEAD before agent execution for rollback on failure
 		preExecutionHEAD, headErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
 		if headErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
 		}
 
 		// Execute agent
@@ -784,9 +788,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				if getErr == nil && currentHEAD != preExecutionHEAD {
 					// HEAD has advanced, meaning commits were created
 					if resetErr := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); resetErr != nil {
-						fmt.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
+						redact.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
 					} else {
-						fmt.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
+						redact.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
 					}
 				}
 			}
@@ -797,26 +801,26 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("agent execution failed: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
+		redact.Fprintf(os.Stderr, "Agent execution completed (output length: %d)\n", len(agentOutput))
 
 		// Check if agent created a commit and rollback if needed
 		if preExecutionHEAD != "" {
 			currentHEAD, getErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
 			if getErr == nil && currentHEAD != preExecutionHEAD {
-				fmt.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
+				redact.Fprintf(os.Stderr, "Detected commit created by agent, rolling back to %s\n", preExecutionHEAD)
 				if err := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); err != nil {
 					return fmt.Errorf("failed to reset to initial HEAD: %w", err)
 				}
-				fmt.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
+				redact.Fprintf(os.Stderr, "Rolled back to initial HEAD (changes preserved in staging area)\n")
 			}
 		}
 
 		// Check for file changes
-		fmt.Fprintf(os.Stderr, "Checking for file changes\n")
+		redact.Fprintf(os.Stderr, "Checking for file changes\n")
 		hasChanges, err := git.HasChanges(envCfg.WorkDir)
 		if err != nil {
 			reportErr := reporterClient.ReportFailure(
@@ -825,7 +829,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("file change check failed: %w", err)
 		}
@@ -838,24 +842,24 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 					envCfg.AgentType,
 				)
 				if reportErr != nil {
-					fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+					redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 				}
 				return fmt.Errorf("no file changes detected after agent execution")
 			}
 			// On retry, if no changes, continue to validation check
-			fmt.Fprintf(os.Stderr, "No file changes detected after retry, checking validation\n")
+			redact.Fprintf(os.Stderr, "No file changes detected after retry, checking validation\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "File changes detected\n")
+			redact.Fprintf(os.Stderr, "File changes detected\n")
 		}
 
 		// Run validations
 		if executionMode == "plan_creation" {
-			fmt.Fprintf(os.Stderr, "Skipping validations in plan_creation mode\n")
+			redact.Fprintf(os.Stderr, "Skipping validations in plan_creation mode\n")
 		} else if manifest != nil && len(manifest.Validation) > 0 {
-			fmt.Fprintf(os.Stderr, "Executing %d validations\n", len(manifest.Validation))
+			redact.Fprintf(os.Stderr, "Executing %d validations\n", len(manifest.Validation))
 			validationErr = hooks.RunValidations(manifest.Validation, envCfg.WorkDir)
 			if validationErr != nil {
-				fmt.Fprintf(os.Stderr, "Validation failed: %v\n", validationErr)
+				redact.Fprintf(os.Stderr, "Validation failed: %v\n", validationErr)
 				// Commit changes as checkpoint before retry
 				checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (validation retry checkpoint #%d)", issueID, retryCount)
 				checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.agentModel(), prompt)
@@ -866,24 +870,24 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						envCfg.AgentType,
 					)
 					if reportErr != nil {
-						fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+						redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 					}
 					return fmt.Errorf("failed to commit checkpoint: %w", commitErr)
 				}
 				if checkpointSHA != "" {
-					fmt.Fprintf(os.Stderr, "Committed checkpoint (SHA: %s) before validation retry\n", checkpointSHA)
+					redact.Fprintf(os.Stderr, "Committed checkpoint (SHA: %s) before validation retry\n", checkpointSHA)
 				}
 
 				// Check if we've reached max retries
 				if retryCount >= maxValidationRetries {
-					return fmt.Errorf("validation failed after %d retries: %w", maxValidationRetries, validationErr)
+					return reportValidationExhaustion(reporterClient, envCfg.AgentType, "validation", maxValidationRetries, validationErr)
 				}
 				// Continue to next retry
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "Executed %d validations successfully\n", len(manifest.Validation))
+			redact.Fprintf(os.Stderr, "Executed %d validations successfully\n", len(manifest.Validation))
 		} else {
-			fmt.Fprintf(os.Stderr, "No validations to execute\n")
+			redact.Fprintf(os.Stderr, "No validations to execute\n")
 		}
 
 		// Validation passed, commit changes
@@ -899,12 +903,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("git commit failed: %w", err)
 		}
 		if commitSHA != "" {
-			fmt.Fprintf(os.Stderr, "Committed changes after validation success (SHA: %s)\n", commitSHA)
+			redact.Fprintf(os.Stderr, "Committed changes after validation success (SHA: %s)\n", commitSHA)
 		}
 
 		// Validation passed, break out of retry loop
@@ -914,10 +918,10 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	// 11.5. Post-Commit Sync: コミット後にデフォルトブランチとの同期を確認
 	var changed bool
 	if executionMode == "plan_creation" {
-		fmt.Fprintf(os.Stderr, "Skipping post-commit sync in plan_creation mode (no write operations)\n")
+		redact.Fprintf(os.Stderr, "Skipping post-commit sync in plan_creation mode (no write operations)\n")
 		changed = false
 	} else {
-		fmt.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
+		redact.Fprintf(os.Stderr, "Post-Commit Sync: Checking if branch is behind base branch\n")
 		var err error
 		changed, err = syncBranchWithBase(envCfg.WorkDir, repo, baseBranch, branchName, issueID, envCfg.AgentType)
 		if err != nil {
@@ -927,11 +931,11 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 				envCfg.AgentType,
 			)
 			if reportErr != nil {
-				fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+				redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 			}
 			return fmt.Errorf("post-commit sync failed: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Post-Commit Sync completed successfully\n")
+		redact.Fprintf(os.Stderr, "Post-Commit Sync completed successfully\n")
 	}
 
 	// 11.6. Re-run validations if merge or conflict resolution was performed
@@ -939,15 +943,15 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	// are validated before pushing to prevent breaking changes from being pushed.
 	if changed {
 		if executionMode == "plan_creation" {
-			fmt.Fprintf(os.Stderr, "Skipping post-commit sync validations in plan_creation mode\n")
+			redact.Fprintf(os.Stderr, "Skipping post-commit sync validations in plan_creation mode\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "Merge or conflict resolution was performed, re-running validations\n")
+			redact.Fprintf(os.Stderr, "Merge or conflict resolution was performed, re-running validations\n")
 			if manifest != nil && len(manifest.Validation) > 0 {
 				// Retry loop for post-commit sync validation
 				var postSyncValidationErr error
 				for postSyncRetryCount := 0; postSyncRetryCount <= maxValidationRetries; postSyncRetryCount++ {
 					if postSyncRetryCount > 0 {
-						fmt.Fprintf(os.Stderr, "Post-commit sync validation retry attempt #%d/%d\n", postSyncRetryCount, maxValidationRetries)
+						redact.Fprintf(os.Stderr, "Post-commit sync validation retry attempt #%d/%d\n", postSyncRetryCount, maxValidationRetries)
 						// Build prompt with validation error for retry
 						validationErrMsg := postSyncValidationErr.Error()
 						switch executionMode {
@@ -959,12 +963,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 						default:
 							fullPrompt = prompts.BuildTaskPrompt(prompt, previousAttempts, ciLogs, validationErrMsg)
 						}
-						fmt.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
+						redact.Fprintf(os.Stderr, "Built retry prompt with validation error (length: %d characters)\n", len(fullPrompt))
 
 						// Record HEAD before agent execution for rollback on failure
 						preExecutionHEAD, headErr := git.GetCurrentCommitSHA(envCfg.WorkDir)
 						if headErr != nil {
-							fmt.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
+							redact.Fprintf(os.Stderr, "WARNING: Failed to get HEAD before agent execution: %v (rollback may not work)\n", headErr)
 						}
 
 						// Execute agent again
@@ -980,9 +984,9 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 								if getErr == nil && currentHEAD != preExecutionHEAD {
 									// HEAD has advanced, meaning commits were created
 									if resetErr := git.ResetToCommit(envCfg.WorkDir, preExecutionHEAD); resetErr != nil {
-										fmt.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
+										redact.Fprintf(os.Stderr, "WARNING: Failed to rollback commits after agent execution failure: %v\n", resetErr)
 									} else {
-										fmt.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
+										redact.Fprintf(os.Stderr, "Rolled back commits after agent execution failure (from %s to %s)\n", currentHEAD, preExecutionHEAD)
 									}
 								}
 							}
@@ -993,11 +997,11 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 								envCfg.AgentType,
 							)
 							if reportErr != nil {
-								fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+								redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 							}
 							return fmt.Errorf("agent execution failed during post-commit sync retry: %w", err)
 						}
-						fmt.Fprintf(os.Stderr, "Agent execution completed during post-commit sync retry (output length: %d)\n", len(agentOutput))
+						redact.Fprintf(os.Stderr, "Agent execution completed during post-commit sync retry (output length: %d)\n", len(agentOutput))
 
 						// Commit changes after retry
 						retryCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry #%d)", issueID, postSyncRetryCount)
@@ -1009,21 +1013,21 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 								envCfg.AgentType,
 							)
 							if reportErr != nil {
-								fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+								redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 							}
 							return fmt.Errorf("failed to commit after post-commit sync retry: %w", commitErr)
 						}
 						if retryCommitSHA != "" {
-							fmt.Fprintf(os.Stderr, "Committed changes after post-commit sync retry (SHA: %s)\n", retryCommitSHA)
+							redact.Fprintf(os.Stderr, "Committed changes after post-commit sync retry (SHA: %s)\n", retryCommitSHA)
 							commitSHA = retryCommitSHA
 							lastCommitMsg = retryCommitMsgValue
 						}
 					}
 
-					fmt.Fprintf(os.Stderr, "Executing %d validations after post-commit sync\n", len(manifest.Validation))
+					redact.Fprintf(os.Stderr, "Executing %d validations after post-commit sync\n", len(manifest.Validation))
 					postSyncValidationErr = hooks.RunValidations(manifest.Validation, envCfg.WorkDir)
 					if postSyncValidationErr != nil {
-						fmt.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
+						redact.Fprintf(os.Stderr, "Validation failed after post-commit sync: %v\n", postSyncValidationErr)
 						// Commit changes as checkpoint before retry
 						checkpointCommitMsg := fmt.Sprintf("feat: implement issue #%d (post-commit sync validation retry checkpoint #%d)", issueID, postSyncRetryCount)
 						checkpointSHA, _, commitErr := commitChangesIfNeeded(envCfg.WorkDir, repo, issueID, checkpointCommitMsg, true, envCfg.AgentType, envCfg.agentModel(), prompt)
@@ -1034,35 +1038,35 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 								envCfg.AgentType,
 							)
 							if reportErr != nil {
-								fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+								redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 							}
 							return fmt.Errorf("failed to commit checkpoint after post-commit sync: %w", commitErr)
 						}
 						if checkpointSHA != "" {
-							fmt.Fprintf(os.Stderr, "Committed checkpoint after post-commit sync (SHA: %s) before validation retry\n", checkpointSHA)
+							redact.Fprintf(os.Stderr, "Committed checkpoint after post-commit sync (SHA: %s) before validation retry\n", checkpointSHA)
 						}
 
 						// Check if we've reached max retries
 						if postSyncRetryCount >= maxValidationRetries {
-							return fmt.Errorf("validation failed after post-commit sync after %d retries: %w", maxValidationRetries, postSyncValidationErr)
+							return reportValidationExhaustion(reporterClient, envCfg.AgentType, "validation after post-commit sync", maxValidationRetries, postSyncValidationErr)
 						}
 						// Continue to next retry
 						continue
 					}
-					fmt.Fprintf(os.Stderr, "Executed %d validations after post-commit sync successfully\n", len(manifest.Validation))
+					redact.Fprintf(os.Stderr, "Executed %d validations after post-commit sync successfully\n", len(manifest.Validation))
 					// Validation passed, break out of retry loop
 					break
 				}
 			} else {
-				fmt.Fprintf(os.Stderr, "No validations to execute after post-commit sync\n")
+				redact.Fprintf(os.Stderr, "No validations to execute after post-commit sync\n")
 			}
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "No merge or conflict resolution was performed, skipping re-validation\n")
+		redact.Fprintf(os.Stderr, "No merge or conflict resolution was performed, skipping re-validation\n")
 	}
 
 	// 12. Push branch
-	fmt.Fprintf(os.Stderr, "Pushing branch %s to remote\n", branchName)
+	redact.Fprintf(os.Stderr, "Pushing branch %s to remote\n", branchName)
 	if err := git.PushBranch(envCfg.WorkDir, branchName, ""); err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Git push failed: %v", err),
@@ -1070,14 +1074,14 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("git push failed: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Pushed branch %s to remote\n", branchName)
+	redact.Fprintf(os.Stderr, "Pushed branch %s to remote\n", branchName)
 
 	// 13. Save session to S3
-	fmt.Fprintf(os.Stderr, "Saving session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
+	redact.Fprintf(os.Stderr, "Saving session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 	if err := storage.SaveSession(envCfg.AgentRunID, envCfg.AgentType); err != nil {
 		reportErr := reporterClient.ReportFailure(
 			fmt.Sprintf("Session save failed: %v", err),
@@ -1085,16 +1089,16 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("session save failed: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Saved session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
+	redact.Fprintf(os.Stderr, "Saved session to S3 for AgentRun ID: %d\n", envCfg.AgentRunID)
 
 	// 14. Generate PR title and body (if an option-capable agent is used)
 	var prTitle, prBody string
 	if isOptionAgentType(envCfg.AgentType) {
-		fmt.Fprintf(os.Stderr, "Generating PR title and body\n")
+		redact.Fprintf(os.Stderr, "Generating PR title and body\n")
 		// Use lastCommitMsg if available, otherwise use default commit message
 		commitMsgForPR := lastCommitMsg
 		if commitMsgForPR == "" {
@@ -1103,13 +1107,13 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		title, body, err := git.GeneratePRTitleAndBody(envCfg.WorkDir, repo, issueID, prompt, commitMsgForPR, envCfg.AgentType, envCfg.agentModel(), baseBranch)
 		if err != nil {
 			// Log warning but continue with default title/body
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to generate PR title and body: %v (using default format)\n", err)
 			prTitle = ""
 			prBody = ""
 		} else {
 			prTitle = title
 			prBody = body
-			fmt.Fprintf(os.Stderr, "Generated PR title and body\n")
+			redact.Fprintf(os.Stderr, "Generated PR title and body\n")
 		}
 	} else {
 		// For agents without AI generation, use default format
@@ -1125,7 +1129,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	if prBody == "" {
 		// prBodyが空の場合は、closeキーワードのみを含むPR本文を生成
 		prBody = closingKeyword
-		fmt.Fprintf(os.Stderr, "Created PR body with issue-closing keyword\n")
+		redact.Fprintf(os.Stderr, "Created PR body with issue-closing keyword\n")
 	} else {
 		// prBodyが空でない場合は、closeキーワードが含まれているかチェック
 		bodyLower := strings.ToLower(prBody)
@@ -1140,12 +1144,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			strings.Contains(bodyLower, fmt.Sprintf("resolved #%d", issueID))
 		if !hasClosingKeyword {
 			prBody = prBody + "\n\n" + closingKeyword
-			fmt.Fprintf(os.Stderr, "Added issue-closing keyword to PR body\n")
+			redact.Fprintf(os.Stderr, "Added issue-closing keyword to PR body\n")
 		}
 	}
 
 	// 15. Create Pull Request
-	fmt.Fprintf(os.Stderr, "Creating Pull Request\n")
+	redact.Fprintf(os.Stderr, "Creating Pull Request\n")
 	prNumber, err := git.CreatePR("", repo, branchName, issueID, prTitle, prBody, baseBranch)
 	if err != nil {
 		reportErr := reporterClient.ReportFailure(
@@ -1154,33 +1158,46 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			envCfg.AgentType,
 		)
 		if reportErr != nil {
-			fmt.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
+			redact.Fprintf(os.Stderr, "WARNING: Failed to report failure to Operator API: %v\n", reportErr)
 		}
 		return fmt.Errorf("PR creation failed: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
+	redact.Fprintf(os.Stderr, "Created Pull Request #%d\n", prNumber)
 
 	// 16. Run post-hooks
 	if executionMode == "plan_creation" {
-		fmt.Fprintf(os.Stderr, "Skipping post-hooks in plan_creation mode\n")
+		redact.Fprintf(os.Stderr, "Skipping post-hooks in plan_creation mode\n")
 	} else if manifest != nil && len(manifest.Hooks.Post) > 0 {
-		fmt.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
+		redact.Fprintf(os.Stderr, "Executing %d post-hooks\n", len(manifest.Hooks.Post))
 		if err := hooks.RunPostHooks(manifest.Hooks.Post, envCfg.WorkDir); err != nil {
 			// Post-hook failures are logged as warnings and do not abort execution (PR already created)
-			fmt.Fprintf(os.Stderr, "WARNING: Post-hook execution failed: %v (continuing)\n", err)
+			redact.Fprintf(os.Stderr, "WARNING: Post-hook execution failed: %v (continuing)\n", err)
 		} else {
-			fmt.Fprintf(os.Stderr, "Executed %d post-hooks\n", len(manifest.Hooks.Post))
+			redact.Fprintf(os.Stderr, "Executed %d post-hooks\n", len(manifest.Hooks.Post))
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "No post-hooks to execute\n")
+		redact.Fprintf(os.Stderr, "No post-hooks to execute\n")
 	}
 
 	// 17. Report success to Operator API
-	fmt.Fprintf(os.Stderr, "Reporting success to Operator API\n")
+	redact.Fprintf(os.Stderr, "Reporting success to Operator API\n")
 	if err := reporterClient.ReportSuccess(prNumber, branchName, commitSHA, envCfg.AgentType); err != nil {
 		return fmt.Errorf("failed to report success: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "Successfully reported to Operator API\n")
+	redact.Fprintf(os.Stderr, "Successfully reported to Operator API\n")
 
 	return nil
+}
+
+type failureReporter interface {
+	ReportFailure(string, string, string) error
+}
+
+// Exhaustion is a terminal execution outcome even if no later code runs.
+func reportValidationExhaustion(client failureReporter, agentType, phase string, retries int, cause error) error {
+	failure := fmt.Errorf("%s failed after %d retries: %w", phase, retries, cause)
+	if reportErr := client.ReportFailure(failure.Error(), "", agentType); reportErr != nil {
+		return errors.Join(failure, fmt.Errorf("failed to report validation exhaustion: %w", reportErr))
+	}
+	return failure
 }

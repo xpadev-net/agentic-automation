@@ -433,6 +433,13 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 			return
 		}
 
+		if agentRun.State == "started" {
+			// Preserve the recorded CIStatus, but never overlap a still-running
+			// execution or mutate its attempt identity before its report arrives.
+			c.JSON(http.StatusOK, gin.H{"status": "retry_deferred", "reason": "agent_report_pending", "agent_run_id": agentRun.ID, "delivery_id": deliveryID})
+			return
+		}
+
 		logger.Info("AgentRun found for retry",
 			config.Int("agent_run_id", agentRun.ID),
 			config.Int("retry_count", agentRun.RetryCount),

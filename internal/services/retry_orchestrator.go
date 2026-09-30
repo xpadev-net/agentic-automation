@@ -210,6 +210,8 @@ func (r *RetryOrchestrator) TriggerRetry(
 	issue *models.Issue,
 	feedback *AggregatedFeedback,
 ) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
 	if r.jobService == nil {
 		return fmt.Errorf("jobService is required for TriggerRetry")
 	}
@@ -240,28 +242,46 @@ func (r *RetryOrchestrator) TriggerRetry(
 		return r.HandleMaxRetriesExceeded(agentRun)
 	}
 
-	// Increment retry count atomically
-	if err := r.IncrementRetryCount(ctx, agentRun); err != nil {
-		return fmt.Errorf("failed to increment retry count: %w", err)
-	}
+	if atomic, ok := r.agentRunRepo.(repositories.AtomicRetryAdmission); ok {
+		admitted, err := atomic.BeginRetry(agentRun, MaxRetryCount)
+		if err != nil {
+			return fmt.Errorf("failed to admit retry: %w", err)
+		}
+		*agentRun = *admitted
+		if agentRun.RetryCount >= MaxRetryCount {
+			return r.HandleMaxRetriesExceeded(agentRun)
+		}
+	} else {
+		// Increment retry count atomically
+		if err := r.IncrementRetryCount(ctx, agentRun); err != nil {
+			return fmt.Errorf("failed to increment retry count: %w", err)
+		}
 
-	// Check if max retries exceeded after increment
-	if agentRun.RetryCount >= MaxRetryCount {
-		r.logger.Warn("Max retry count reached after increment",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Int("retry_count", agentRun.RetryCount),
-		)
-		return r.HandleMaxRetriesExceeded(agentRun)
-	}
+		// Check if max retries exceeded after increment
+		if agentRun.RetryCount >= MaxRetryCount {
+			r.logger.Warn("Max retry count reached after increment",
+				config.Int("agent_run_id", agentRun.ID),
+				config.Int("retry_count", agentRun.RetryCount),
+			)
+			return r.HandleMaxRetriesExceeded(agentRun)
+		}
 
-	// Update state to queued for retry
-	agentRun.State = "queued"
-	if err := r.agentRunRepo.Update(agentRun); err != nil {
-		r.logger.Error("Failed to update AgentRun state for retry",
-			config.Int("agent_run_id", agentRun.ID),
-			config.Error(err),
-		)
-		return fmt.Errorf("failed to update agent run state: %w", err)
+		// Update state to queued for retry
+		agentRun.State = "queued"
+		agentRun.StartedAt = nil
+		agentRun.CompletedAt = nil
+		agentRun.ErrorMessage = nil
+		agentRun.Output = nil
+		name := agentRun.AttemptJobName()
+		agentRun.JobName = &name
+		if err := r.agentRunRepo.Update(agentRun); err != nil {
+			r.logger.Error("Failed to update AgentRun state for retry",
+				config.Int("agent_run_id", agentRun.ID),
+				config.Error(err),
+			)
+			return fmt.Errorf("failed to update agent run state: %w", err)
+		}
+
 	}
 
 	// Extract repository info from issue.Repo (format: "owner/repo")
@@ -341,6 +361,18 @@ func (r *RetryOrchestrator) TriggerRetry(
 		config.Bool("has_feedback", feedback != nil),
 		config.String("branch_name", existingBranchName),
 	)
+
+	// Record dispatch state before the API call so a lost response is observable.
+	if atomic, ok := r.agentRunRepo.(repositories.AtomicAgentRunLifecycle); ok {
+		if err := atomic.TransitionLifecycle(agentRun.ID, "started", nil, nil, nil); err != nil {
+			return err
+		}
+		if latest, err := r.agentRunRepo.GetByID(agentRun.ID); err == nil {
+			*agentRun = *latest
+		} else {
+			return err
+		}
+	}
 
 	// Create new Kubernetes Job with feedback
 	_, err = r.jobService.CreateJobForAgentRunWithFeedback(ctx, agentRun, issue, prompt, feedback, existingBranchName)
