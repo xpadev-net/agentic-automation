@@ -8,6 +8,7 @@ import (
 	"agentic-automation/internal/repositories"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,6 +32,18 @@ func truncateLineUTF8(line string, maxBytes int) string {
 		cut--
 	}
 	return line[:cut] + "…[truncated]"
+}
+
+// ingestLocks serializes the check-existing/insert/publish sequence per
+// AgentRun. Without it two overlapping requests carrying the same seqs (e.g.
+// a resend racing the original) could both pass ExistingSeqs before either
+// inserts, and both would publish — OnConflict only dedups storage. The
+// Operator is a single instance, so a process-local lock suffices.
+var ingestLocks sync.Map // map[int]*sync.Mutex
+
+func lockForRun(runID int) *sync.Mutex {
+	v, _ := ingestLocks.LoadOrStore(runID, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 func seqsOf(logs []*models.AgentRunLog) []int64 {
@@ -120,6 +133,13 @@ func HandleAgentRunLogs(c *gin.Context) {
 			Line:       line,
 		})
 	}
+
+	// Hold the per-run lock for check + insert + publish-decision so
+	// publication is atomic with the insert: a concurrent same-seq request
+	// waits, then sees the rows the first request stored.
+	mu := lockForRun(run.ID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	logRepo := repositories.NewAgentRunLogRepository(db)
 	// OnConflict DoNothing makes re-posted batches idempotent for storage,
