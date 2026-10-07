@@ -163,15 +163,7 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 	// embedding it again would replay every line through the log shipper
 	// when the caller prints this error.
 	if err != nil {
-		tail := outputStr
-		if len(tail) > 4096 {
-			cut := len(tail) - 4096
-			for cut < len(tail) && !utf8.ValidString(tail[cut:]) {
-				cut++
-			}
-			tail = "…[truncated]" + tail[cut:]
-		}
-		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput (tail): %s", err, tail)
+		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput (tail): %s", err, outputTail(outputStr))
 	}
 
 	return outputStr, nil
@@ -302,10 +294,26 @@ func (e *Executor) executeCodex(workDir, prompt, model string, allowWrite bool) 
 	return codexResult(outputStr, cmdErr)
 }
 
+// outputTail bounds the output embedded in an execution error. Streaming
+// executors already mirror their full transcript to stderr (and thus the
+// log shipper), so embedding it again would replay thousands of lines when
+// the caller prints this error after run failure.
+func outputTail(output string) string {
+	const maxTailBytes = 4096
+	if len(output) <= maxTailBytes {
+		return output
+	}
+	cut := len(output) - maxTailBytes
+	for cut < len(output) && !utf8.ValidString(output[cut:]) {
+		cut++
+	}
+	return "…[truncated]" + output[cut:]
+}
+
 func codexResult(output string, err error) (string, error) {
-	// If command execution failed, wrap the error with output context
+	// If command execution failed, wrap the error with only the output tail.
 	if err != nil {
-		return output, fmt.Errorf("codex execution failed: %w\nOutput: %s", err, output)
+		return output, fmt.Errorf("codex execution failed: %w\nOutput (tail): %s", err, outputTail(output))
 	}
 	return output, nil
 }
@@ -337,7 +345,7 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 		output, err = e.cmdRunner.Run("cursor-agent", args, workDir)
 		outputStr := string(output)
 		if err != nil {
-			return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput: %s", err, outputStr)
+			return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput (tail): %s", err, outputTail(outputStr))
 		}
 		return outputStr, nil
 	}
@@ -536,9 +544,9 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 		fmt.Fprintf(os.Stderr, "[STDERR] %s", stderrBuf.String())
 	}
 
-	// If command execution failed, wrap the error with output context
+	// If command execution failed, wrap the error with only the output tail.
 	if cmdErr != nil {
-		return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput: %s", cmdErr, outputStr)
+		return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput (tail): %s", cmdErr, outputTail(outputStr))
 	}
 
 	return outputStr, nil
