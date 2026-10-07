@@ -390,3 +390,97 @@ func TestIngestLogsRecognizesShipperSentinels(t *testing.T) {
 		}
 	}
 }
+
+// A resent batch can overlap stored seqs: {dup seq 1, new seq 4} after
+// stored {1, BEGIN@2, body@3} must still mask seq 4 — seeding state only
+// at the batch's min seq misses the BEGIN sitting between the two.
+func TestIngestLogsPEMStateOverlappingBatch(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "normal line"},
+			{"seq": 2, "line": "GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 3, "line": "MIIEpAIBAAKCAQEA7body"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch1: expected 200, got %d", w.Code)
+	}
+	w = postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "normal line"}, // resend duplicate
+			{"seq": 4, "line": "AbCdEfShortKeyBody"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch2: expected 200, got %d", w.Code)
+	}
+
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 4 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	want := []string{
+		"normal line",
+		"[REDACTED PRIVATE KEY BEGIN]",
+		"[REDACTED]",
+		"[REDACTED]",
+	}
+	for i, l := range logs {
+		if l.Line != want[i] {
+			t.Fatalf("seq %d: want %q got %q", i+1, want[i], l.Line)
+		}
+	}
+}
+
+// Retry attempts occupy disjoint 1e9-seq ranges; an unterminated BEGIN
+// stored by attempt 0 must not leak masking into attempt 1's lines.
+func TestIngestLogsPEMStateScopedToAttempt(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 2, "line": "MIIEpAIBAAKCAQEA7body"}, // pod dies here: no END
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch1: expected 200, got %d", w.Code)
+	}
+	const attempt1 = int64(1_000_000_000)
+	w = postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": attempt1 + 1, "line": "attempt 1 first line"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch2: expected 200, got %d", w.Code)
+	}
+
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, attempt1, 10)
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	if logs[0].Line != "attempt 1 first line" {
+		t.Fatalf("attempt 1 line must not be masked, got %q", logs[0].Line)
+	}
+}
