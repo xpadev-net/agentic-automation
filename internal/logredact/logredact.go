@@ -14,6 +14,13 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`ghr_[A-Za-z0-9]{36}`),
 	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9]{48}`),
+	// Current key formats — sk-ant-api03-*, sk-ant-oat01-*, sk-proj-*,
+	// sk-oai-* — use hyphens/underscores and variable lengths the legacy
+	// fixed-width pattern above cannot match.
+	regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`),
+	// Bearer authorization headers — agent output can echo the runner's
+	// OPERATOR_API_TOKEN or GitHub tokens inside HTTP traces.
+	regexp.MustCompile(`(?i)bearer[\s:=+]+[A-Za-z0-9._~+/-]{8,}`),
 	// A complete PEM block on ONE line — agents printing JSONL emit the
 	// private key with newlines escaped as literal \n, so neither the
 	// marker patterns nor the shipper's line-Prefix guard covers it.

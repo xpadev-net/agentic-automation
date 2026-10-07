@@ -279,3 +279,58 @@ func TestIngestLogsTruncatesLongLines(t *testing.T) {
 }
 
 func itoa(i int) string { return strconv.Itoa(i) }
+
+// A PEM block spanning two POST requests must stay masked: batch 2 carries
+// only body lines (a short final line the base64 pattern misses) plus END,
+// and the stored lines from batch 1 must reconstruct the masking state.
+func TestIngestLogsMasksPEMAcrossBatches(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "normal line"},
+			{"seq": 2, "line": "GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 3, "line": "MIIEpAIBAAKCAQEA7shortbody"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch1: expected 200, got %d", w.Code)
+	}
+	w = postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 4, "line": "abc123shorttail"},
+			{"seq": 5, "line": "-----END RSA PRIVATE KEY-----"},
+			{"seq": 6, "line": "after the key"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch2: expected 200, got %d", w.Code)
+	}
+
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 6 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	want := []string{
+		"normal line",
+		"[REDACTED PRIVATE KEY BEGIN]",
+		"[REDACTED]",
+		"[REDACTED]",
+		"[REDACTED PRIVATE KEY END]",
+		"after the key",
+	}
+	for i, l := range logs {
+		if l.Line != want[i] {
+			t.Fatalf("seq %d: want %q got %q", i+1, want[i], l.Line)
+		}
+	}
+}

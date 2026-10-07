@@ -85,6 +85,41 @@ func ingestLockName(runID int) string {
 	return fmt.Sprintf("agentic:log-ingest:%d", runID)
 }
 
+// Stored sentinel lines marking the edges of a masked private-key block,
+// distinct from the body mask. pemInProgress scans back to the nearest
+// sentinel so masking state survives across ingestion batches; the
+// shipper emits the same sentinels for blocks it masked itself.
+const (
+	pemBeginSentinel = "[REDACTED PRIVATE KEY BEGIN]"
+	pemEndSentinel   = "[REDACTED PRIVATE KEY END]"
+	redactedLine     = "[REDACTED]"
+	pemLookbackLimit = 100
+)
+
+// pemInProgress reports whether the stored log for the run ends inside an
+// unterminated private-key block. Whole-line "[REDACTED]" values only
+// come from PEM masking, so scanning back past them to the nearest BEGIN
+// or END sentinel reconstructs the state; any other line ends the scan.
+func pemInProgress(db *gorm.DB, runID int, beforeSeq int64) bool {
+	var lines []string
+	if err := db.Model(&models.AgentRunLog{}).
+		Where("agent_run_id = ? AND seq < ?", runID, beforeSeq).
+		Order("seq DESC").
+		Limit(pemLookbackLimit).
+		Pluck("line", &lines).Error; err != nil {
+		return false
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "PRIVATE KEY BEGIN") {
+			return true
+		}
+		if strings.Contains(l, "PRIVATE KEY END") || l != redactedLine {
+			return false
+		}
+	}
+	return false
+}
+
 // lockAndTxDB acquires the MySQL named lock on a dedicated connection and
 // returns a *gorm.DB bound to that same physical connection, so callers
 // can run a gorm Transaction while the lock is held — and released only
@@ -195,36 +230,6 @@ func HandleAgentRunLogs(c *gin.Context) {
 		return
 	}
 
-	logs := make([]*models.AgentRunLog, 0, len(req.Entries))
-	// A PEM value split across entries (GITHUB_PRIVATE_KEY=-----BEGIN... on
-	// the first line, base64 body after) defeats per-line patterns, so mask
-	// every line between BEGIN and END like the shipper does. The BEGIN
-	// marker may sit behind an assignment prefix — match Contains.
-	inPEM := false
-	for _, entry := range req.Entries {
-		// Redact credentials before anything is persisted or streamed:
-		// agent stderr can leak tokens injected into the runner env.
-		line := logredact.Line(entry.Line)
-		if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
-			inPEM = true
-		}
-		if inPEM {
-			line = "[REDACTED]"
-		}
-		if strings.Contains(entry.Line, "-----END ") {
-			inPEM = false
-		}
-		if len(line) > maxLogLineBytes {
-			line = truncateLineUTF8(line, maxLogLineBytes)
-		}
-		logs = append(logs, &models.AgentRunLog{
-			AgentRunID: run.ID,
-			Seq:        entry.Seq,
-			TS:         entry.TS,
-			Line:       line,
-		})
-	}
-
 	// Serialize check + insert + publish-decision per run so publication is
 	// atomic with the insert: a concurrent same-seq request waits, then sees
 	// the rows the first request stored. On MySQL a named lock serializes
@@ -264,6 +269,47 @@ func HandleAgentRunLogs(c *gin.Context) {
 	var toPublish []loghub.Event
 	err = txDB.Transaction(func(tx *gorm.DB) error {
 		logRepo := repositories.NewAgentRunLogRepository(tx)
+		// A PEM value split across entries (GITHUB_PRIVATE_KEY=-----BEGIN...
+		// on the first line, base64 body after) defeats per-line patterns,
+		// so mask every line between BEGIN and END like the shipper does.
+		// Masking state must survive the request — a block spanning two
+		// POSTs would otherwise resume unmasked — so inPEM seeds from
+		// previously stored lines. Doing it inside the lock/transaction
+		// keeps a racing earlier batch's BEGIN visible here.
+		minSeq := req.Entries[0].Seq
+		for _, e := range req.Entries {
+			if e.Seq < minSeq {
+				minSeq = e.Seq
+			}
+		}
+		inPEM := pemInProgress(tx, run.ID, minSeq)
+		logs := make([]*models.AgentRunLog, 0, len(req.Entries))
+		for _, entry := range req.Entries {
+			// Redact credentials before anything is persisted or streamed:
+			// agent stderr can leak tokens injected into the runner env.
+			line := logredact.Line(entry.Line)
+			if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
+				inPEM = true
+				line = pemBeginSentinel
+			} else if inPEM {
+				line = redactedLine
+			}
+			if strings.Contains(entry.Line, "-----END ") {
+				if inPEM {
+					line = pemEndSentinel
+				}
+				inPEM = false
+			}
+			if len(line) > maxLogLineBytes {
+				line = truncateLineUTF8(line, maxLogLineBytes)
+			}
+			logs = append(logs, &models.AgentRunLog{
+				AgentRunID: run.ID,
+				Seq:        entry.Seq,
+				TS:         entry.TS,
+				Line:       line,
+			})
+		}
 		// OnConflict DoNothing makes re-posted batches idempotent for
 		// storage, but live publication must be limited to rows actually
 		// inserted or a retried batch would fan the same lines out to SSE
