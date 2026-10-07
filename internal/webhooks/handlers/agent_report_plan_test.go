@@ -353,10 +353,11 @@ func TestHandlePlanRejectedRollsBackWhenCommentFails(t *testing.T) {
 	defer func() { postPlanRejectionComment = originalPost }()
 
 	callCount := 0
-	postPlanRejectionComment = func(ctx context.Context, logger *config.AppLogger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
+	postPlanRejectionComment = func(ctx context.Context, logger *config.AppLogger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string, agentRunID int) error {
 		callCount++
 		require.Equal(t, fixtures.reviewFeedback.ID, reviewFeedback.ID)
 		require.Equal(t, utils.TruncateWithSuffix(utils.SanitizeUTF8("Needs more detail"), utils.GetDBOutputLimitBytes(), "… [truncated]"), sanitizedReason)
+		require.Equal(t, fixtures.agentRun.ID, agentRunID)
 		return &planRejectionHTTPError{
 			status:  http.StatusInternalServerError,
 			code:    "GITHUB_COMMENT_ERROR",
@@ -414,10 +415,11 @@ func TestHandlePlanRejectedUpdatesStatusAfterComment(t *testing.T) {
 	defer func() { postPlanRejectionComment = originalPost }()
 
 	callCount := 0
-	postPlanRejectionComment = func(ctx context.Context, logger *config.AppLogger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string) error {
+	postPlanRejectionComment = func(ctx context.Context, logger *config.AppLogger, db *gorm.DB, reviewFeedback *models.ReviewFeedback, sanitizedReason string, agentRunID int) error {
 		callCount++
 		require.Equal(t, fixtures.reviewFeedback.ID, reviewFeedback.ID)
 		require.Equal(t, utils.TruncateWithSuffix(utils.SanitizeUTF8("Missing acceptance tests"), utils.GetDBOutputLimitBytes(), "… [truncated]"), sanitizedReason)
+		require.Equal(t, fixtures.agentRun.ID, agentRunID)
 		return nil
 	}
 

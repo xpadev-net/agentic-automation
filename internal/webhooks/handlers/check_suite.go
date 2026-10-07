@@ -718,11 +718,12 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 				if idem == "" {
 					idem = fmt.Sprintf("merge-fail-%d-%d", pr.Number, time.Now().Unix())
 				}
+				agentRunID := latestAgentRunIDForPR(deps, pr.ID)
 				_ = deps.GitHubNotificationService.NotifyMergeFailure(
 					ctx, owner, repo,
 					issueNumber, pr.Number,
 					mergeRes.ErrorType, mergeRes.ErrorMessage,
-					idem,
+					idem, agentRunID,
 				)
 			}
 
@@ -828,4 +829,34 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 		"pr_number":   prNumber,
 		"conclusion":  *conclusion,
 	})
+}
+
+// latestAgentRunIDForPR returns the most recent AgentRun ID associated with a
+// PullRequest, or 0 when none can be resolved. Best-effort: errors only log a
+// warning since the merge notification itself is more important than the link.
+func latestAgentRunIDForPR(deps CheckSuiteDeps, prID int) int {
+	return latestAgentRunIDForPRRepo(deps.AgentRunRepository, prID)
+}
+
+// latestAgentRunIDForPRRepo resolves the newest AgentRun linked to a pull
+// request record; returns 0 when unresolvable.
+func latestAgentRunIDForPRRepo(repo repositories.AgentRunRepository, prID int) int {
+	if repo == nil || prID <= 0 {
+		return 0
+	}
+	runs, err := repo.GetByPRID(prID)
+	if err != nil {
+		config.GetLogger().Warn("failed to resolve agent runs for merge notification",
+			config.Error(err),
+			config.Int("pr_id", prID),
+		)
+		return 0
+	}
+	latest := 0
+	for _, run := range runs {
+		if run != nil && run.ID > latest {
+			latest = run.ID
+		}
+	}
+	return latest
 }

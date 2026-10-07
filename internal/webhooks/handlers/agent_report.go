@@ -90,6 +90,7 @@ var (
 		db *gorm.DB,
 		reviewFeedback *models.ReviewFeedback,
 		sanitizedReason string,
+		agentRunID int,
 	) error {
 		prRepo := repositories.NewPullRequestRepository(db)
 		pr, err := prRepo.FindByID(reviewFeedback.PRID)
@@ -154,6 +155,9 @@ var (
 
 		githubClient := clients.NewFromGitHub(rawClient, logger)
 		comment := fmt.Sprintf("⚠️ プラン作成が却下されました。\n\n理由:\n%s", sanitizedReason)
+		if url := config.AgentRunURL(agentRunID); url != "" {
+			comment += "\n\n**Logs**: " + url
+		}
 		if _, err := githubClient.CreateIssueComment(ctx, owner, repoName, pr.Number, comment); err != nil {
 			logger.Error("Failed to post plan rejection comment",
 				config.Error(err),
@@ -692,6 +696,7 @@ func HandleAgentReport(c *gin.Context) {
 							req.AgentType,
 							*planRunID,
 							req.Status == "succeeded",
+							agentRunID,
 						); err != nil {
 							logger.Warn("Failed to update plan execution completion comment",
 								config.Error(err),
@@ -784,6 +789,7 @@ func HandleAgentReport(c *gin.Context) {
 							services.MaxRetryAttempts,
 							errorReason,
 							agentRun.IdempotencyKey,
+							agentRun.ID,
 						); err != nil {
 							logger.Warn("Failed to post retry progress notifications",
 								config.Error(err),
@@ -991,6 +997,7 @@ func HandleAgentReport(c *gin.Context) {
 					branch,
 					sha,
 					idemKey,
+					agentRun.ID,
 				); err != nil {
 					logger.Warn("Failed to post PR created notifications",
 						config.Error(err),
@@ -1646,7 +1653,7 @@ func handlePlanCreated(
 		)
 	}
 
-	notifyPlanExecutionStarted := func(agentType string) {
+	notifyPlanExecutionStarted := func(agentType string, executionRunID int) {
 		if planExecutionStartNotified {
 			return
 		}
@@ -1654,7 +1661,7 @@ func handlePlanCreated(
 		if notifier == nil {
 			return
 		}
-		if err := notifier.UpdatePlanExecutionStartedComment(ctx, owner, repoName, issue.Number, agentType, agentRunID); err != nil {
+		if err := notifier.UpdatePlanExecutionStartedComment(ctx, owner, repoName, issue.Number, agentType, agentRunID, executionRunID); err != nil {
 			logger.Warn("Failed to update plan execution start comment",
 				config.Error(err),
 				config.String("owner", owner),
@@ -1946,7 +1953,7 @@ func handlePlanCreated(
 		)
 
 		notifyPlanCreationCompleted()
-		notifyPlanExecutionStarted(executionRun.AgentType)
+		notifyPlanExecutionStarted(executionRun.AgentType, executionRun.ID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"message":      "Plan created and execution job started",
@@ -2453,7 +2460,7 @@ func handlePlanCreated(
 		config.Int("execution_agent_run_id", executionRun.ID),
 		config.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 	)
-	notifyPlanExecutionStarted(executionRun.AgentType)
+	notifyPlanExecutionStarted(executionRun.AgentType, executionRun.ID)
 
 	// Note: Plan creation job deletion is handled by defer function defined earlier
 	// This ensures cleanup happens even if early return occurs due to new reviews
@@ -2548,7 +2555,7 @@ func handlePlanRejected(
 
 	// Post rejection comment only if ReviewFeedback exists (for review-triggered plan creation)
 	if reviewFeedback != nil && reviewFeedbackRepo != nil {
-		if err := postPlanRejectionComment(ctx, logger, db, reviewFeedback, sanitizedReason); err != nil {
+		if err := postPlanRejectionComment(ctx, logger, db, reviewFeedback, sanitizedReason, agentRunID); err != nil {
 			restoreAgentRun()
 			if updateErr := agentRunRepo.Update(agentRun); updateErr != nil {
 				logger.Warn("Failed to rollback plan AgentRun state after rejection error",

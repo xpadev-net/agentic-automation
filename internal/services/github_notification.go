@@ -56,6 +56,16 @@ const (
 	planExecutionStageFailed    = "failed"
 )
 
+// appendRunLogsLink appends a WebUI log link line to a notification body when
+// PUBLIC_URL is configured. Bodies stay unchanged for agentRunID <= 0 or when
+// PUBLIC_URL is unset, keeping notifications backward compatible.
+func appendRunLogsLink(body string, agentRunID int) string {
+	if url := config.AgentRunURL(agentRunID); url != "" {
+		return body + "\n\n**Logs**: " + url
+	}
+	return body
+}
+
 // formatExecutionStartMessage is kept for backward compatibility and now delegates
 // to formatPlanCreationProgressMessage with "creating" stage.
 func formatExecutionStartMessage(agentType string, agentRunID int) string {
@@ -71,13 +81,13 @@ func formatPlanCreationProgressMessage(stage string, agentType string, agentRunI
 		statusLine = "✅ Plan created - Starting execution..."
 	}
 
-	return fmt.Sprintf(`%s
+	return appendRunLogsLink(fmt.Sprintf(`%s
 
 **Agent Type**: %s
-**Run ID**: %d`, statusLine, agentType, agentRunID)
+**Run ID**: %d`, statusLine, agentType, agentRunID), agentRunID)
 }
 
-func formatPlanExecutionProgressMessage(stage string, agentType string, planAgentRunID int) string {
+func formatPlanExecutionProgressMessage(stage string, agentType string, planAgentRunID int, logRunID int) string {
 	statusLine := "🚀 Plan execution in progress"
 	switch stage {
 	case planExecutionStageStarted:
@@ -88,10 +98,10 @@ func formatPlanExecutionProgressMessage(stage string, agentType string, planAgen
 		statusLine = "❌ Plan execution failed"
 	}
 
-	return fmt.Sprintf(`%s
+	return appendRunLogsLink(fmt.Sprintf(`%s
 
 **Agent Type**: %s
-**Run ID**: %d`, statusLine, agentType, planAgentRunID)
+**Run ID**: %d`, statusLine, agentType, planAgentRunID), logRunID)
 }
 
 // getErrorMessageForNotification returns the error message for notification,
@@ -142,22 +152,22 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-func makePRCreatedBody(prNumber int, prURL, branch, sha, idempotencyKey string) string {
+func makePRCreatedBody(prNumber int, prURL, branch, sha, idempotencyKey string, agentRunID int) string {
 	marker := prCreatedMarkerPrefix + idempotencyKey + " -->"
-	return marker + "\n" + fmt.Sprintf(prCreatedTemplate, prNumber, prURL, branch, shortSHA(sha))
+	return appendRunLogsLink(marker+"\n"+fmt.Sprintf(prCreatedTemplate, prNumber, prURL, branch, shortSHA(sha)), agentRunID)
 }
 
 // makeMergeSuccessBody formats a message body for merge success notification.
 // It includes an idempotency marker and the merge SHA (shortened).
-func makeMergeSuccessBody(mergeSHA, idempotencyKey string) string {
+func makeMergeSuccessBody(mergeSHA, idempotencyKey string, agentRunID int) string {
 	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
 	message := fmt.Sprintf("✅ Auto-merge succeeded\n\n**Merge SHA**: %s\n\nPR has been successfully merged.", shortSHA(mergeSHA))
-	return marker + "\n" + message
+	return appendRunLogsLink(marker+"\n"+message, agentRunID)
 }
 
 // makeMergeFailureBody formats a message body for merge failure notification.
 // It includes an idempotency marker, error classification, and the error message.
-func makeMergeFailureBody(errorMessage, errorClassification, idempotencyKey string) string {
+func makeMergeFailureBody(errorMessage, errorClassification, idempotencyKey string, agentRunID int) string {
 	marker := mergeStatusMarkerPrefix + idempotencyKey + " -->"
 
 	content := "❌ Auto-merge failed\n\n"
@@ -167,7 +177,7 @@ func makeMergeFailureBody(errorMessage, errorClassification, idempotencyKey stri
 	if em := getErrorMessageForNotification(&errorMessage); em != "" {
 		content += fmt.Sprintf("**Error**: %s", em)
 	}
-	return marker + "\n" + content
+	return appendRunLogsLink(marker+"\n"+content, agentRunID)
 }
 
 // makeMaxRetriesBody formats a message body for max retries exceeded notification.
@@ -283,8 +293,8 @@ func (s *GitHubNotificationService) NotifyPlanCreationStarted(
 		config.Int("plan_agent_run_id", planAgentRunID),
 	)
 
-	message := fmt.Sprintf("レビューに対応するプラン作成を開始しました。\n\n**Review Feedback ID**: %d\n**Plan Agent Run ID**: %d",
-		reviewFeedbackID, planAgentRunID)
+	message := appendRunLogsLink(fmt.Sprintf("レビューに対応するプラン作成を開始しました。\n\n**Review Feedback ID**: %d\n**Plan Agent Run ID**: %d",
+		reviewFeedbackID, planAgentRunID), planAgentRunID)
 
 	if err := s.postComment(ctx, owner, repo, prNumber, message); err != nil {
 		s.logger.Error("Failed to post plan creation started comment",
@@ -324,6 +334,7 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 	owner, repo string,
 	issueNumber, prNumber int,
 	prURL, branch, sha, idempotencyKey string,
+	agentRunID int,
 ) error {
 	s.logger.Info("Posting PR created notifications",
 		config.String("owner", owner),
@@ -344,7 +355,7 @@ func (s *GitHubNotificationService) NotifyPRCreated(
 		return nil
 	}
 
-	body := makePRCreatedBody(prNumber, prURL, branch, sha, idempotencyKey)
+	body := makePRCreatedBody(prNumber, prURL, branch, sha, idempotencyKey, agentRunID)
 	marker := prCreatedMarkerPrefix + idempotencyKey + " -->"
 
 	var aggErr error
@@ -483,15 +494,17 @@ func (s *GitHubNotificationService) UpdatePlanCreationCompletedComment(
 }
 
 // UpdatePlanExecutionStartedComment updates the execution start comment when plan
-// execution begins.
+// execution begins. planAgentRunID locates the tracked comment; executionRunID is
+// the run the Logs link points at.
 func (s *GitHubNotificationService) UpdatePlanExecutionStartedComment(
 	ctx context.Context,
 	owner, repo string,
 	issueNumber int,
 	agentType string,
 	planAgentRunID int,
+	executionRunID int,
 ) error {
-	message := formatPlanExecutionProgressMessage(planExecutionStageStarted, agentType, planAgentRunID)
+	message := formatPlanExecutionProgressMessage(planExecutionStageStarted, agentType, planAgentRunID, executionRunID)
 	return s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, planAgentRunID, message)
 }
 
@@ -504,12 +517,13 @@ func (s *GitHubNotificationService) UpdatePlanExecutionCompletedComment(
 	agentType string,
 	planAgentRunID int,
 	succeeded bool,
+	executionRunID int,
 ) error {
 	stage := planExecutionStageFailed
 	if succeeded {
 		stage = planExecutionStageSucceeded
 	}
-	message := formatPlanExecutionProgressMessage(stage, agentType, planAgentRunID)
+	message := formatPlanExecutionProgressMessage(stage, agentType, planAgentRunID, executionRunID)
 	return s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, planAgentRunID, message)
 }
 
@@ -608,6 +622,7 @@ func (s *GitHubNotificationService) NotifyRetryProgress(
 	issueNumber, prNumber int,
 	retryCount, maxRetries int,
 	errorReason, idempotencyKey string,
+	agentRunID int,
 ) error {
 	// Input validation
 	if retryCount < 0 {
@@ -634,7 +649,7 @@ func (s *GitHubNotificationService) NotifyRetryProgress(
 	marker := retryProgressMarkerPrefix + idempotencyKey + " -->"
 
 	// Format message body
-	body := FormatRetryProgressMessage(retryCount, maxRetries, errorReason, marker)
+	body := appendRunLogsLink(FormatRetryProgressMessage(retryCount, maxRetries, errorReason, marker), agentRunID)
 
 	var aggErr error
 
@@ -784,7 +799,7 @@ func (s *GitHubNotificationService) NotifyMaxRetriesExceeded(
 	}
 
 	// Generate comment body
-	body := makeMaxRetriesBody(agentRun, agentRun.IdempotencyKey)
+	body := appendRunLogsLink(makeMaxRetriesBody(agentRun, agentRun.IdempotencyKey), agentRun.ID)
 
 	// Post comment
 	if err := s.postComment(ctx, owner, repo, issue.Number, body); err != nil {
@@ -816,6 +831,7 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 	errorMessage string,
 	idempotencyKey string,
 	errorType string, // Optional: pre-classified error type. If empty, will be classified from errorMessage.
+	agentRunID int, // Optional: AgentRun linked in the WebUI; <= 0 omits the logs link
 ) error {
 	// Input validation
 	if idempotencyKey == "" {
@@ -838,13 +854,13 @@ func (s *GitHubNotificationService) NotifyMergeStatus(
 		if mergeSHA == "" {
 			s.logger.Warn("merge succeeded but mergeSHA is empty")
 		}
-		body = makeMergeSuccessBody(mergeSHA, idempotencyKey)
+		body = makeMergeSuccessBody(mergeSHA, idempotencyKey, agentRunID)
 	} else {
 		classification := errorType
 		if classification == "" {
 			classification = ClassifyMergeError(errors.New(errorMessage))
 		}
-		body = makeMergeFailureBody(errorMessage, classification, idempotencyKey)
+		body = makeMergeFailureBody(errorMessage, classification, idempotencyKey, agentRunID)
 	}
 
 	var aggErr error
@@ -911,8 +927,9 @@ func (s *GitHubNotificationService) NotifyMergeFailure(
 	owner, repo string,
 	issueNumber, prNumber int,
 	errorType, errorMessage, idempotencyKey string,
+	agentRunID int,
 ) error {
-	return s.NotifyMergeStatus(ctx, owner, repo, issueNumber, prNumber, false, "", errorMessage, idempotencyKey, errorType)
+	return s.NotifyMergeStatus(ctx, owner, repo, issueNumber, prNumber, false, "", errorMessage, idempotencyKey, errorType, agentRunID)
 }
 
 // -----------------------------------------------------------------------------
