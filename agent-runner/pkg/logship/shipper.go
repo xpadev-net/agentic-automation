@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -73,9 +74,11 @@ type Shipper struct {
 	lines chan logEntry
 	done  chan struct{}
 
-	wg      sync.WaitGroup
-	seq     int64
-	dropped int64
+	wg  sync.WaitGroup
+	seq int64
+	// dropped is touched by both readLoop (queue overflow) and sendLoop
+	// (send failures): it must be atomic or concurrent increments race.
+	dropped atomic.Int64
 
 	closeOnce sync.Once
 
@@ -92,6 +95,9 @@ type Shipper struct {
 // configuration is incomplete, so callers can unconditionally defer Close().
 func Attach(apiURL, apiToken string, agentRunID, retryCount int) (*Shipper, error) {
 	apiURL = strings.TrimRight(strings.TrimSpace(apiURL), "/")
+	// A Secret-sourced token may carry a trailing newline; net/http would
+	// reject the Authorization header and drop every batch.
+	apiToken = strings.TrimSpace(apiToken)
 	if apiURL == "" || apiToken == "" || agentRunID <= 0 {
 		return nil, nil
 	}
@@ -134,8 +140,8 @@ func (s *Shipper) Close() {
 		_ = s.pipeW.Close()
 		s.wg.Wait()
 		_ = s.pipeR.Close()
-		if s.dropped > 0 {
-			fmt.Fprintf(s.orig, "[logship] %d log lines were dropped due to backpressure/failures\n", s.dropped)
+		if n := s.dropped.Load(); n > 0 {
+			fmt.Fprintf(s.orig, "[logship] %d log lines were dropped due to backpressure/failures\n", n)
 		}
 	})
 }
@@ -181,19 +187,22 @@ func (s *Shipper) readLoop() {
 		// can echo secrets from the runner env and these lines are
 		// persisted + streamed to the WebUI.
 		line := truncateShipLine(redact.String(raw))
-		if strings.HasPrefix(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY") {
+		// The BEGIN marker may sit behind an assignment prefix
+		// (GITHUB_PRIVATE_KEY=-----BEGIN RSA...), so match Contains, not
+		// just a line prefix.
+		if strings.Contains(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY") {
 			inPEM = true
 		}
 		if inPEM {
 			line = "[REDACTED]"
 		}
-		if strings.HasPrefix(raw, "-----END ") {
+		if strings.Contains(raw, "-----END ") {
 			inPEM = false
 		}
 		select {
 		case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
 		default:
-			s.dropped++
+			s.dropped.Add(1)
 		}
 		lineBuf = lineBuf[:0]
 		overflow = false
@@ -281,7 +290,7 @@ func (s *Shipper) sendLoop() {
 			defer drainCancel()
 			for e := range s.lines {
 				if time.Now().After(deadline) {
-					s.dropped++
+					s.dropped.Add(1)
 					continue
 				}
 				batch = append(batch, e)
@@ -294,7 +303,7 @@ func (s *Shipper) sendLoop() {
 			}
 			// Whatever remains undelivered here (real failure or an
 			// exhausted drain budget) was never counted by send().
-			s.dropped += int64(len(batch))
+			s.dropped.Add(int64(len(batch)))
 			return
 		case e, ok := <-s.lines:
 			if !ok {
@@ -310,7 +319,7 @@ func (s *Shipper) sendLoop() {
 				}
 				flush(ctx)
 				// Remainder kept by a cancelled drain send is truly dropped.
-				s.dropped += int64(len(batch))
+				s.dropped.Add(int64(len(batch)))
 				return
 			}
 			// The flush interval counts from the first line of a batch, not
@@ -370,14 +379,14 @@ func (s *Shipper) send(batch []logEntry, ctx context.Context) []logEntry {
 		body, n := encodeBatch(batch)
 		if n == 0 {
 			// A single 8 KiB entry can never reach the cap; treat as corrupt.
-			s.dropped += int64(len(batch))
+			s.dropped.Add(int64(len(batch)))
 			return nil
 		}
 		if !s.postChunk(body, n, ctx) {
 			if ctx.Err() != nil {
 				return batch
 			}
-			s.dropped += int64(len(batch))
+			s.dropped.Add(int64(len(batch)))
 			return nil
 		}
 		batch = batch[n:]

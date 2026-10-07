@@ -14,6 +14,11 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`ghr_[A-Za-z0-9]{36}`),
 	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9]{48}`),
+	// A complete PEM block on ONE line — agents printing JSONL emit the
+	// private key with newlines escaped as literal \n, so neither the
+	// marker patterns nor the shipper's line-Prefix guard covers it.
+	// Runs first so no partial match can destroy the BEGIN/END markers.
+	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[^-]*-----END [A-Z0-9 ]*PRIVATE KEY-----`),
 	// Credential-looking NAME assignments (NAME=value / NAME: value /
 	// "NAME": "value" / NAME value): covers every secret injected into
 	// runner jobs — OPERATOR_API_TOKEN, S3_SECRET_ACCESS_KEY,
@@ -23,7 +28,8 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)[A-Za-z0-9_]*["']?[=:\s]["'\s]*[^"'\s]{4,}`),
 	// Multiline PEM values (e.g. GITHUB_PRIVATE_KEY) spill across lines:
 	// mask the BEGIN/END markers and the standalone base64 body lines
-	// (64-char columns) between them.
+	// (64-char columns) between them. The complete-block pattern above
+	// already handles the escaped-newline single-line form.
 	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
 	regexp.MustCompile(`-----END [A-Z0-9 ]*PRIVATE KEY-----`),
 	regexp.MustCompile(`(?m)^[A-Za-z0-9+/]{60,80}={0,2}$`),

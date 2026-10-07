@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -44,12 +45,40 @@ func truncateLineUTF8(line string, maxBytes int) string {
 // pass ExistingSeqs before either inserts, and both would publish —
 // OnConflict only dedups storage. Cross-replica serialization uses a MySQL
 // named lock inside the transaction below; this mutex still covers the
-// sqlite path used by tests.
-var ingestLocks sync.Map // map[int]*sync.Mutex
+// sqlite path used by tests. Entries are reference-counted so the map does
+// not grow with every historical run id.
+var (
+	ingestLocksMu sync.Mutex
+	ingestLocks   = map[int]*ingestLock{}
+)
 
-func lockForRun(runID int) *sync.Mutex {
-	v, _ := ingestLocks.LoadOrStore(runID, &sync.Mutex{})
-	return v.(*sync.Mutex)
+type ingestLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// acquireIngestLock takes the per-run mutex and returns the release
+// function; the map entry is dropped once the last holder releases.
+func acquireIngestLock(runID int) func() {
+	ingestLocksMu.Lock()
+	l := ingestLocks[runID]
+	if l == nil {
+		l = &ingestLock{}
+		ingestLocks[runID] = l
+	}
+	l.refs++
+	ingestLocksMu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		ingestLocksMu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(ingestLocks, runID)
+		}
+		ingestLocksMu.Unlock()
+	}
 }
 
 func ingestLockName(runID int) string {
@@ -167,10 +196,24 @@ func HandleAgentRunLogs(c *gin.Context) {
 	}
 
 	logs := make([]*models.AgentRunLog, 0, len(req.Entries))
+	// A PEM value split across entries (GITHUB_PRIVATE_KEY=-----BEGIN... on
+	// the first line, base64 body after) defeats per-line patterns, so mask
+	// every line between BEGIN and END like the shipper does. The BEGIN
+	// marker may sit behind an assignment prefix — match Contains.
+	inPEM := false
 	for _, entry := range req.Entries {
 		// Redact credentials before anything is persisted or streamed:
 		// agent stderr can leak tokens injected into the runner env.
 		line := logredact.Line(entry.Line)
+		if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
+			inPEM = true
+		}
+		if inPEM {
+			line = "[REDACTED]"
+		}
+		if strings.Contains(entry.Line, "-----END ") {
+			inPEM = false
+		}
 		if len(line) > maxLogLineBytes {
 			line = truncateLineUTF8(line, maxLogLineBytes)
 		}
@@ -189,9 +232,8 @@ func HandleAgentRunLogs(c *gin.Context) {
 	// until AFTER the transaction commits (releasing inside the callback
 	// would reopen the cross-replica race just before rows become visible).
 	// The process-local mutex covers the sqlite path used by tests.
-	mu := lockForRun(run.ID)
-	mu.Lock()
-	defer mu.Unlock()
+	unlock := acquireIngestLock(run.ID)
+	defer unlock()
 
 	lockName := ingestLockName(run.ID)
 	// txDB carries the transaction below. On MySQL the named lock must be

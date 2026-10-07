@@ -456,15 +456,17 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	if executionMode == "" {
 		return fmt.Errorf("invalid execution mode")
 	}
-	// 1. Validate and load environment variables
-	envCfg, err := validateEnv()
-	if err != nil {
-		return fmt.Errorf("environment validation failed: %w", err)
-	}
-
-	// Tee stderr to the Operator log ingestion endpoint (best-effort).
-	// From here on, everything written to os.Stderr is also shipped.
-	shipper, err := logship.Attach(envCfg.OperatorAPIURL, envCfg.OperatorAPIToken, envCfg.AgentRunID, envCfg.RetryCount)
+	// Tee stderr to the Operator log ingestion endpoint BEFORE full env
+	// validation, from the raw log-specific env values: otherwise a
+	// validation failure (missing AGENT_TYPE, malformed RETRY_COUNT, ...)
+	// would exit with the reason visible only on Kubernetes stderr.
+	// Best-effort — unusable settings disable shipping, they never fail
+	// the run.
+	rawAPIURL, _ := constructOperatorURL()
+	rawToken := strings.TrimSpace(os.Getenv("OPERATOR_API_TOKEN"))
+	rawRunID, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("AGENT_RUN_ID")))
+	rawRetry, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("RETRY_COUNT")))
+	shipper, err := logship.Attach(rawAPIURL, rawToken, rawRunID, rawRetry)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: log shipping unavailable: %v\n", err)
 	}
@@ -478,6 +480,12 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 			fmt.Fprintf(os.Stderr, "Error: %v\n", retErr)
 		}
 	}()
+
+	// 1. Validate and load environment variables
+	envCfg, err := validateEnv()
+	if err != nil {
+		return fmt.Errorf("environment validation failed: %w", err)
+	}
 
 	if executionMode == "plan_creation" {
 		// プラン作成モードではwriteを不可に強制

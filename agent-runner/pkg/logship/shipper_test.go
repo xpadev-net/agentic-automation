@@ -201,7 +201,7 @@ func TestShipperDropsOn4xx(t *testing.T) {
 	// Give the send loop a moment to attempt and fail.
 	time.Sleep(300 * time.Millisecond)
 	s.Close()
-	if s.dropped == 0 {
+	if s.dropped.Load() == 0 {
 		t.Fatalf("expected dropped count > 0")
 	}
 }
