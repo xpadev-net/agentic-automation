@@ -80,6 +80,8 @@ WebUI の GitHub OAuth ログインを有効化するには `PUBLIC_URL`（Opera
 
 `/api/ui` 配下の閲覧 API はログイン済みユーザーの GitHub トークンで対象リポジトリの参照権限を確認します。既定は repo を「見える人」（`read` 相当）で、`UI_MIN_REPO_PERMISSION=write` にすると write 権限保持者に限定できます。runner が push する実行ログは `agent_run_logs` に保存され、`AGENT_RUN_LOG_RETENTION_DAYS`（既定値 `30` 日、`0` で削除無効）を超えた行は定期削除されます。push ログが無い実行については Kubernetes Pod ログのスナップショットにフォールバックします。
 
+WebUI のフロントエンドは `webui/` の React + Vite プロジェクトで、`cd webui && npm ci && npm run build` を実行すると `internal/webui/static/` にバンドルが生成され、Go の `go:embed` で Operator バイナリに同梱されます（生成物はコミット対象）。UI を変更した場合はビルドを再実行して `internal/webui/static/` を更新してください。
+
 秘密情報はローカルの環境変数または Kubernetes Secret から供給し、実値を Git に保存しないでください。本番では Vault と ExternalSecret を使い、Vault の値を Kubernetes Secret に同期して Operator と Job から参照する構成を想定します。ExternalSecret、SecretStore、Argo CD Application の定義はこのリポジトリにはありません。運用側の IaC で namespace、RBAC、Secret、Ingress とともに管理してください。
 
 ## ローカル開発・テスト

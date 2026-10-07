@@ -51,3 +51,7 @@ tmp/
 temp/
 *.tmp
 
+# Node.js (webui)
+node_modules/
+webui/dist/
+

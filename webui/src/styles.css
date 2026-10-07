@@ -26,6 +26,7 @@ header h1 { font-size: 16px; margin: 0; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+#whoami a { margin-left: 4px; }
 .loading, .empty { color: var(--dim); }
 
 .login-box {

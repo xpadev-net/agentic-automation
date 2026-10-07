@@ -11,13 +11,19 @@ func TestSPAServesIndexAndAssets(t *testing.T) {
 	r, _ := newTestRouter(t, testConfig(), db)
 
 	w := doRequest(r, http.MethodGet, "/", nil)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Agent Runs") {
-		t.Fatalf("index: %d %q", w.Code, w.Body.String()[:80])
+	body := w.Body.String()
+	if w.Code != http.StatusOK || !strings.Contains(body, "Agent Runs") {
+		t.Fatalf("index: %d %q", w.Code, body[:80])
 	}
-	for _, p := range []string{"/app.js", "/style.css"} {
-		w = doRequest(r, http.MethodGet, p, nil)
+	// The built index.html references hashed assets under /assets/; those
+	// must be served directly.
+	for _, m := range assetPathPattern.FindAllString(body, -1) {
+		w = doRequest(r, http.MethodGet, m, nil)
 		if w.Code != http.StatusOK || w.Body.Len() == 0 {
-			t.Fatalf("asset %s: %d", p, w.Code)
+			t.Fatalf("asset %s: %d", m, w.Code)
+		}
+		if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+			t.Fatalf("asset %s: expected immutable cache, got %q", m, cc)
 		}
 	}
 }
