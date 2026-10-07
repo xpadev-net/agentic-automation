@@ -78,6 +78,11 @@ func setupRouter(logger *config.AppLogger) *gin.Engine {
 		middleware.VerifyBearerToken(),
 		handlers.HandleAgentReport)
 
+	// Runner log ingestion (Bearer認証)
+	router.POST("/api/agent-runs/:id/logs",
+		middleware.VerifyBearerToken(),
+		handlers.HandleAgentRunLogs)
+
 	// WebUI auth + UI API routes (only when OAuth + PUBLIC_URL are configured)
 	if uiCfg := webui.LoadConfig(); uiCfg.Enabled() {
 		if uiHandler, stopJanitor := webui.NewHandler(uiCfg, config.GetDB(), logger); uiHandler != nil {
