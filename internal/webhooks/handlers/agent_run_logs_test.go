@@ -103,6 +103,11 @@ func TestIngestLogsValidations(t *testing.T) {
 	if w := postLogs(t, r, "/api/agent-runs/99/logs", entries("x")); w.Code != http.StatusNotFound {
 		t.Fatalf("missing run: expected 404, got %d", w.Code)
 	}
+	// Per-entry seq validation must apply to each element (dive), not the slice.
+	zeroSeq := map[string]any{"entries": []map[string]any{{"seq": 0, "line": "bad"}}}
+	if w := postLogs(t, r, "/api/agent-runs/1/logs", zeroSeq); w.Code != http.StatusBadRequest {
+		t.Fatalf("seq=0 entry: expected 400, got %d", w.Code)
+	}
 }
 
 func TestIngestLogsStoresAndPublishes(t *testing.T) {

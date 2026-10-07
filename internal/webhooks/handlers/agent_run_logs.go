@@ -29,7 +29,7 @@ type LogEntryRequest struct {
 
 // AgentRunLogsRequest is the request body of POST /api/agent-runs/:id/logs.
 type AgentRunLogsRequest struct {
-	Entries []LogEntryRequest `json:"entries" binding:"required,min=1"`
+	Entries []LogEntryRequest `json:"entries" binding:"required,min=1,dive"`
 }
 
 // HandleAgentRunLogs ingests batched log lines from an agent-runner pod.

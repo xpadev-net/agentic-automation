@@ -27,6 +27,13 @@ const (
 	httpTimeout = 10 * time.Second
 	// sendAttempts bounds retries for a single batch before dropping it.
 	sendAttempts = 3
+	// drainBudget bounds how long Close() spends flushing queued lines; past
+	// this the remaining queue is dropped so shutdown cannot hang.
+	drainBudget = 30 * time.Second
+	// seqAttemptStride partitions the sequence space per retry attempt so a
+	// retried Job (same AgentRun, bumped RETRY_COUNT) does not collide with
+	// earlier persisted seq values.
+	seqAttemptStride = int64(1_000_000_000)
 )
 
 type logEntry struct {
@@ -61,9 +68,11 @@ type Shipper struct {
 }
 
 // Attach replaces os.Stderr with a pipe and starts the shipping goroutines.
-// It returns nil (shipping disabled) when configuration is incomplete, so
-// callers can unconditionally defer Close().
-func Attach(apiURL, apiToken string, agentRunID int) (*Shipper, error) {
+// retryCount partitions the seq space per attempt (attempt n starts at
+// n*1e9+1) so retried Jobs do not collide with logs persisted by earlier
+// attempts for the same AgentRun. It returns nil (shipping disabled) when
+// configuration is incomplete, so callers can unconditionally defer Close().
+func Attach(apiURL, apiToken string, agentRunID, retryCount int) (*Shipper, error) {
 	apiURL = strings.TrimRight(strings.TrimSpace(apiURL), "/")
 	if apiURL == "" || apiToken == "" || agentRunID <= 0 {
 		return nil, nil
@@ -71,6 +80,9 @@ func Attach(apiURL, apiToken string, agentRunID int) (*Shipper, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("create stderr pipe: %w", err)
+	}
+	if retryCount < 0 {
+		retryCount = 0
 	}
 	s := &Shipper{
 		endpoint: fmt.Sprintf("%s/api/agent-runs/%d/logs", apiURL, agentRunID),
@@ -81,6 +93,7 @@ func Attach(apiURL, apiToken string, agentRunID int) (*Shipper, error) {
 		pipeW:    w,
 		lines:    make(chan logEntry, channelBuffer),
 		done:     make(chan struct{}),
+		seq:      int64(retryCount) * seqAttemptStride,
 	}
 	os.Stderr = w
 	s.wg.Add(2)
@@ -108,18 +121,26 @@ func (s *Shipper) Close() {
 }
 
 // readLoop drains the pipe: tee to the real stderr and enqueue for shipping.
+// bufio.Reader is used instead of Scanner so arbitrarily long lines never
+// terminate the loop — an oversized line is still mirrored and shipped
+// (the server truncates past its own limit).
 func (s *Shipper) readLoop() {
 	defer s.wg.Done()
-	scanner := bufio.NewScanner(s.pipeR)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		s.seq++
-		fmt.Fprintln(s.orig, line)
-		select {
-		case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
-		default:
-			s.dropped++
+	reader := bufio.NewReaderSize(s.pipeR, 64*1024)
+	for {
+		chunk, err := reader.ReadString('\n')
+		if chunk != "" {
+			line := strings.TrimSuffix(chunk, "\n")
+			s.seq++
+			fmt.Fprintln(s.orig, line)
+			select {
+			case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
+			default:
+				s.dropped++
+			}
+		}
+		if err != nil {
+			break
 		}
 	}
 	close(s.lines)
@@ -143,14 +164,24 @@ func (s *Shipper) sendLoop() {
 	for {
 		select {
 		case <-s.done:
-			// Drain remaining queued lines quickly, then flush once.
+			// Drain remaining queued lines, but bound the total time so a
+			// stalled network cannot hang runner shutdown.
+			deadline := time.Now().Add(drainBudget)
 			for e := range s.lines {
+				if time.Now().After(deadline) {
+					s.dropped++
+					continue
+				}
 				batch = append(batch, e)
 				if len(batch) >= batchMax {
 					flush()
 				}
 			}
-			flush()
+			if time.Now().Before(deadline) {
+				flush()
+			} else {
+				s.dropped += int64(len(batch))
+			}
 			return
 		case e, ok := <-s.lines:
 			if !ok {

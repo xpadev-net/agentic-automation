@@ -464,7 +464,7 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 
 	// Tee stderr to the Operator log ingestion endpoint (best-effort).
 	// From here on, everything written to os.Stderr is also shipped.
-	shipper, err := logship.Attach(envCfg.OperatorAPIURL, envCfg.OperatorAPIToken, envCfg.AgentRunID)
+	shipper, err := logship.Attach(envCfg.OperatorAPIURL, envCfg.OperatorAPIToken, envCfg.AgentRunID, envCfg.RetryCount)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: log shipping unavailable: %v\n", err)
 	}
