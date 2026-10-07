@@ -100,7 +100,8 @@ func TestShipperSeqPartitionedByRetryCount(t *testing.T) {
 }
 
 // Lines larger than the scanner-era 1MiB cap must not kill readLoop: the
-// line is still mirrored and shipped, and later lines keep flowing.
+// line is still mirrored raw to stderr, shipped truncated to the server's
+// per-line limit, and later lines keep flowing.
 func TestShipperOversizedLineStillFlows(t *testing.T) {
 	c, srv := newCaptureServer(t)
 
@@ -119,8 +120,64 @@ func TestShipperOversizedLineStillFlows(t *testing.T) {
 			lines = append(lines, e.Line)
 		}
 	}
-	if len(lines) != 2 || lines[0] != big || lines[1] != "after big" {
+	if len(lines) != 2 {
 		t.Fatalf("unexpected lines (count=%d)", len(lines))
+	}
+	if !strings.HasSuffix(lines[0], truncMark) || len(lines[0]) > 8192 {
+		t.Fatalf("oversized line not truncated: len=%d", len(lines[0]))
+	}
+	if lines[1] != "after big" {
+		t.Fatalf("line after oversized lost: %q", lines[1])
+	}
+}
+
+func TestShipperRedactsSecrets(t *testing.T) {
+	c, srv := newCaptureServer(t)
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "token: ghp_%s\n", strings.Repeat("a", 36))
+	fmt.Fprintf(os.Stderr, "OPENAI_API_KEY=sk-test-value-12345\n")
+	s.Close()
+
+	var lines []string
+	for _, b := range c.batches {
+		for _, e := range b {
+			lines = append(lines, e.Line)
+		}
+	}
+	if len(lines) != 2 {
+		t.Fatalf("unexpected lines (count=%d)", len(lines))
+	}
+	if strings.Contains(lines[0], "ghp_") || strings.Contains(lines[1], "sk-test-value") {
+		t.Fatalf("secrets not redacted: %v", lines)
+	}
+}
+
+func TestShipperRetriesOn429(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		var req logsRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "retry me\n")
+	s.Close()
+	if attempts < 2 {
+		t.Fatalf("expected retry after 429, attempts=%d", attempts)
 	}
 }
 
