@@ -149,14 +149,30 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 		}
 
 		var out lockedBuffer
-		sink := io.MultiWriter(&out, &synchronizedWriter{writer: e.progressWriter})
-		done := make(chan struct{}, 2)
-		go func() { _, _ = io.Copy(sink, stdout); done <- struct{}{} }()
-		go func() { _, _ = io.Copy(sink, stderr); done <- struct{}{} }()
-		<-done
-		<-done
+		progress := &synchronizedWriter{writer: e.progressWriter}
+		readErrs := make(chan error, 2)
+		go func() { readErrs <- streamCopy(stdout, &out, progress) }()
+		go func() { readErrs <- streamCopy(stderr, &out, progress) }()
+		// A read-side failure stops the child immediately — like the codex
+		// path — so the abandoned pipe cannot fill and block the other
+		// reader or cmd.Wait. A progress-writer failure alone keeps
+		// draining (see streamCopy).
+		var streamErr error
+		for range 2 {
+			if rerr := <-readErrs; rerr != nil {
+				if streamErr == nil {
+					streamErr = rerr
+				}
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+			}
+		}
 		err = cmd.Wait()
 		output = out.Bytes()
+		if streamErr != nil {
+			return string(output), streamErr
+		}
 	}
 
 	outputStr := string(output)
@@ -170,6 +186,33 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 	}
 
 	return outputStr, nil
+}
+
+// streamCopy drains r into buf while mirroring to progress. A mirror
+// failure (e.g. closed stderr) only drops the progress writer — the pipe
+// keeps being drained so the subprocess never blocks on it. A read
+// failure is returned so the caller can terminate the subprocess.
+func streamCopy(r io.Reader, buf *lockedBuffer, progress io.Writer) error {
+	p := make([]byte, 32*1024)
+	mirror := true
+	for {
+		n, rerr := r.Read(p)
+		if n > 0 {
+			chunk := p[:n]
+			_, _ = buf.Write(chunk)
+			if mirror {
+				if _, werr := progress.Write(chunk); werr != nil {
+					mirror = false
+				}
+			}
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return nil
+			}
+			return rerr
+		}
+	}
 }
 
 // executeCodex executes the OpenAI Codex CLI (codex exec) in non-interactive mode.

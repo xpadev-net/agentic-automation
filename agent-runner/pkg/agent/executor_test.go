@@ -955,3 +955,41 @@ func TestExecutor_Execute_ClaudeCode_SubprocessFailure(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// A failing progress writer must not wedge the run: streamCopy drops the
+// mirror but keeps draining the pipe, so a chatty child still exits and
+// its output stays complete.
+func TestExecutor_Execute_ClaudeCode_ProgressErrorKeepsDraining(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude-code")
+	// ~1 MiB exceeds the 64 KiB pipe buffer: without continued draining
+	// the child blocks mid-write and Execute hangs.
+	script := "#!/bin/sh\nyes x | head -c 1000000 >&2\necho done\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude-code: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	executor := NewExecutor("claude-code")
+	executor.progressWriter = failingWriter{}
+	done := make(chan error, 1)
+	var output string
+	go func() {
+		var err error
+		output, err = executor.Execute(t.TempDir(), "prompt")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v, want nil", err)
+		}
+		if !strings.Contains(output, "done") || len(output) < 1_000_000 {
+			t.Fatalf("output incomplete (len=%d)", len(output))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("claude-code execution hung after progress writer failure")
+	}
+}
