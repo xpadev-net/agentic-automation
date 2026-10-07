@@ -3,11 +3,13 @@ package handlers
 import (
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/loghub"
+	"agentic-automation/internal/logredact"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
 	"net/http"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -19,6 +21,25 @@ const (
 	maxLogLineBytes         = 8192
 	maxLogRequestBodyBytes  = 4 << 20 // 4 MiB
 )
+
+// truncateLineUTF8 cuts a line at maxBytes on a rune boundary and marks it
+// truncated. A raw byte slice could split a multibyte rune and produce
+// invalid UTF-8 that utf8mb4 columns then reject.
+func truncateLineUTF8(line string, maxBytes int) string {
+	cut := maxBytes
+	for cut > 0 && !utf8.ValidString(line[:cut]) {
+		cut--
+	}
+	return line[:cut] + "…[truncated]"
+}
+
+func seqsOf(logs []*models.AgentRunLog) []int64 {
+	seqs := make([]int64, 0, len(logs))
+	for _, l := range logs {
+		seqs = append(seqs, l.Seq)
+	}
+	return seqs
+}
 
 // LogEntryRequest is one log line in the ingestion batch.
 type LogEntryRequest struct {
@@ -86,9 +107,11 @@ func HandleAgentRunLogs(c *gin.Context) {
 
 	logs := make([]*models.AgentRunLog, 0, len(req.Entries))
 	for _, entry := range req.Entries {
-		line := entry.Line
+		// Redact credentials before anything is persisted or streamed:
+		// agent stderr can leak tokens injected into the runner env.
+		line := logredact.Line(entry.Line)
 		if len(line) > maxLogLineBytes {
-			line = line[:maxLogLineBytes] + "…[truncated]"
+			line = truncateLineUTF8(line, maxLogLineBytes)
 		}
 		logs = append(logs, &models.AgentRunLog{
 			AgentRunID: run.ID,
@@ -99,6 +122,19 @@ func HandleAgentRunLogs(c *gin.Context) {
 	}
 
 	logRepo := repositories.NewAgentRunLogRepository(db)
+	// OnConflict DoNothing makes re-posted batches idempotent for storage,
+	// but live publication must be limited to rows actually inserted or a
+	// retried batch would fan the same lines out to SSE subscribers twice.
+	existing, err := logRepo.ExistingSeqs(run.ID, seqsOf(logs))
+	if err != nil {
+		logger.Error("Failed to check existing log seqs",
+			config.Int("agent_run_id", runID), config.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "failed to check existing logs",
+		})
+		return
+	}
 	stored, err := logRepo.CreateBatch(logs)
 	if err != nil {
 		logger.Error("Failed to store agent run logs",
@@ -110,7 +146,12 @@ func HandleAgentRunLogs(c *gin.Context) {
 		return
 	}
 
+	seen := make(map[int64]bool, len(logs))
 	for _, l := range logs {
+		if existing[l.Seq] || seen[l.Seq] {
+			continue
+		}
+		seen[l.Seq] = true
 		loghub.Publish(loghub.Event{
 			AgentRunID: l.AgentRunID,
 			Seq:        l.Seq,

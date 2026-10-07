@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"agentic-automation/internal/config"
 	"agentic-automation/internal/loghub"
@@ -181,6 +182,78 @@ func TestIngestLogsStoresAndPublishes(t *testing.T) {
 	logs, _ = repo.GetAfterSeq(run.ID, 0, 10)
 	if len(logs) != 3 || logs[0].Line != "first" {
 		t.Fatalf("dedup broke data: %+v", logs)
+	}
+
+	// Only the newly stored seq is published on resend — subscribers must
+	// never see the skipped duplicate (seq=1 "dup") again.
+	deadline := time.After(500 * time.Millisecond)
+	var got []string
+	for {
+		select {
+		case ev := <-sub:
+			got = append(got, ev.Line)
+			if ev.Line == "third" {
+				deadline = time.After(50 * time.Millisecond)
+			}
+		case <-deadline:
+			for _, l := range got {
+				if l == "dup" {
+					t.Fatalf("duplicate seq republished: %v", got)
+				}
+			}
+			return
+		}
+	}
+}
+
+func TestIngestLogsTruncatesOnRuneBoundary(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	// 3000 x 3-byte runes = 9000 bytes: the 8192-byte cut lands mid-rune.
+	w := postLogs(t, r, "/api/agent-runs/"+itoa(run.ID)+"/logs",
+		entries(strings.Repeat("あ", 3000)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, _ := repo.GetAfterSeq(run.ID, 0, 10)
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	l := logs[0].Line
+	if !utf8.ValidString(l) {
+		t.Fatal("truncated line is invalid UTF-8")
+	}
+	if !strings.HasSuffix(l, "…[truncated]") {
+		t.Fatalf("truncation marker missing: %q", l[len(l)-30:])
+	}
+}
+
+func TestIngestLogsRedactsSecrets(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	secret := "ghp_" + strings.Repeat("a", 36)
+	w := postLogs(t, r, "/api/agent-runs/"+itoa(run.ID)+"/logs",
+		entries("token: "+secret))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, _ := repo.GetAfterSeq(run.ID, 0, 10)
+	if len(logs) != 1 || strings.Contains(logs[0].Line, secret) {
+		t.Fatalf("secret persisted: %v", logs)
 	}
 }
 

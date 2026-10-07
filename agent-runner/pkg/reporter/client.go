@@ -10,9 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"time"
+
+	redact "agent-runner/pkg/redact"
 )
 
 const (
@@ -137,25 +138,7 @@ func validatePlanReportRequest(req *PlanReportRequest) error {
 }
 
 func sanitizeLogs(logs string) string {
-	if logs == "" {
-		return logs
-	}
-	patterns := []string{
-		`ghp_[A-Za-z0-9]{36}`,
-		`gho_[A-Za-z0-9]{36}`,
-		`ghs_[A-Za-z0-9]{36}`,
-		`sk-[A-Za-z0-9]{48}`,
-		`ANTHROPIC_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-		`CURSOR_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-		`CODEX_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-		`OPENAI_API_KEY[=:\s]+[A-Za-z0-9-_]+`,
-	}
-	sanitized := logs
-	for _, pattern := range patterns {
-		re := regexp.MustCompile(pattern)
-		sanitized = re.ReplaceAllString(sanitized, "***")
-	}
-	return sanitized
+	return redact.String(logs)
 }
 
 // validateReportRequest validates the report request
