@@ -140,30 +140,86 @@ func (s *Shipper) Close() {
 	})
 }
 
+// maxLineBufBytes caps how much of a single newline-free stderr record is
+// accumulated for shipping. The pipe keeps being drained and mirrored raw
+// beyond the cap, so a writer dumping a huge record neither blocks nor can
+// OOM the runner even though only the shippable prefix is retained.
+const maxLineBufBytes = 64 * 1024
+
 // readLoop drains the pipe: tee to the real stderr and enqueue for shipping.
-// bufio.Reader is used instead of Scanner so arbitrarily long lines never
-// terminate the loop — an oversized line is mirrored raw but shipped
-// truncated to the server's per-line limit.
+// It reads bounded fragments and splits lines itself so a record without a
+// newline never accumulates unbounded in memory — only the first
+// maxLineBufBytes are kept and the line ships truncated.
 func (s *Shipper) readLoop() {
 	defer s.wg.Done()
 	reader := bufio.NewReaderSize(s.pipeR, 64*1024)
+	frag := make([]byte, 32*1024)
+	var lineBuf []byte
+	overflow := false
+
+	// append keeps at most maxLineBufBytes of the current line.
+	appendSeg := func(seg []byte) {
+		rem := maxLineBufBytes - len(lineBuf)
+		if rem <= 0 {
+			overflow = true
+			return
+		}
+		if len(seg) > rem {
+			seg = seg[:rem]
+			overflow = true
+		}
+		lineBuf = append(lineBuf, seg...)
+	}
+	// A multiline PEM value (e.g. GITHUB_PRIVATE_KEY) spills base64 body
+	// lines that no per-line pattern can identify reliably, so mask
+	// everything between the BEGIN/END markers.
+	inPEM := false
+	emit := func() {
+		s.seq++
+		raw := string(lineBuf)
+		// Redact credentials before queueing for shipment: agent stderr
+		// can echo secrets from the runner env and these lines are
+		// persisted + streamed to the WebUI.
+		line := truncateShipLine(redact.String(raw))
+		if strings.HasPrefix(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY") {
+			inPEM = true
+		}
+		if inPEM {
+			line = "[REDACTED]"
+		}
+		if strings.HasPrefix(raw, "-----END ") {
+			inPEM = false
+		}
+		select {
+		case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
+		default:
+			s.dropped++
+		}
+		lineBuf = lineBuf[:0]
+		overflow = false
+	}
+
 	for {
-		chunk, err := reader.ReadString('\n')
-		if chunk != "" {
-			line := strings.TrimSuffix(chunk, "\n")
-			s.seq++
-			fmt.Fprintln(s.orig, line)
-			// Redact credentials before queueing for shipment: agent stderr
-			// can echo secrets from the runner env and these lines are
-			// persisted + streamed to the WebUI.
-			line = truncateShipLine(redact.String(line))
-			select {
-			case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
-			default:
-				s.dropped++
+		n, err := reader.Read(frag)
+		if n > 0 {
+			_, _ = s.orig.Write(frag[:n])
+			start := 0
+			for {
+				idx := bytes.IndexByte(frag[start:n], '\n')
+				if idx < 0 {
+					break
+				}
+				end := start + idx
+				appendSeg(frag[start:end])
+				emit() // one entry per newline, including empty lines
+				start = end + 1
 			}
+			appendSeg(frag[start:n])
 		}
 		if err != nil {
+			if len(lineBuf) > 0 || overflow {
+				emit()
+			}
 			break
 		}
 	}
@@ -204,9 +260,9 @@ func (s *Shipper) sendLoop() {
 		}
 		timerActive = false
 	}
-	flush := func() {
+	flush := func(ctx context.Context) {
 		if len(batch) > 0 {
-			s.send(batch, s.shutdownCtx)
+			s.send(batch, ctx)
 			batch = batch[:0]
 		}
 		stopTimer()
@@ -239,7 +295,17 @@ func (s *Shipper) sendLoop() {
 			return
 		case e, ok := <-s.lines:
 			if !ok {
-				flush()
+				// readLoop closed the channel. If Close already cancelled
+				// shutdownCtx, flush the final batch under a fresh
+				// budgeted context instead of the dead one.
+				ctx := s.shutdownCtx
+				if ctx.Err() != nil {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithDeadline(context.Background(),
+						time.Now().Add(drainBudget))
+					defer cancel()
+				}
+				flush(ctx)
 				return
 			}
 			// The flush interval counts from the first line of a batch, not
@@ -250,11 +316,11 @@ func (s *Shipper) sendLoop() {
 			}
 			batch = append(batch, e)
 			if len(batch) >= batchMax {
-				flush()
+				flush(s.shutdownCtx)
 			}
 		case <-timer.C:
 			timerActive = false
-			flush()
+			flush(s.shutdownCtx)
 		}
 	}
 }
@@ -339,24 +405,31 @@ func (s *Shipper) postChunk(body []byte, n int, ctx context.Context) bool {
 			if code >= 400 && code < 500 && code != http.StatusTooManyRequests {
 				break
 			}
-			delay := time.Duration(attempt) * 500 * time.Millisecond
-			if code == http.StatusTooManyRequests {
-				if secs, e := strconv.Atoi(retryAfter); e == nil && secs > 0 {
-					if secs > maxRetryAfterSecs {
-						secs = maxRetryAfterSecs
+			// Sleep only when another attempt follows — idling after the
+			// final failure just stalls the single send goroutine while
+			// the queue keeps filling.
+			if attempt < sendAttempts {
+				delay := time.Duration(attempt) * 500 * time.Millisecond
+				if code == http.StatusTooManyRequests {
+					if secs, e := strconv.Atoi(retryAfter); e == nil && secs > 0 {
+						if secs > maxRetryAfterSecs {
+							secs = maxRetryAfterSecs
+						}
+						delay = time.Duration(secs) * time.Second
 					}
-					delay = time.Duration(secs) * time.Second
 				}
-			}
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
+				select {
+				case <-time.After(delay):
+				case <-ctx.Done():
+				}
 			}
 			continue
 		}
-		select {
-		case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
-		case <-ctx.Done():
+		if attempt < sendAttempts {
+			select {
+			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			case <-ctx.Done():
+			}
 		}
 	}
 	fmt.Fprintf(s.orig, "[logship] dropped %d log lines: %v\n", n, lastErr)

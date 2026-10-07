@@ -6,6 +6,7 @@ import (
 	"agentic-automation/internal/logredact"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -144,28 +145,58 @@ func HandleAgentRunLogs(c *gin.Context) {
 
 	// Serialize check + insert + publish-decision per run so publication is
 	// atomic with the insert: a concurrent same-seq request waits, then sees
-	// the rows the first request stored. On MySQL a named lock inside the
-	// transaction serializes across operator replicas (GET_LOCK is
-	// session-scoped, so it must run on the transaction's pinned
-	// connection); the process-local mutex covers sqlite/test paths.
+	// the rows the first request stored. On MySQL a named lock serializes
+	// across operator replicas; it is taken on a dedicated connection held
+	// until AFTER the transaction commits (releasing inside the callback
+	// would reopen the cross-replica race just before rows become visible).
+	// The process-local mutex covers the sqlite path used by tests.
 	mu := lockForRun(run.ID)
 	mu.Lock()
 	defer mu.Unlock()
 
+	lockName := ingestLockName(run.ID)
+	var lockConn *sql.Conn
+	if db.Dialector.Name() == "mysql" {
+		sqlDB, derr := db.DB()
+		if derr == nil {
+			lockConn, derr = sqlDB.Conn(c.Request.Context())
+		}
+		if derr != nil {
+			logger.Error("Failed to get ingest lock connection",
+				config.Int("agent_run_id", runID), config.Error(derr))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "failed to store logs",
+			})
+			return
+		}
+		var got sql.NullInt64
+		if err := lockConn.QueryRowContext(c.Request.Context(),
+			"SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&got); err != nil || !got.Valid || got.Int64 != 1 {
+			_ = lockConn.Close()
+			if err == nil {
+				err = fmt.Errorf("not granted")
+			}
+			logger.Error("Failed to acquire ingest lock",
+				config.Int("agent_run_id", runID), config.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "failed to store logs",
+			})
+			return
+		}
+		// Release after the transaction below has committed (defer order)
+		// and on Background: the request context may already be done.
+		defer func() {
+			_, _ = lockConn.ExecContext(context.Background(),
+				"SELECT RELEASE_LOCK(?)", lockName)
+			_ = lockConn.Close()
+		}()
+	}
+
 	var stored int
 	var toPublish []loghub.Event
-	lockName := ingestLockName(run.ID)
 	err = db.Transaction(func(tx *gorm.DB) error {
-		if tx.Dialector.Name() == "mysql" {
-			var got sql.NullInt64
-			if err := tx.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&got).Error; err != nil {
-				return fmt.Errorf("acquire ingest lock: %w", err)
-			} else if !got.Valid || got.Int64 != 1 {
-				return fmt.Errorf("acquire ingest lock: not granted")
-			}
-			defer tx.Exec("SELECT RELEASE_LOCK(?)", lockName)
-		}
-
 		logRepo := repositories.NewAgentRunLogRepository(tx)
 		// OnConflict DoNothing makes re-posted batches idempotent for
 		// storage, but live publication must be limited to rows actually

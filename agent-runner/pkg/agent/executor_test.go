@@ -408,8 +408,8 @@ func TestExecutor_Execute_ClaudeCode_CommandFailure(t *testing.T) {
 	if !strings.Contains(errorMsg, "claude-code execution failed") {
 		t.Errorf("Expected error message to contain 'claude-code execution failed', got %q", errorMsg)
 	}
-	if !strings.Contains(errorMsg, "Output: Command failed with exit code 1") {
-		t.Errorf("Expected error message to contain output, got %q", errorMsg)
+	if !strings.Contains(errorMsg, "Command failed with exit code 1") {
+		t.Errorf("Expected error message to contain output tail, got %q", errorMsg)
 	}
 
 	// Verify output is still returned

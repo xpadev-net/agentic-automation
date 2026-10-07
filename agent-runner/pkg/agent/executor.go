@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"agent-runner/pkg/utils"
 )
@@ -157,9 +158,20 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 
 	outputStr := string(output)
 
-	// If command execution failed, wrap the error with output context
+	// If command execution failed, wrap the error with only the output tail:
+	// the streaming path already mirrored the full transcript to stderr, so
+	// embedding it again would replay every line through the log shipper
+	// when the caller prints this error.
 	if err != nil {
-		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput: %s", err, outputStr)
+		tail := outputStr
+		if len(tail) > 4096 {
+			cut := len(tail) - 4096
+			for cut < len(tail) && !utf8.ValidString(tail[cut:]) {
+				cut++
+			}
+			tail = "…[truncated]" + tail[cut:]
+		}
+		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput (tail): %s", err, tail)
 	}
 
 	return outputStr, nil

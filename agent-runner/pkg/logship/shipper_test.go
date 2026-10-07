@@ -204,6 +204,81 @@ func TestShipperDropsOn4xx(t *testing.T) {
 	}
 }
 
+// A stderr record without a newline must be drained and shipped bounded:
+// readLoop only accumulates maxLineBufBytes instead of the whole record.
+func TestShipperNewlineFreeRecordBounded(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	// 5 MiB with no trailing newline.
+	fmt.Fprintf(os.Stderr, "%s", strings.Repeat("y", 5*1024*1024))
+	s.Close()
+
+	var lines []string
+	for _, b := range c.batches {
+		for _, e := range b {
+			lines = append(lines, e.Line)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 shipped line, got %d", len(lines))
+	}
+	if !strings.HasSuffix(lines[0], truncMark) || len(lines[0]) > 8192 {
+		t.Fatalf("line not truncated: len=%d", len(lines[0]))
+	}
+}
+
+// The final flush on Close must use a live context: Close cancels
+// shutdownCtx before the send loop exits, and a flush that reused it would
+// silently drop the last lines.
+func TestShipperCloseStillFlushesQueuedLines(t *testing.T) {
+	for i := 0; i < 30; i++ {
+		c, srv := newCaptureServer(t)
+		s, err := Attach(srv.URL, "tok", 7, 0)
+		if err != nil || s == nil {
+			t.Fatalf("attach failed: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "tail line\n")
+		s.Close()
+		if len(c.batches) == 0 {
+			t.Fatalf("iteration %d: final batch dropped", i)
+		}
+	}
+}
+
+// The retry delay must not run after the last attempt — with Retry-After
+// the send goroutine would idle one extra period while the queue fills.
+func TestShipperSkipsDelayAfterFinalAttempt(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Retry-After", "3")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "throttled\n")
+	start := time.Now()
+	s.Close()
+	elapsed := time.Since(start)
+
+	// 3 attempts => 2 inter-attempt sleeps of ~3s each; a trailing sleep
+	// after the last attempt would push this past ~9s.
+	if elapsed > 8*time.Second {
+		t.Fatalf("close took %v — retry delay ran after the final attempt", elapsed)
+	}
+	if attempts != sendAttempts {
+		t.Fatalf("expected %d attempts, got %d", sendAttempts, attempts)
+	}
+}
+
 func TestEncodeBatchSplitsByEncodedSize(t *testing.T) {
 	// '<' marshals to < — six bytes per character — so raw-size
 	// budgeting would overshoot the encoded body cap.
