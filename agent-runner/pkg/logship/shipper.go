@@ -47,16 +47,16 @@ const (
 	// retried Job (same AgentRun, bumped RETRY_COUNT) does not collide with
 	// earlier persisted seq values.
 	seqAttemptStride = int64(1_000_000_000)
+	// maxRequestBodyJSON bounds each encoded POST body. JSON escaping can
+	// expand lines several-fold (`<` → `<`), so sizing by raw line
+	// bytes or line count alone could exceed the server's 4 MiB limit.
+	maxRequestBodyJSON = 3 << 20
 )
 
 type logEntry struct {
 	Seq  int64     `json:"seq"`
 	TS   time.Time `json:"ts"`
 	Line string    `json:"line"`
-}
-
-type logsRequest struct {
-	Entries []logEntry `json:"entries"`
 }
 
 // Shipper captures os.Stderr through a pipe, mirrors every line to the real
@@ -78,6 +78,11 @@ type Shipper struct {
 	dropped int64
 
 	closeOnce sync.Once
+
+	// shutdownCtx cancels any send still in flight when Close begins, so an
+	// active flush cannot delay shutdown past its own request timeout.
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
 }
 
 // Attach replaces os.Stderr with a pipe and starts the shipping goroutines.
@@ -109,6 +114,7 @@ func Attach(apiURL, apiToken string, agentRunID, retryCount int) (*Shipper, erro
 		seq:      int64(retryCount) * seqAttemptStride,
 	}
 	os.Stderr = w
+	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
 	s.wg.Add(2)
 	go s.readLoop()
 	go s.sendLoop()
@@ -122,6 +128,7 @@ func (s *Shipper) Close() {
 		return
 	}
 	s.closeOnce.Do(func() {
+		s.shutdownCancel() // abort any in-flight normal-path send
 		close(s.done)
 		os.Stderr = s.orig
 		_ = s.pipeW.Close()
@@ -199,7 +206,7 @@ func (s *Shipper) sendLoop() {
 	}
 	flush := func() {
 		if len(batch) > 0 {
-			s.send(batch, time.Time{})
+			s.send(batch, s.shutdownCtx)
 			batch = batch[:0]
 		}
 		stopTimer()
@@ -211,6 +218,8 @@ func (s *Shipper) sendLoop() {
 			// Drain remaining queued lines, but bound the total time so a
 			// stalled network cannot hang runner shutdown.
 			deadline := time.Now().Add(drainBudget)
+			drainCtx, drainCancel := context.WithDeadline(context.Background(), deadline)
+			defer drainCancel()
 			for e := range s.lines {
 				if time.Now().After(deadline) {
 					s.dropped++
@@ -218,12 +227,12 @@ func (s *Shipper) sendLoop() {
 				}
 				batch = append(batch, e)
 				if len(batch) >= batchMax {
-					s.send(batch, deadline)
+					s.send(batch, drainCtx)
 					batch = batch[:0]
 				}
 			}
 			if time.Now().Before(deadline) && len(batch) > 0 {
-				s.send(batch, deadline)
+				s.send(batch, drainCtx)
 			} else {
 				s.dropped += int64(len(batch))
 			}
@@ -250,23 +259,57 @@ func (s *Shipper) sendLoop() {
 	}
 }
 
-// send POSTs one batch with small retry; failures only drop the batch.
-// deadline (zero = none) bounds the whole call: attempts and sleeps past it
-// are skipped so Close() cannot block on a stalled endpoint. The context is
-// also cancelled at the deadline so an in-flight request aborts.
-func (s *Shipper) send(batch []logEntry, deadline time.Time) {
-	body, err := json.Marshal(logsRequest{Entries: batch})
-	if err != nil {
-		s.dropped += int64(len(batch))
-		return
+// encodeBatch marshals a prefix of entries into one request body, stopping
+// before the encoded JSON would exceed maxRequestBodyJSON. It returns the
+// body and how many entries were consumed.
+func encodeBatch(entries []logEntry) ([]byte, int) {
+	buf := bytes.NewBuffer(make([]byte, 0, 4096))
+	buf.WriteString(`{"entries":[`)
+	n := 0
+	for _, e := range entries {
+		eb, err := json.Marshal(e)
+		if err != nil {
+			break
+		}
+		need := len(eb)
+		if n > 0 {
+			need++ // ','
+		}
+		if buf.Len()+need+2 > maxRequestBodyJSON {
+			break
+		}
+		if n > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(eb)
+		n++
 	}
-	ctx := context.Background()
-	cancel := func() {}
-	if !deadline.IsZero() {
-		ctx, cancel = context.WithDeadline(ctx, deadline)
-	}
-	defer cancel()
+	buf.WriteString("]}")
+	return buf.Bytes(), n
+}
 
+// send POSTs a batch, splitting it into encoded-size-bounded chunks. ctx
+// bounds the whole call: attempts and sleeps past it are skipped and an
+// in-flight request aborts, so Close() cannot block on a stalled endpoint.
+func (s *Shipper) send(batch []logEntry, ctx context.Context) {
+	for len(batch) > 0 {
+		body, n := encodeBatch(batch)
+		if n == 0 {
+			// A single 8 KiB entry can never reach the cap; treat as corrupt.
+			s.dropped += int64(len(batch))
+			return
+		}
+		if !s.postChunk(body, n, ctx) {
+			s.dropped += int64(len(batch))
+			return
+		}
+		batch = batch[n:]
+	}
+}
+
+// postChunk sends one encoded request body with small retry. Failures drop
+// the chunk (and, per send(), the rest of the batch).
+func (s *Shipper) postChunk(body []byte, n int, ctx context.Context) bool {
 	var lastErr error
 	for attempt := 1; attempt <= sendAttempts; attempt++ {
 		if ctx.Err() != nil {
@@ -288,7 +331,7 @@ func (s *Shipper) send(batch []logEntry, deadline time.Time) {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			if code >= 200 && code < 300 {
-				return
+				return true
 			}
 			lastErr = fmt.Errorf("log ingestion status %d", code)
 			// 4xx other than 429 means the request is invalid; retrying
@@ -316,6 +359,6 @@ func (s *Shipper) send(batch []logEntry, deadline time.Time) {
 		case <-ctx.Done():
 		}
 	}
-	fmt.Fprintf(s.orig, "[logship] dropped %d log lines: %v\n", len(batch), lastErr)
-	s.dropped += int64(len(batch))
+	fmt.Fprintf(s.orig, "[logship] dropped %d log lines: %v\n", n, lastErr)
+	return false
 }
