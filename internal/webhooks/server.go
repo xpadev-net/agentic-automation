@@ -6,6 +6,7 @@ import (
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/webhooks/handlers"
 	"agentic-automation/internal/webhooks/middleware"
+	"agentic-automation/internal/webui"
 	"context"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ const (
 
 var (
 	statusEventHandler = handlers.HandleStatus
+	webuiJanitorStop   func()
 )
 
 // Server represents the webhook server
@@ -75,6 +77,18 @@ func setupRouter(logger *config.AppLogger) *gin.Engine {
 	router.POST("/api/agent-runs/:id/report",
 		middleware.VerifyBearerToken(),
 		handlers.HandleAgentReport)
+
+	// WebUI auth + UI API routes (only when OAuth + PUBLIC_URL are configured)
+	if uiCfg := webui.LoadConfig(); uiCfg.Enabled() {
+		if uiHandler, stopJanitor := webui.NewHandler(uiCfg, config.GetDB(), logger); uiHandler != nil {
+			uiHandler.RegisterRoutes(router)
+			webuiJanitorStop = stopJanitor
+			logger.Info("WebUI routes registered",
+				config.String("callback_url", uiCfg.CallbackURL()))
+		}
+	} else {
+		logger.Debug("WebUI disabled: GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET/PUBLIC_URL not fully set")
+	}
 
 	return router
 }
@@ -241,6 +255,10 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the webhook server
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down webhook server")
+
+	if webuiJanitorStop != nil {
+		webuiJanitorStop()
+	}
 
 	if err := s.server.Shutdown(ctx); err != nil {
 		s.logger.Error("Error during server shutdown", config.Error(err))
