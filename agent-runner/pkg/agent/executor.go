@@ -133,13 +133,16 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 		// log shipper tails) while also capturing the combined output like
 		// CombinedOutput did — claude runs are the longest-lived ones, so
 		// buffering-until-exit would hide them from the live log feed.
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			return "", fmt.Errorf("failed to create claude-code stdout pipe: %w", err)
+		// perr must not reuse the outer err name: cmd.Wait() below writes to
+		// the outer variable, and a shadowed err would leave it nil so a
+		// failed subprocess reported success.
+		stdout, perr := cmd.StdoutPipe()
+		if perr != nil {
+			return "", fmt.Errorf("failed to create claude-code stdout pipe: %w", perr)
 		}
-		stderr, err := cmd.StderrPipe()
-		if err != nil {
-			return "", fmt.Errorf("failed to create claude-code stderr pipe: %w", err)
+		stderr, perr := cmd.StderrPipe()
+		if perr != nil {
+			return "", fmt.Errorf("failed to create claude-code stderr pipe: %w", perr)
 		}
 		if err := cmd.Start(); err != nil {
 			return "", fmt.Errorf("failed to start claude-code: %w", err)

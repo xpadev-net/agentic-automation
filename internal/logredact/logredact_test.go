@@ -40,3 +40,16 @@ func TestLineMasksPEMBlock(t *testing.T) {
 		}
 	}
 }
+
+// A PEM block emitted with JSONL-escaped newlines (literal \n) stays on one
+// line: the BEGIN/END markers alone would leave the key body recoverable.
+func TestLineMasksEscapedNewlinePEM(t *testing.T) {
+	body := strings.Repeat("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo", 2)[:64]
+	in := `{"msg":"-----BEGIN RSA PRIVATE KEY-----\n` + body + `\n-----END RSA PRIVATE KEY-----\n"}`
+	got := Line(in)
+	for _, frag := range []string{"PRIVATE KEY", body, "BEGIN"} {
+		if strings.Contains(got, frag) {
+			t.Fatalf("escaped PEM material leaked: %q", got)
+		}
+	}
+}
