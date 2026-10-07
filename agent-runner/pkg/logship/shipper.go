@@ -95,6 +95,9 @@ type Shipper struct {
 // configuration is incomplete, so callers can unconditionally defer Close().
 func Attach(apiURL, apiToken string, agentRunID, retryCount int) (*Shipper, error) {
 	apiURL = strings.TrimRight(strings.TrimSpace(apiURL), "/")
+	// A Secret-sourced token may carry a trailing newline; net/http would
+	// reject the Authorization header and drop every batch.
+	apiToken = strings.TrimSpace(apiToken)
 	if apiURL == "" || apiToken == "" || agentRunID <= 0 {
 		return nil, nil
 	}
@@ -184,13 +187,16 @@ func (s *Shipper) readLoop() {
 		// can echo secrets from the runner env and these lines are
 		// persisted + streamed to the WebUI.
 		line := truncateShipLine(redact.String(raw))
-		if strings.HasPrefix(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY") {
+		// The BEGIN marker may sit behind an assignment prefix
+		// (GITHUB_PRIVATE_KEY=-----BEGIN RSA...), so match Contains, not
+		// just a line prefix.
+		if strings.Contains(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY") {
 			inPEM = true
 		}
 		if inPEM {
 			line = "[REDACTED]"
 		}
-		if strings.HasPrefix(raw, "-----END ") {
+		if strings.Contains(raw, "-----END ") {
 			inPEM = false
 		}
 		select {
