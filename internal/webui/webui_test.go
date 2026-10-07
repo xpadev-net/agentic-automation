@@ -155,8 +155,9 @@ func startFakeGitHub(t *testing.T, wantCode, wantSecret, login string) (oauthURL
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		q := r.URL.Query()
-		if q.Get("code") != wantCode || q.Get("client_secret") != wantSecret {
+		if err := r.ParseForm(); err != nil ||
+			r.PostForm.Get("code") != wantCode ||
+			r.PostForm.Get("client_secret") != wantSecret {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}

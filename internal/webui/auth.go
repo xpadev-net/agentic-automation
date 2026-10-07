@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"agentic-automation/internal/config"
@@ -16,6 +17,24 @@ import (
 )
 
 var errNoSession = errors.New("no webui session in context")
+
+// sanitizeLogParam strips control characters (CR/LF log forging) and bounds
+// the length of client-supplied values before they are written to logs.
+func sanitizeLogParam(s string) string {
+	const max = 200
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			out = append(out, ' ')
+			continue
+		}
+		out = append(out, r)
+	}
+	if len(out) > max {
+		out = out[:max]
+	}
+	return string(out)
+}
 
 type tokenExchangeResponse struct {
 	AccessToken      string `json:"access_token"`
@@ -58,8 +77,8 @@ func (h *Handler) HandleGitHubLogin(c *gin.Context) {
 func (h *Handler) HandleGitHubCallback(c *gin.Context) {
 	if errParam := c.Query("error"); errParam != "" {
 		h.logger.Warn("GitHub OAuth returned error",
-			config.String("error", errParam),
-			config.String("error_description", c.Query("error_description")))
+			config.String("error", sanitizeLogParam(errParam)),
+			config.String("error_description", sanitizeLogParam(c.Query("error_description"))))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "github authorization failed"})
 		return
 	}
@@ -154,12 +173,16 @@ func (h *Handler) exchangeCode(ctx context.Context, code string) (string, int, e
 		"code":          {code},
 		"redirect_uri":  {h.cfg.CallbackURL()},
 	}
+	// Send client credentials in the POST body, never in the request URI:
+	// transport errors would otherwise leak client_secret/code into logs
+	// (RFC 6749 §2.3.1).
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		h.cfg.OAuthBaseURL+"/login/oauth/access_token", nil)
+		h.cfg.OAuthBaseURL+"/login/oauth/access_token",
+		strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", 0, err
 	}
-	req.URL.RawQuery = form.Encode()
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := h.httpClient.Do(req)
