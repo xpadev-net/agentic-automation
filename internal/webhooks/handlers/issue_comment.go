@@ -515,6 +515,16 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					return
 				}
 
+				// Appends the AgentRun logs link when PUBLIC_URL is set (no-op
+				// otherwise). Shared by the success and failure comment bodies so
+				// failed merges keep their most diagnostic link too.
+				withLogsLink := func(body string) string {
+					if url := config.AgentRunURL(latestAgentRunIDForPRRepo(agentRunRepo, pr.ID)); url != "" {
+						body += "\n\n**Logs**: " + url
+					}
+					return body
+				}
+
 				mergeRes, mergeErr := am.AttemptAutoMerge(ctx, owner, repo, pr.Number)
 				if mergeErr != nil {
 					// 予期しないエラー（通常はAutoMergeResultで返却される）
@@ -534,7 +544,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 						_ = discordSvc.NotifyMergeFailure(ctx, prModel, nil, mergeErr.Error(), services.ClassifyMergeError(mergeErr))
 					}()
 					// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
-					_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
+					_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, withLogsLink("⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts."))
 					c.JSON(http.StatusOK, gin.H{
 						"status":      "merge_attempt_failed",
 						"delivery_id": deliveryID,
@@ -572,7 +582,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 						config.String("delivery_id", deliveryID),
 					)
 					// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
-					_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
+					_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, withLogsLink("⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts."))
 					c.JSON(http.StatusOK, gin.H{
 						"status":      "merge_attempt_failed",
 						"delivery_id": deliveryID,
@@ -602,11 +612,7 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					_ = discordSvc.NotifyMergeSuccess(ctx, prModel, nil, 0)
 				}()
 				// 任意通知（軽量）
-				mergeSuccessBody := "✅ Auto-merged after Codex approval."
-				if url := config.AgentRunURL(latestAgentRunIDForPRRepo(agentRunRepo, pr.ID)); url != "" {
-					mergeSuccessBody += "\n\n**Logs**: " + url
-				}
-				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, mergeSuccessBody)
+				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, withLogsLink("✅ Auto-merged after Codex approval."))
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "merged_or_initiated",
 					"delivery_id": deliveryID,
