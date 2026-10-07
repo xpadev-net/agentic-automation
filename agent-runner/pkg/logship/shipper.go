@@ -11,9 +11,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"agent-runner/pkg/redact"
 )
 
 const (
@@ -30,6 +34,13 @@ const (
 	// drainBudget bounds how long Close() spends flushing queued lines; past
 	// this the remaining queue is dropped so shutdown cannot hang.
 	drainBudget = 30 * time.Second
+	// truncMark marks lines cut for exceeding the per-line limit.
+	truncMark = "…[truncated]"
+	// maxShipLineBytes leaves room for the truncation marker so shipped
+	// lines stay under the server's 8192-byte per-line limit.
+	maxShipLineBytes = 8192 - len(truncMark)
+	// maxRetryAfterSecs bounds a Retry-After hint from the server.
+	maxRetryAfterSecs = 30
 	// seqAttemptStride partitions the sequence space per retry attempt so a
 	// retried Job (same AgentRun, bumped RETRY_COUNT) does not collide with
 	// earlier persisted seq values.
@@ -122,8 +133,8 @@ func (s *Shipper) Close() {
 
 // readLoop drains the pipe: tee to the real stderr and enqueue for shipping.
 // bufio.Reader is used instead of Scanner so arbitrarily long lines never
-// terminate the loop — an oversized line is still mirrored and shipped
-// (the server truncates past its own limit).
+// terminate the loop — an oversized line is mirrored raw but shipped
+// truncated to the server's per-line limit.
 func (s *Shipper) readLoop() {
 	defer s.wg.Done()
 	reader := bufio.NewReaderSize(s.pipeR, 64*1024)
@@ -133,6 +144,10 @@ func (s *Shipper) readLoop() {
 			line := strings.TrimSuffix(chunk, "\n")
 			s.seq++
 			fmt.Fprintln(s.orig, line)
+			// Redact credentials before queueing for shipment: agent stderr
+			// can echo secrets from the runner env and these lines are
+			// persisted + streamed to the WebUI.
+			line = truncateShipLine(redact.String(line))
 			select {
 			case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
 			default:
@@ -146,19 +161,46 @@ func (s *Shipper) readLoop() {
 	close(s.lines)
 }
 
+// truncateShipLine cuts a line at maxShipLineBytes on a rune boundary and
+// appends the truncation marker. Keeps every POST under the server's
+// per-line limit so a single huge line cannot get the whole batch a 400.
+func truncateShipLine(line string) string {
+	if len(line) <= maxShipLineBytes {
+		return line
+	}
+	cut := maxShipLineBytes
+	for cut > 0 && !utf8.ValidString(line[:cut]) {
+		cut--
+	}
+	return line[:cut] + truncMark
+}
+
 // sendLoop batches queued lines and POSTs them to the ingestion endpoint.
 func (s *Shipper) sendLoop() {
 	defer s.wg.Done()
 	batch := make([]logEntry, 0, batchMax)
 	timer := time.NewTimer(flushInterval)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	timerActive := false
 	defer timer.Stop()
 
-	flush := func() {
-		if len(batch) == 0 {
-			return
+	stopTimer := func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
 		}
-		s.send(batch)
-		batch = batch[:0]
+		timerActive = false
+	}
+	flush := func() {
+		if len(batch) > 0 {
+			s.send(batch)
+			batch = batch[:0]
+		}
+		stopTimer()
 	}
 
 	for {
@@ -188,20 +230,20 @@ func (s *Shipper) sendLoop() {
 				flush()
 				return
 			}
+			// The flush interval counts from the first line of a batch, not
+			// the latest — a steady trickle must not postpone the flush.
+			if !timerActive {
+				timer.Reset(flushInterval)
+				timerActive = true
+			}
 			batch = append(batch, e)
 			if len(batch) >= batchMax {
 				flush()
 			}
 		case <-timer.C:
+			timerActive = false
 			flush()
 		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(flushInterval)
 	}
 }
 
@@ -221,21 +263,33 @@ func (s *Shipper) send(batch []logEntry) {
 		req.Header.Set("Authorization", "Bearer "+s.token)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := s.http.Do(req)
-		if err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			resp.Body.Close()
-			return
-		}
 		if err != nil {
 			lastErr = err
-		} else {
-			lastErr = fmt.Errorf("log ingestion status %d", resp.StatusCode)
-			resp.Body.Close()
-			// 4xx means the request is invalid; retrying won't help.
-			if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-				break
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+			continue
+		}
+		code := resp.StatusCode
+		retryAfter := resp.Header.Get("Retry-After")
+		resp.Body.Close()
+		if code >= 200 && code < 300 {
+			return
+		}
+		lastErr = fmt.Errorf("log ingestion status %d", code)
+		// 4xx other than 429 means the request is invalid; retrying won't
+		// help. 429 (and 5xx) are transient — honor Retry-After when sane.
+		if code >= 400 && code < 500 && code != http.StatusTooManyRequests {
+			break
+		}
+		delay := time.Duration(attempt) * 500 * time.Millisecond
+		if code == http.StatusTooManyRequests {
+			if secs, e := strconv.Atoi(retryAfter); e == nil && secs > 0 {
+				if secs > maxRetryAfterSecs {
+					secs = maxRetryAfterSecs
+				}
+				delay = time.Duration(secs) * time.Second
 			}
 		}
-		time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		time.Sleep(delay)
 	}
 	fmt.Fprintf(s.orig, "[logship] dropped %d log lines: %v\n", len(batch), lastErr)
 	s.dropped += int64(len(batch))

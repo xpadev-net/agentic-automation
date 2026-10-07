@@ -45,6 +45,24 @@ func (r *AgentRunLogRepository) GetAfterSeq(agentRunID int, afterSeq int64, limi
 	return logs, nil
 }
 
+// ExistingSeqs returns the subset of seqs already stored for the run.
+func (r *AgentRunLogRepository) ExistingSeqs(agentRunID int, seqs []int64) (map[int64]bool, error) {
+	out := make(map[int64]bool, len(seqs))
+	if len(seqs) == 0 {
+		return out, nil
+	}
+	var found []int64
+	if err := r.db.Model(&models.AgentRunLog{}).
+		Where("agent_run_id = ? AND seq IN ?", agentRunID, seqs).
+		Pluck("seq", &found).Error; err != nil {
+		return nil, err
+	}
+	for _, s := range found {
+		out[s] = true
+	}
+	return out, nil
+}
+
 // CountByAgentRun returns how many log lines are stored for a run.
 func (r *AgentRunLogRepository) CountByAgentRun(agentRunID int) (int64, error) {
 	var count int64
