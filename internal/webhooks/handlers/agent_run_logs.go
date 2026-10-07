@@ -6,6 +6,8 @@ import (
 	"agentic-automation/internal/logredact"
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/repositories"
+	"database/sql"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -35,15 +37,21 @@ func truncateLineUTF8(line string, maxBytes int) string {
 }
 
 // ingestLocks serializes the check-existing/insert/publish sequence per
-// AgentRun. Without it two overlapping requests carrying the same seqs (e.g.
-// a resend racing the original) could both pass ExistingSeqs before either
-// inserts, and both would publish — OnConflict only dedups storage. The
-// Operator is a single instance, so a process-local lock suffices.
+// AgentRun within this process. Without it two overlapping requests
+// carrying the same seqs (e.g. a resend racing the original) could both
+// pass ExistingSeqs before either inserts, and both would publish —
+// OnConflict only dedups storage. Cross-replica serialization uses a MySQL
+// named lock inside the transaction below; this mutex still covers the
+// sqlite path used by tests.
 var ingestLocks sync.Map // map[int]*sync.Mutex
 
 func lockForRun(runID int) *sync.Mutex {
 	v, _ := ingestLocks.LoadOrStore(runID, &sync.Mutex{})
 	return v.(*sync.Mutex)
+}
+
+func ingestLockName(runID int) string {
+	return fmt.Sprintf("agentic:log-ingest:%d", runID)
 }
 
 func seqsOf(logs []*models.AgentRunLog) []int64 {
@@ -134,28 +142,58 @@ func HandleAgentRunLogs(c *gin.Context) {
 		})
 	}
 
-	// Hold the per-run lock for check + insert + publish-decision so
-	// publication is atomic with the insert: a concurrent same-seq request
-	// waits, then sees the rows the first request stored.
+	// Serialize check + insert + publish-decision per run so publication is
+	// atomic with the insert: a concurrent same-seq request waits, then sees
+	// the rows the first request stored. On MySQL a named lock inside the
+	// transaction serializes across operator replicas (GET_LOCK is
+	// session-scoped, so it must run on the transaction's pinned
+	// connection); the process-local mutex covers sqlite/test paths.
 	mu := lockForRun(run.ID)
 	mu.Lock()
 	defer mu.Unlock()
 
-	logRepo := repositories.NewAgentRunLogRepository(db)
-	// OnConflict DoNothing makes re-posted batches idempotent for storage,
-	// but live publication must be limited to rows actually inserted or a
-	// retried batch would fan the same lines out to SSE subscribers twice.
-	existing, err := logRepo.ExistingSeqs(run.ID, seqsOf(logs))
-	if err != nil {
-		logger.Error("Failed to check existing log seqs",
-			config.Int("agent_run_id", runID), config.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "INTERNAL_ERROR",
-			"message": "failed to check existing logs",
-		})
-		return
-	}
-	stored, err := logRepo.CreateBatch(logs)
+	var stored int
+	var toPublish []loghub.Event
+	lockName := ingestLockName(run.ID)
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if tx.Dialector.Name() == "mysql" {
+			var got sql.NullInt64
+			if err := tx.Raw("SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&got).Error; err != nil {
+				return fmt.Errorf("acquire ingest lock: %w", err)
+			} else if !got.Valid || got.Int64 != 1 {
+				return fmt.Errorf("acquire ingest lock: not granted")
+			}
+			defer tx.Exec("SELECT RELEASE_LOCK(?)", lockName)
+		}
+
+		logRepo := repositories.NewAgentRunLogRepository(tx)
+		// OnConflict DoNothing makes re-posted batches idempotent for
+		// storage, but live publication must be limited to rows actually
+		// inserted or a retried batch would fan the same lines out to SSE
+		// subscribers twice.
+		existing, err := logRepo.ExistingSeqs(run.ID, seqsOf(logs))
+		if err != nil {
+			return err
+		}
+		stored, err = logRepo.CreateBatch(logs)
+		if err != nil {
+			return err
+		}
+		seen := make(map[int64]bool, len(logs))
+		for _, l := range logs {
+			if existing[l.Seq] || seen[l.Seq] {
+				continue
+			}
+			seen[l.Seq] = true
+			toPublish = append(toPublish, loghub.Event{
+				AgentRunID: l.AgentRunID,
+				Seq:        l.Seq,
+				TS:         l.TS,
+				Line:       l.Line,
+			})
+		}
+		return nil
+	})
 	if err != nil {
 		logger.Error("Failed to store agent run logs",
 			config.Int("agent_run_id", runID), config.Error(err))
@@ -166,18 +204,11 @@ func HandleAgentRunLogs(c *gin.Context) {
 		return
 	}
 
-	seen := make(map[int64]bool, len(logs))
-	for _, l := range logs {
-		if existing[l.Seq] || seen[l.Seq] {
-			continue
-		}
-		seen[l.Seq] = true
-		loghub.Publish(loghub.Event{
-			AgentRunID: l.AgentRunID,
-			Seq:        l.Seq,
-			TS:         l.TS,
-			Line:       l.Line,
-		})
+	// Publish while still holding the per-run mutex so events reach
+	// subscribers in request order; the decision itself was made atomically
+	// under the DB lock.
+	for _, ev := range toPublish {
+		loghub.Publish(ev)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
