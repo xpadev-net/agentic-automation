@@ -251,13 +251,33 @@ func TestUpdatePlanExecutionStartedComment_CreatesWhenMissing(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.UpdatePlanExecutionStartedComment(ctx, "org", "repo", 42, "cursor-agent", 555)
+	err := svc.UpdatePlanExecutionStartedComment(ctx, "org", "repo", 42, "cursor-agent", 555, 777)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
 	require.Len(t, posts, 1)
 	require.Contains(t, posts[0].Body, "<!-- agent:execution-start:555 -->")
 	require.Contains(t, posts[0].Body, "🚀 Plan execution started...")
+}
+
+// The Logs link in plan-execution progress comments must point at the
+// execution run, not the plan-creation run used to locate the comment.
+func TestUpdatePlanExecutionStartedComment_LogsLinkUsesExecutionRunID(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "https://ops.example.com")
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	err := svc.UpdatePlanExecutionStartedComment(context.Background(), "org", "repo", 42, "cursor-agent", 555, 777)
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Contains(t, posts[0].Body, "**Logs**: https://ops.example.com/runs/777")
+	require.NotContains(t, posts[0].Body, "runs/555")
 }
 
 // -----------------------------------------------------------------------------

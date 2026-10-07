@@ -835,10 +835,16 @@ func HandleCheckSuiteWithDeps(c *gin.Context, deps CheckSuiteDeps) {
 // PullRequest, or 0 when none can be resolved. Best-effort: errors only log a
 // warning since the merge notification itself is more important than the link.
 func latestAgentRunIDForPR(deps CheckSuiteDeps, prID int) int {
-	if deps.AgentRunRepository == nil || prID <= 0 {
+	return latestAgentRunIDForPRRepo(deps.AgentRunRepository, prID)
+}
+
+// latestAgentRunIDForPRRepo resolves the newest AgentRun linked to a pull
+// request record; returns 0 when unresolvable.
+func latestAgentRunIDForPRRepo(repo repositories.AgentRunRepository, prID int) int {
+	if repo == nil || prID <= 0 {
 		return 0
 	}
-	runs, err := deps.AgentRunRepository.GetByPRID(prID)
+	runs, err := repo.GetByPRID(prID)
 	if err != nil {
 		config.GetLogger().Warn("failed to resolve agent runs for merge notification",
 			config.Error(err),

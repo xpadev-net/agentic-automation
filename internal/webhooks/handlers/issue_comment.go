@@ -602,7 +602,11 @@ func HandleIssueCommentWithDeps(c *gin.Context, deps IssueCommentDeps) {
 					_ = discordSvc.NotifyMergeSuccess(ctx, prModel, nil, 0)
 				}()
 				// 任意通知（軽量）
-				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, "✅ Auto-merged after Codex approval.")
+				mergeSuccessBody := "✅ Auto-merged after Codex approval."
+				if url := config.AgentRunURL(latestAgentRunIDForPRRepo(agentRunRepo, pr.ID)); url != "" {
+					mergeSuccessBody += "\n\n**Logs**: " + url
+				}
+				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, mergeSuccessBody)
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "merged_or_initiated",
 					"delivery_id": deliveryID,

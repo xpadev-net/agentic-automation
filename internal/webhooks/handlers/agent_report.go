@@ -696,6 +696,7 @@ func HandleAgentReport(c *gin.Context) {
 							req.AgentType,
 							*planRunID,
 							req.Status == "succeeded",
+							agentRunID,
 						); err != nil {
 							logger.Warn("Failed to update plan execution completion comment",
 								config.Error(err),
@@ -1652,7 +1653,7 @@ func handlePlanCreated(
 		)
 	}
 
-	notifyPlanExecutionStarted := func(agentType string) {
+	notifyPlanExecutionStarted := func(agentType string, executionRunID int) {
 		if planExecutionStartNotified {
 			return
 		}
@@ -1660,7 +1661,7 @@ func handlePlanCreated(
 		if notifier == nil {
 			return
 		}
-		if err := notifier.UpdatePlanExecutionStartedComment(ctx, owner, repoName, issue.Number, agentType, agentRunID); err != nil {
+		if err := notifier.UpdatePlanExecutionStartedComment(ctx, owner, repoName, issue.Number, agentType, agentRunID, executionRunID); err != nil {
 			logger.Warn("Failed to update plan execution start comment",
 				config.Error(err),
 				config.String("owner", owner),
@@ -1952,7 +1953,7 @@ func handlePlanCreated(
 		)
 
 		notifyPlanCreationCompleted()
-		notifyPlanExecutionStarted(executionRun.AgentType)
+		notifyPlanExecutionStarted(executionRun.AgentType, executionRun.ID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"message":      "Plan created and execution job started",
@@ -2459,7 +2460,7 @@ func handlePlanCreated(
 		config.Int("execution_agent_run_id", executionRun.ID),
 		config.String("plan_preview", previewString(planContentForStorage, planPreviewLogLimit)),
 	)
-	notifyPlanExecutionStarted(executionRun.AgentType)
+	notifyPlanExecutionStarted(executionRun.AgentType, executionRun.ID)
 
 	// Note: Plan creation job deletion is handled by defer function defined earlier
 	// This ensures cleanup happens even if early return occurs due to new reviews

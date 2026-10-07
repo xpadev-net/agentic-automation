@@ -87,7 +87,7 @@ func formatPlanCreationProgressMessage(stage string, agentType string, agentRunI
 **Run ID**: %d`, statusLine, agentType, agentRunID), agentRunID)
 }
 
-func formatPlanExecutionProgressMessage(stage string, agentType string, planAgentRunID int) string {
+func formatPlanExecutionProgressMessage(stage string, agentType string, planAgentRunID int, logRunID int) string {
 	statusLine := "🚀 Plan execution in progress"
 	switch stage {
 	case planExecutionStageStarted:
@@ -101,7 +101,7 @@ func formatPlanExecutionProgressMessage(stage string, agentType string, planAgen
 	return appendRunLogsLink(fmt.Sprintf(`%s
 
 **Agent Type**: %s
-**Run ID**: %d`, statusLine, agentType, planAgentRunID), planAgentRunID)
+**Run ID**: %d`, statusLine, agentType, planAgentRunID), logRunID)
 }
 
 // getErrorMessageForNotification returns the error message for notification,
@@ -494,15 +494,17 @@ func (s *GitHubNotificationService) UpdatePlanCreationCompletedComment(
 }
 
 // UpdatePlanExecutionStartedComment updates the execution start comment when plan
-// execution begins.
+// execution begins. planAgentRunID locates the tracked comment; executionRunID is
+// the run the Logs link points at.
 func (s *GitHubNotificationService) UpdatePlanExecutionStartedComment(
 	ctx context.Context,
 	owner, repo string,
 	issueNumber int,
 	agentType string,
 	planAgentRunID int,
+	executionRunID int,
 ) error {
-	message := formatPlanExecutionProgressMessage(planExecutionStageStarted, agentType, planAgentRunID)
+	message := formatPlanExecutionProgressMessage(planExecutionStageStarted, agentType, planAgentRunID, executionRunID)
 	return s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, planAgentRunID, message)
 }
 
@@ -515,12 +517,13 @@ func (s *GitHubNotificationService) UpdatePlanExecutionCompletedComment(
 	agentType string,
 	planAgentRunID int,
 	succeeded bool,
+	executionRunID int,
 ) error {
 	stage := planExecutionStageFailed
 	if succeeded {
 		stage = planExecutionStageSucceeded
 	}
-	message := formatPlanExecutionProgressMessage(stage, agentType, planAgentRunID)
+	message := formatPlanExecutionProgressMessage(stage, agentType, planAgentRunID, executionRunID)
 	return s.upsertExecutionProgressComment(ctx, owner, repo, issueNumber, planAgentRunID, message)
 }
 
