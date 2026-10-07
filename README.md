@@ -76,6 +76,8 @@ GitHub App は GitHub API の認証と webhook の送信元として使用しま
 
 Operator には少なくとも `DATABASE_URL`、`GITHUB_APP_ID`、`GITHUB_PRIVATE_KEY`、`GITHUB_WEBHOOK_SECRET`、`OPERATOR_API_TOKEN` が必要です。`PORT`（既定値 `3000`）、`ENV`、`LOG_LEVEL` などの設定はコードとマニフェストを参照してください。
 
+`PUBLIC_URL`（任意）を Operator の外部公開 URL（例: `https://agents.example.com`）に設定すると、実行開始・進捗・失敗などの GitHub コメントに `${PUBLIC_URL}/runs/<AgentRun ID>` 形式の WebUI ログリンクが付与されます。未設定時はリンクを付けません。
+
 秘密情報はローカルの環境変数または Kubernetes Secret から供給し、実値を Git に保存しないでください。本番では Vault と ExternalSecret を使い、Vault の値を Kubernetes Secret に同期して Operator と Job から参照する構成を想定します。ExternalSecret、SecretStore、Argo CD Application の定義はこのリポジトリにはありません。運用側の IaC で namespace、RBAC、Secret、Ingress とともに管理してください。
 
 ## ローカル開発・テスト
