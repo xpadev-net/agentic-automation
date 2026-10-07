@@ -53,3 +53,17 @@ func TestStringMasksEscapedNewlinePEM(t *testing.T) {
 		}
 	}
 }
+
+func TestStringMasksBearerAndModernKeys(t *testing.T) {
+	for _, in := range []string{
+		"Authorization: Bearer abc123tokenXYZ",
+		"authorization=bearer+T0k3n.V4lue-xyz",
+		"sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345",
+		"sk-proj-AbCdEfGhIjKlMnOpQrStUvWx",
+		"sk-oai-0123456789abcdefghij",
+	} {
+		if got := String(in); got == in {
+			t.Fatalf("credential left unmasked: %q -> %q", in, got)
+		}
+	}
+}
