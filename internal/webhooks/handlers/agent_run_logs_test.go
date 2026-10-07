@@ -334,3 +334,59 @@ func TestIngestLogsMasksPEMAcrossBatches(t *testing.T) {
 		}
 	}
 }
+
+// A shipper-masked block continues across POST boundaries: the next batch
+// carries "[REDACTED]" body lines and the "[REDACTED PRIVATE KEY END]"
+// sentinel rather than raw markers. The handler must recognize the
+// sentinel to close masking, or every later normal line is hidden.
+func TestIngestLogsRecognizesShipperSentinels(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	// Batch 1: raw BEGIN leaks in unmasked — server masks it.
+	w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 2, "line": "MIIEpAIBAAKCAQEA7body"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch1: expected 200, got %d", w.Code)
+	}
+	// Batch 2: shipper-style sentinels closing the block, then normal logs.
+	w = postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 3, "line": "[REDACTED]"},
+			{"seq": 4, "line": "[REDACTED PRIVATE KEY END]"},
+			{"seq": 5, "line": "normal after pem"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch2: expected 200, got %d", w.Code)
+	}
+
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 5 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	want := []string{
+		"[REDACTED PRIVATE KEY BEGIN]",
+		"[REDACTED]",
+		"[REDACTED]",
+		"[REDACTED PRIVATE KEY END]",
+		"normal after pem",
+	}
+	for i, l := range logs {
+		if l.Line != want[i] {
+			t.Fatalf("seq %d: want %q got %q", i+1, want[i], l.Line)
+		}
+	}
+}
