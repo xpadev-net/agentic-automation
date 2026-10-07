@@ -28,9 +28,22 @@ type Config struct {
 	// SessionTTL is how long a login session stays valid.
 	SessionTTL time.Duration
 
+	// LogRetentionDays is how long persisted agent_run_logs rows are kept;
+	// 0 disables retention cleanup.
+	LogRetentionDays int
+
 	// OAuthBaseURL and APIBaseURL are overrideable for tests.
 	OAuthBaseURL string
 	APIBaseURL   string
+}
+
+// MinRepoPermission returns the minimum GitHub repo permission required to
+// view the UI: "read" (anyone who can see the repo) or "write".
+func (c *Config) MinRepoPermission() string {
+	if strings.EqualFold(config.GetEnv("UI_MIN_REPO_PERMISSION", "read"), "write") {
+		return "write"
+	}
+	return "read"
 }
 
 // Enabled reports whether the WebUI auth flow can run. When false the
@@ -65,18 +78,21 @@ func (c *Config) SecureCookies() bool {
 //	PUBLIC_URL: externally reachable base URL (shared with log links)
 //	UI_TOKEN_ENC_KEY: optional dedicated token encryption key
 //	UI_SESSION_TTL_HOURS: session lifetime in hours (default 168 = 7 days)
+//	UI_MIN_REPO_PERMISSION: minimum repo permission for viewing (read|write)
+//	AGENT_RUN_LOG_RETENTION_DAYS: persisted log retention (default 30, 0 = keep)
 func LoadConfig() *Config {
 	ttl := time.Duration(config.GetEnvInt("UI_SESSION_TTL_HOURS", 168)) * time.Hour
 	if ttl <= 0 {
 		ttl = 168 * time.Hour
 	}
 	return &Config{
-		ClientID:     config.GetEnv("GITHUB_OAUTH_CLIENT_ID", ""),
-		ClientSecret: config.GetEnv("GITHUB_OAUTH_CLIENT_SECRET", ""),
-		PublicURL:    strings.TrimRight(config.GetEnv("PUBLIC_URL", ""), "/"),
-		TokenEncKey:  config.GetEnv("UI_TOKEN_ENC_KEY", ""),
-		SessionTTL:   ttl,
-		OAuthBaseURL: config.GetEnv("GITHUB_OAUTH_BASE_URL", "https://github.com"),
-		APIBaseURL:   config.GetEnv("GITHUB_API_BASE_URL", "https://api.github.com"),
+		ClientID:         config.GetEnv("GITHUB_OAUTH_CLIENT_ID", ""),
+		ClientSecret:     config.GetEnv("GITHUB_OAUTH_CLIENT_SECRET", ""),
+		PublicURL:        strings.TrimRight(config.GetEnv("PUBLIC_URL", ""), "/"),
+		TokenEncKey:      config.GetEnv("UI_TOKEN_ENC_KEY", ""),
+		SessionTTL:       ttl,
+		LogRetentionDays: config.GetEnvInt("AGENT_RUN_LOG_RETENTION_DAYS", 30),
+		OAuthBaseURL:     config.GetEnv("GITHUB_OAUTH_BASE_URL", "https://github.com"),
+		APIBaseURL:       config.GetEnv("GITHUB_API_BASE_URL", "https://api.github.com"),
 	}
 }

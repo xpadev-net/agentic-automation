@@ -78,6 +78,8 @@ Operator には少なくとも `DATABASE_URL`、`GITHUB_APP_ID`、`GITHUB_PRIVAT
 
 WebUI の GitHub OAuth ログインを有効化するには `PUBLIC_URL`（Operator の外部到達 URL）に加えて `GITHUB_OAUTH_CLIENT_ID` と `GITHUB_OAUTH_CLIENT_SECRET` を設定します（既存 GitHub App の Client ID/Secret を流用可）。いずれかが未設定の場合、UI 関連ルート（`/auth/github/*`、`/api/ui/*`）は登録されず従来どおりの動作になります。セッションは `ui_sessions` テーブルに保存され、`UI_SESSION_TTL_HOURS`（既定値 `168` 時間）で失効します。保存される OAuth トークンは AES-256-GCM で暗号化され、専用鍵を分けたい場合は `UI_TOKEN_ENC_KEY` を設定してください（未設定時は Client Secret から鍵を導出します）。
 
+`/api/ui` 配下の閲覧 API はログイン済みユーザーの GitHub トークンで対象リポジトリの参照権限を確認します。既定は repo を「見える人」（`read` 相当）で、`UI_MIN_REPO_PERMISSION=write` にすると write 権限保持者に限定できます。runner が push する実行ログは `agent_run_logs` に保存され、`AGENT_RUN_LOG_RETENTION_DAYS`（既定値 `30` 日、`0` で削除無効）を超えた行は定期削除されます。push ログが無い実行については Kubernetes Pod ログのスナップショットにフォールバックします。
+
 秘密情報はローカルの環境変数または Kubernetes Secret から供給し、実値を Git に保存しないでください。本番では Vault と ExternalSecret を使い、Vault の値を Kubernetes Secret に同期して Operator と Job から参照する構成を想定します。ExternalSecret、SecretStore、Argo CD Application の定義はこのリポジトリにはありません。運用側の IaC で namespace、RBAC、Secret、Ingress とともに管理してください。
 
 ## ローカル開発・テスト
