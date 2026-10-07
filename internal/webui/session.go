@@ -2,7 +2,9 @@ package webui
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"agentic-automation/internal/models"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
@@ -30,6 +33,13 @@ func randomToken(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// sessionKey derives the stored session ID from a bearer token. Only the
+// SHA-256 digest is persisted, so a database leak cannot replay the cookie.
+func sessionKey(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
 }
 
 func (h *Handler) setCookie(c *gin.Context, name, value string, maxAge int) {
@@ -65,10 +75,17 @@ func (h *Handler) SessionMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
 			return
 		}
-		session, err := h.sessions.GetByID(token)
+		session, err := h.sessions.GetByID(sessionKey(token))
 		if err != nil {
-			h.clearCookie(c, sessionCookieName)
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				h.clearCookie(c, sessionCookieName)
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+				return
+			}
+			// Transient DB failure: keep the cookie so the user is not
+			// forcefully logged out; surface as unavailable instead.
+			h.logger.Error("ui_session lookup failed", config.Error(err))
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "session lookup unavailable"})
 			return
 		}
 		if time.Now().After(session.ExpiresAt) {

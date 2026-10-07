@@ -207,10 +207,13 @@ func TestCallbackCreatesSessionAndMeWorks(t *testing.T) {
 	if len(sessionID) != 64 {
 		t.Fatalf("bad session id %q", sessionID)
 	}
+	if sessionID == sessionKey(sessionID) {
+		t.Fatalf("cookie should hold the raw token, not its digest")
+	}
 
-	// Session row exists with encrypted token.
+	// Session row exists keyed by the hashed cookie value, with encrypted token.
 	repo := repositories.NewUISessionRepository(db)
-	sess, err := repo.GetByID(sessionID)
+	sess, err := repo.GetByID(sessionKey(sessionID))
 	if err != nil {
 		t.Fatalf("session not stored: %v", err)
 	}
@@ -262,7 +265,7 @@ func TestExpiredSessionRejected(t *testing.T) {
 
 	repo := repositories.NewUISessionRepository(db)
 	if err := repo.Create(&models.UISession{
-		ID:          "deadbeef",
+		ID:          sessionKey("deadbeef"),
 		GitHubLogin: "ghost",
 		AccessToken: "x",
 		ExpiresAt:   time.Now().Add(-time.Hour),
@@ -282,7 +285,7 @@ func TestLogoutDeletesSession(t *testing.T) {
 
 	repo := repositories.NewUISessionRepository(db)
 	if err := repo.Create(&models.UISession{
-		ID:          "s1",
+		ID:          sessionKey("s1"),
 		GitHubLogin: "u",
 		AccessToken: "x",
 		ExpiresAt:   time.Now().Add(time.Hour),
@@ -294,7 +297,7 @@ func TestLogoutDeletesSession(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("logout failed: %d", w.Code)
 	}
-	if _, err := repo.GetByID("s1"); err == nil {
+	if _, err := repo.GetByID(sessionKey("s1")); err == nil {
 		t.Fatalf("session not deleted")
 	}
 }

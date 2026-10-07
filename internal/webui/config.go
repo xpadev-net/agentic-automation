@@ -28,6 +28,12 @@ type Config struct {
 	// SessionTTL is how long a login session stays valid.
 	SessionTTL time.Duration
 
+	// OAuthScope optionally requests scopes on the authorize redirect. Leave
+	// empty when using a GitHub App's client credentials (its user tokens
+	// ignore scope); set e.g. "repo" when using a dedicated OAuth App so the
+	// token can read private repositories.
+	OAuthScope string
+
 	// OAuthBaseURL and APIBaseURL are overrideable for tests.
 	OAuthBaseURL string
 	APIBaseURL   string
@@ -65,6 +71,8 @@ func (c *Config) SecureCookies() bool {
 //	PUBLIC_URL: externally reachable base URL (shared with log links)
 //	UI_TOKEN_ENC_KEY: optional dedicated token encryption key
 //	UI_SESSION_TTL_HOURS: session lifetime in hours (default 168 = 7 days)
+//	GITHUB_OAUTH_SCOPE: optional OAuth scope (e.g. "repo" for a dedicated
+//	    OAuth App; leave empty for GitHub App credentials)
 func LoadConfig() *Config {
 	ttl := time.Duration(config.GetEnvInt("UI_SESSION_TTL_HOURS", 168)) * time.Hour
 	if ttl <= 0 {
@@ -76,6 +84,7 @@ func LoadConfig() *Config {
 		PublicURL:    strings.TrimRight(config.GetEnv("PUBLIC_URL", ""), "/"),
 		TokenEncKey:  config.GetEnv("UI_TOKEN_ENC_KEY", ""),
 		SessionTTL:   ttl,
+		OAuthScope:   config.GetEnv("GITHUB_OAUTH_SCOPE", ""),
 		OAuthBaseURL: config.GetEnv("GITHUB_OAUTH_BASE_URL", "https://github.com"),
 		APIBaseURL:   config.GetEnv("GITHUB_API_BASE_URL", "https://api.github.com"),
 	}

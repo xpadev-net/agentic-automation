@@ -2,6 +2,7 @@ package webui
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"agentic-automation/internal/config"
@@ -54,9 +55,11 @@ func (h *Handler) HandleMe(c *gin.Context) {
 	})
 }
 
-// startSessionJanitor periodically deletes expired sessions.
+// startSessionJanitor periodically deletes expired sessions. The returned
+// stop hook is idempotent.
 func (h *Handler) startSessionJanitor() func() {
 	stop := make(chan struct{})
+	var once sync.Once
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
@@ -75,5 +78,5 @@ func (h *Handler) startSessionJanitor() func() {
 			}
 		}
 	}()
-	return func() { close(stop) }
+	return func() { once.Do(func() { close(stop) }) }
 }
