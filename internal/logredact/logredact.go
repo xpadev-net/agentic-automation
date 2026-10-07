@@ -31,8 +31,9 @@ var patterns = []*regexp.Regexp{
 	// runner jobs — OPERATOR_API_TOKEN, S3_SECRET_ACCESS_KEY,
 	// GITHUB_PRIVATE_KEY, ANTHROPIC_API_KEY, NPM_TOKEN, ...
 	// The value requires >=4 chars so prose like "token: is required"
-	// does not match.
-	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)[A-Za-z0-9_]*["']?[=:\s]["'\s]*[^"'\s]{4,}`),
+	// does not match. Whitespace is allowed around the =/: separator
+	// (e.g. "CURSOR_API_KEY = abc123").
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)[A-Za-z0-9_]*["']?\s*[=: ]["'\s]*[^"'\s]{4,}`),
 	// Multiline PEM values (e.g. GITHUB_PRIVATE_KEY) spill across lines:
 	// mask the BEGIN/END markers and the standalone base64 body lines
 	// (64-char columns) between them. The complete-block pattern above

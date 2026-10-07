@@ -86,38 +86,30 @@ func ingestLockName(runID int) string {
 }
 
 // Stored sentinel lines marking the edges of a masked private-key block,
-// distinct from the body mask. pemInProgress scans back to the nearest
+// distinct from the body mask. pemInProgress finds the nearest preceding
 // sentinel so masking state survives across ingestion batches; the
 // shipper emits the same sentinels for blocks it masked itself.
 const (
 	pemBeginSentinel = "[REDACTED PRIVATE KEY BEGIN]"
 	pemEndSentinel   = "[REDACTED PRIVATE KEY END]"
 	redactedLine     = "[REDACTED]"
-	pemLookbackLimit = 100
 )
 
 // pemInProgress reports whether the stored log for the run ends inside an
-// unterminated private-key block. Whole-line "[REDACTED]" values only
-// come from PEM masking, so scanning back past them to the nearest BEGIN
-// or END sentinel reconstructs the state; any other line ends the scan.
+// unterminated private-key block: the latest stored BEGIN/END sentinel
+// before this batch decides. Querying the sentinel directly (not a
+// bounded lookback) keeps a long masked body from exhausting the scan.
 func pemInProgress(db *gorm.DB, runID int, beforeSeq int64) bool {
-	var lines []string
+	var boundary []string
 	if err := db.Model(&models.AgentRunLog{}).
-		Where("agent_run_id = ? AND seq < ?", runID, beforeSeq).
+		Where("agent_run_id = ? AND seq < ? AND (line = ? OR line = ?)",
+			runID, beforeSeq, pemBeginSentinel, pemEndSentinel).
 		Order("seq DESC").
-		Limit(pemLookbackLimit).
-		Pluck("line", &lines).Error; err != nil {
+		Limit(1).
+		Pluck("line", &boundary).Error; err != nil {
 		return false
 	}
-	for _, l := range lines {
-		if strings.Contains(l, "PRIVATE KEY BEGIN") {
-			return true
-		}
-		if strings.Contains(l, "PRIVATE KEY END") || l != redactedLine {
-			return false
-		}
-	}
-	return false
+	return len(boundary) > 0 && boundary[0] == pemBeginSentinel
 }
 
 // lockAndTxDB acquires the MySQL named lock on a dedicated connection and
@@ -288,17 +280,25 @@ func HandleAgentRunLogs(c *gin.Context) {
 			// Redact credentials before anything is persisted or streamed:
 			// agent stderr can leak tokens injected into the runner env.
 			line := logredact.Line(entry.Line)
-			if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
+			switch {
+			case entry.Line == pemBeginSentinel:
+				// Shipper already masked this block — just track state.
 				inPEM = true
-				line = pemBeginSentinel
-			} else if inPEM {
-				line = redactedLine
-			}
-			if strings.Contains(entry.Line, "-----END ") {
-				if inPEM {
-					line = pemEndSentinel
-				}
+			case entry.Line == pemEndSentinel:
 				inPEM = false
+			default:
+				if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
+					inPEM = true
+					line = pemBeginSentinel
+				} else if inPEM {
+					line = redactedLine
+				}
+				if strings.Contains(entry.Line, "-----END ") {
+					if inPEM {
+						line = pemEndSentinel
+					}
+					inPEM = false
+				}
 			}
 			if len(line) > maxLogLineBytes {
 				line = truncateLineUTF8(line, maxLogLineBytes)
