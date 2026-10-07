@@ -262,8 +262,11 @@ func (s *Shipper) sendLoop() {
 	}
 	flush := func(ctx context.Context) {
 		if len(batch) > 0 {
-			s.send(batch, ctx)
-			batch = batch[:0]
+			// send returns any remainder it could not deliver because ctx
+			// was cancelled (Close() aborting an in-flight send): keep it
+			// so the drain path below retries it under a fresh budgeted
+			// context instead of losing up to batchMax lines at shutdown.
+			batch = s.send(batch, ctx)
 		}
 		stopTimer()
 	}
@@ -283,15 +286,15 @@ func (s *Shipper) sendLoop() {
 				}
 				batch = append(batch, e)
 				if len(batch) >= batchMax {
-					s.send(batch, drainCtx)
-					batch = batch[:0]
+					batch = s.send(batch, drainCtx)
 				}
 			}
 			if time.Now().Before(deadline) && len(batch) > 0 {
-				s.send(batch, drainCtx)
-			} else {
-				s.dropped += int64(len(batch))
+				batch = s.send(batch, drainCtx)
 			}
+			// Whatever remains undelivered here (real failure or an
+			// exhausted drain budget) was never counted by send().
+			s.dropped += int64(len(batch))
 			return
 		case e, ok := <-s.lines:
 			if !ok {
@@ -306,6 +309,8 @@ func (s *Shipper) sendLoop() {
 					defer cancel()
 				}
 				flush(ctx)
+				// Remainder kept by a cancelled drain send is truly dropped.
+				s.dropped += int64(len(batch))
 				return
 			}
 			// The flush interval counts from the first line of a batch, not
@@ -357,20 +362,27 @@ func encodeBatch(entries []logEntry) ([]byte, int) {
 // send POSTs a batch, splitting it into encoded-size-bounded chunks. ctx
 // bounds the whole call: attempts and sleeps past it are skipped and an
 // in-flight request aborts, so Close() cannot block on a stalled endpoint.
-func (s *Shipper) send(batch []logEntry, ctx context.Context) {
+// On ctx cancellation it returns the undelivered remainder for the caller
+// to retry under a drain context; on a real send failure it counts the
+// undelivered entries as dropped and returns nil.
+func (s *Shipper) send(batch []logEntry, ctx context.Context) []logEntry {
 	for len(batch) > 0 {
 		body, n := encodeBatch(batch)
 		if n == 0 {
 			// A single 8 KiB entry can never reach the cap; treat as corrupt.
 			s.dropped += int64(len(batch))
-			return
+			return nil
 		}
 		if !s.postChunk(body, n, ctx) {
+			if ctx.Err() != nil {
+				return batch
+			}
 			s.dropped += int64(len(batch))
-			return
+			return nil
 		}
 		batch = batch[n:]
 	}
+	return nil
 }
 
 // postChunk sends one encoded request body with small retry. Failures drop

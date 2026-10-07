@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -307,5 +309,56 @@ func TestEncodeBatchSplitsByEncodedSize(t *testing.T) {
 	}
 	if bodies < 2 {
 		t.Fatalf("expected the batch to split, got %d body", bodies)
+	}
+}
+
+// A batch aborted mid-send by Close()'s shutdownCtx cancellation must be
+// retried under the drain budget, not silently dropped: the first request
+// blocks server-side, Close cancels it client-side, and the drain-path
+// retry lands as a fresh request.
+func TestShipperCloseRetriesInFlightBatch(t *testing.T) {
+	const n = 200
+	var mu sync.Mutex
+	var got []string
+	var firstRequest int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&firstRequest, 1) == 1 {
+			close(started)
+			<-release // in-flight until the test finishes
+			return
+		}
+		var req struct {
+			Entries []logEntry `json:"entries"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		for _, e := range req.Entries {
+			got = append(got, e.Line)
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(os.Stderr, "inflight-%d\n", i)
+	}
+	<-started // wait for the first (blocking) batch to go in-flight
+	s.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != n {
+		t.Fatalf("expected %d lines delivered via drain retry, got %d", n, len(got))
 	}
 }
