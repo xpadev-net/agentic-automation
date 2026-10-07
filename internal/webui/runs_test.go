@@ -96,13 +96,13 @@ func seedSession(t *testing.T, db *gorm.DB, cfg *Config, login string) string {
 		t.Fatalf("encrypt: %v", err)
 	}
 	sess := &models.UISession{
-		ID: "sess-" + login, GitHubLogin: login, AccessToken: enc,
+		ID: sessionKey("sess-" + login), GitHubLogin: login, AccessToken: enc,
 		ExpiresAt: time.Now().Add(time.Hour), LastSeenAt: time.Now(),
 	}
 	if err := repositories.NewUISessionRepository(db).Create(sess); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
-	return sessionCookieName + "=" + sess.ID
+	return sessionCookieName + "=" + "sess-" + login
 }
 
 func seedRun(t *testing.T, db *gorm.DB, repo, state string) int {

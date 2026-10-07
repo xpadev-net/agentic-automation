@@ -32,6 +32,12 @@ type Config struct {
 	// 0 disables retention cleanup.
 	LogRetentionDays int
 
+	// OAuthScope optionally requests scopes on the authorize redirect. Leave
+	// empty when using a GitHub App's client credentials (its user tokens
+	// ignore scope); set e.g. "repo" when using a dedicated OAuth App so the
+	// token can read private repositories.
+	OAuthScope string
+
 	// OAuthBaseURL and APIBaseURL are overrideable for tests.
 	OAuthBaseURL string
 	APIBaseURL   string
@@ -80,6 +86,8 @@ func (c *Config) SecureCookies() bool {
 //	UI_SESSION_TTL_HOURS: session lifetime in hours (default 168 = 7 days)
 //	UI_MIN_REPO_PERMISSION: minimum repo permission for viewing (read|write)
 //	AGENT_RUN_LOG_RETENTION_DAYS: persisted log retention (default 30, 0 = keep)
+//	GITHUB_OAUTH_SCOPE: optional OAuth scope (e.g. "repo" for a dedicated
+//	    OAuth App; leave empty for GitHub App credentials)
 func LoadConfig() *Config {
 	ttl := time.Duration(config.GetEnvInt("UI_SESSION_TTL_HOURS", 168)) * time.Hour
 	if ttl <= 0 {
@@ -92,6 +100,7 @@ func LoadConfig() *Config {
 		TokenEncKey:      config.GetEnv("UI_TOKEN_ENC_KEY", ""),
 		SessionTTL:       ttl,
 		LogRetentionDays: config.GetEnvInt("AGENT_RUN_LOG_RETENTION_DAYS", 30),
+		OAuthScope:       config.GetEnv("GITHUB_OAUTH_SCOPE", ""),
 		OAuthBaseURL:     config.GetEnv("GITHUB_OAUTH_BASE_URL", "https://github.com"),
 		APIBaseURL:       config.GetEnv("GITHUB_API_BASE_URL", "https://api.github.com"),
 	}

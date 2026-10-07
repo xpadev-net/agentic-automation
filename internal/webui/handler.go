@@ -2,6 +2,7 @@ package webui
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"agentic-automation/internal/config"
@@ -65,9 +66,10 @@ func (h *Handler) HandleMe(c *gin.Context) {
 }
 
 // startJanitor periodically deletes expired sessions and, when retention is
-// enabled, old persisted log lines.
+// enabled, old persisted log lines. The returned stop hook is idempotent.
 func (h *Handler) startJanitor() func() {
 	stop := make(chan struct{})
+	var once sync.Once
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
@@ -99,5 +101,5 @@ func (h *Handler) startJanitor() func() {
 			}
 		}
 	}()
-	return func() { close(stop) }
+	return func() { once.Do(func() { close(stop) }) }
 }
