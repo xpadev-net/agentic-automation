@@ -7,8 +7,10 @@ package logship
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -197,7 +199,7 @@ func (s *Shipper) sendLoop() {
 	}
 	flush := func() {
 		if len(batch) > 0 {
-			s.send(batch)
+			s.send(batch, time.Time{})
 			batch = batch[:0]
 		}
 		stopTimer()
@@ -216,11 +218,12 @@ func (s *Shipper) sendLoop() {
 				}
 				batch = append(batch, e)
 				if len(batch) >= batchMax {
-					flush()
+					s.send(batch, deadline)
+					batch = batch[:0]
 				}
 			}
-			if time.Now().Before(deadline) {
-				flush()
+			if time.Now().Before(deadline) && len(batch) > 0 {
+				s.send(batch, deadline)
 			} else {
 				s.dropped += int64(len(batch))
 			}
@@ -248,15 +251,28 @@ func (s *Shipper) sendLoop() {
 }
 
 // send POSTs one batch with small retry; failures only drop the batch.
-func (s *Shipper) send(batch []logEntry) {
+// deadline (zero = none) bounds the whole call: attempts and sleeps past it
+// are skipped so Close() cannot block on a stalled endpoint. The context is
+// also cancelled at the deadline so an in-flight request aborts.
+func (s *Shipper) send(batch []logEntry, deadline time.Time) {
 	body, err := json.Marshal(logsRequest{Entries: batch})
 	if err != nil {
 		s.dropped += int64(len(batch))
 		return
 	}
+	ctx := context.Background()
+	cancel := func() {}
+	if !deadline.IsZero() {
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+	}
+	defer cancel()
+
 	var lastErr error
 	for attempt := 1; attempt <= sendAttempts; attempt++ {
-		req, err := http.NewRequest(http.MethodPost, s.endpoint, bytes.NewReader(body))
+		if ctx.Err() != nil {
+			break
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 		if err != nil {
 			break
 		}
@@ -265,31 +281,40 @@ func (s *Shipper) send(batch []logEntry) {
 		resp, err := s.http.Do(req)
 		if err != nil {
 			lastErr = err
-			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		} else {
+			code := resp.StatusCode
+			retryAfter := resp.Header.Get("Retry-After")
+			// Drain before close so the keep-alive connection is reusable.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			if code >= 200 && code < 300 {
+				return
+			}
+			lastErr = fmt.Errorf("log ingestion status %d", code)
+			// 4xx other than 429 means the request is invalid; retrying
+			// won't help. 429 (and 5xx) are transient — honor Retry-After.
+			if code >= 400 && code < 500 && code != http.StatusTooManyRequests {
+				break
+			}
+			delay := time.Duration(attempt) * 500 * time.Millisecond
+			if code == http.StatusTooManyRequests {
+				if secs, e := strconv.Atoi(retryAfter); e == nil && secs > 0 {
+					if secs > maxRetryAfterSecs {
+						secs = maxRetryAfterSecs
+					}
+					delay = time.Duration(secs) * time.Second
+				}
+			}
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+			}
 			continue
 		}
-		code := resp.StatusCode
-		retryAfter := resp.Header.Get("Retry-After")
-		resp.Body.Close()
-		if code >= 200 && code < 300 {
-			return
+		select {
+		case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+		case <-ctx.Done():
 		}
-		lastErr = fmt.Errorf("log ingestion status %d", code)
-		// 4xx other than 429 means the request is invalid; retrying won't
-		// help. 429 (and 5xx) are transient — honor Retry-After when sane.
-		if code >= 400 && code < 500 && code != http.StatusTooManyRequests {
-			break
-		}
-		delay := time.Duration(attempt) * 500 * time.Millisecond
-		if code == http.StatusTooManyRequests {
-			if secs, e := strconv.Atoi(retryAfter); e == nil && secs > 0 {
-				if secs > maxRetryAfterSecs {
-					secs = maxRetryAfterSecs
-				}
-				delay = time.Duration(secs) * time.Second
-			}
-		}
-		time.Sleep(delay)
 	}
 	fmt.Fprintf(s.orig, "[logship] dropped %d log lines: %v\n", len(batch), lastErr)
 	s.dropped += int64(len(batch))

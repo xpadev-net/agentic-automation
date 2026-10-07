@@ -28,6 +28,25 @@ type Executor struct {
 	progressWriter io.Writer
 }
 
+// lockedBuffer makes a bytes.Buffer safe for concurrent writes from the
+// stdout/stderr copy goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) Bytes() []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Bytes()
+}
+
 type synchronizedWriter struct {
 	mu     sync.Mutex
 	writer io.Writer
@@ -109,8 +128,31 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 		// Preserve existing environment and ensure ANTHROPIC_API_KEY is set
 		cmd.Env = os.Environ()
 
-		// Execute and capture combined output (stdout + stderr)
-		output, err = cmd.CombinedOutput()
+		// Stream stdout+stderr live into progressWriter (os.Stderr, which the
+		// log shipper tails) while also capturing the combined output like
+		// CombinedOutput did — claude runs are the longest-lived ones, so
+		// buffering-until-exit would hide them from the live log feed.
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return "", fmt.Errorf("failed to create claude-code stdout pipe: %w", err)
+		}
+		stderr, err := cmd.StderrPipe()
+		if err != nil {
+			return "", fmt.Errorf("failed to create claude-code stderr pipe: %w", err)
+		}
+		if err := cmd.Start(); err != nil {
+			return "", fmt.Errorf("failed to start claude-code: %w", err)
+		}
+
+		var out lockedBuffer
+		sink := io.MultiWriter(&out, &synchronizedWriter{writer: e.progressWriter})
+		done := make(chan struct{}, 2)
+		go func() { _, _ = io.Copy(sink, stdout); done <- struct{}{} }()
+		go func() { _, _ = io.Copy(sink, stderr); done <- struct{}{} }()
+		<-done
+		<-done
+		err = cmd.Wait()
+		output = out.Bytes()
 	}
 
 	outputStr := string(output)
