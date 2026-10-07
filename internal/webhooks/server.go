@@ -6,6 +6,7 @@ import (
 	"agentic-automation/internal/models"
 	"agentic-automation/internal/webhooks/handlers"
 	"agentic-automation/internal/webhooks/middleware"
+	"agentic-automation/internal/webui"
 	"context"
 	"net/http"
 	"os"
@@ -26,14 +27,17 @@ var (
 
 // Server represents the webhook server
 type Server struct {
-	router    *gin.Engine
-	logger    *config.AppLogger
-	server    *http.Server
-	startTime time.Time
+	router      *gin.Engine
+	logger      *config.AppLogger
+	server      *http.Server
+	startTime   time.Time
+	janitorStop func()
 }
 
-// setupRouter creates and configures the Gin router
-func setupRouter(logger *config.AppLogger) *gin.Engine {
+// setupRouter creates and configures the Gin router. The second return value
+// is a stop hook for the WebUI session janitor (nil when WebUI is disabled);
+// the caller owns it so multiple servers cannot stomp each other's hook.
+func setupRouter(logger *config.AppLogger) (*gin.Engine, func()) {
 	// Set Gin mode based on environment
 	env := config.GetEnv("ENV", "development")
 	if env == "production" {
@@ -76,7 +80,20 @@ func setupRouter(logger *config.AppLogger) *gin.Engine {
 		middleware.VerifyBearerToken(),
 		handlers.HandleAgentReport)
 
-	return router
+	// WebUI auth + UI API routes (only when OAuth + PUBLIC_URL are configured)
+	var janitorStop func()
+	if uiCfg := webui.LoadConfig(); uiCfg.Enabled() {
+		if uiHandler, stopJanitor := webui.NewHandler(uiCfg, config.GetDB(), logger); uiHandler != nil {
+			uiHandler.RegisterRoutes(router)
+			janitorStop = stopJanitor
+			logger.Info("WebUI routes registered",
+				config.String("callback_url", uiCfg.CallbackURL()))
+		}
+	} else {
+		logger.Debug("WebUI disabled: GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET/PUBLIC_URL not fully set")
+	}
+
+	return router, janitorStop
 }
 
 // handleHealth handles GET /health requests
@@ -197,7 +214,7 @@ func NewServer() (*Server, error) {
 	port := config.GetEnv("PORT", "3000")
 
 	// Setup router
-	router := setupRouter(logger)
+	router, janitorStop := setupRouter(logger)
 
 	// Create HTTP server
 	httpServer := &http.Server{
@@ -206,10 +223,11 @@ func NewServer() (*Server, error) {
 	}
 
 	server := &Server{
-		router:    router,
-		logger:    logger,
-		server:    httpServer,
-		startTime: time.Now(),
+		router:      router,
+		logger:      logger,
+		server:      httpServer,
+		startTime:   time.Now(),
+		janitorStop: janitorStop,
 	}
 
 	// Store server instance in router context for health checks
@@ -241,6 +259,10 @@ func (s *Server) Start() error {
 // Shutdown gracefully shuts down the webhook server
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Shutting down webhook server")
+
+	if s.janitorStop != nil {
+		s.janitorStop()
+	}
 
 	if err := s.server.Shutdown(ctx); err != nil {
 		s.logger.Error("Error during server shutdown", config.Error(err))

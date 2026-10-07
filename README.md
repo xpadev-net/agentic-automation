@@ -76,7 +76,7 @@ GitHub App は GitHub API の認証と webhook の送信元として使用しま
 
 Operator には少なくとも `DATABASE_URL`、`GITHUB_APP_ID`、`GITHUB_PRIVATE_KEY`、`GITHUB_WEBHOOK_SECRET`、`OPERATOR_API_TOKEN` が必要です。`PORT`（既定値 `3000`）、`ENV`、`LOG_LEVEL` などの設定はコードとマニフェストを参照してください。
 
-`PUBLIC_URL`（任意）を Operator の外部公開 URL（例: `https://agents.example.com`）に設定すると、実行開始・進捗・失敗などの GitHub コメントに `${PUBLIC_URL}/runs/<AgentRun ID>` 形式の WebUI ログリンクが付与されます。未設定時はリンクを付けません。
+WebUI の GitHub OAuth ログインを有効化するには `PUBLIC_URL`（Operator の外部到達 URL）に加えて `GITHUB_OAUTH_CLIENT_ID` と `GITHUB_OAUTH_CLIENT_SECRET` を設定します（既存 GitHub App の Client ID/Secret を流用可）。いずれかが未設定の場合、UI 関連ルート（`/auth/github/*`、`/api/ui/*`）は登録されず従来どおりの動作になります。セッションは `ui_sessions` テーブルに保存され、`UI_SESSION_TTL_HOURS`（既定値 `168` 時間）で失効します。保存される OAuth トークンは AES-256-GCM で暗号化され、専用鍵を分けたい場合は `UI_TOKEN_ENC_KEY` を設定してください（未設定時は Client Secret から鍵を導出します）。GitHub App の Client ID/Secret ではなく専用 OAuth App を使う場合は `GITHUB_OAUTH_SCOPE`（例: `repo`）でスコープを指定できます（GitHub App のユーザートークンは scope を使わないため既定は空です）。
 
 秘密情報はローカルの環境変数または Kubernetes Secret から供給し、実値を Git に保存しないでください。本番では Vault と ExternalSecret を使い、Vault の値を Kubernetes Secret に同期して Operator と Job から参照する構成を想定します。ExternalSecret、SecretStore、Argo CD Application の定義はこのリポジトリにはありません。運用側の IaC で namespace、RBAC、Secret、Ingress とともに管理してください。
 
