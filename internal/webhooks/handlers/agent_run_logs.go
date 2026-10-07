@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,31 +87,19 @@ func ingestLockName(runID int) string {
 }
 
 // Stored sentinel lines marking the edges of a masked private-key block,
-// distinct from the body mask. pemInProgress finds the nearest preceding
-// sentinel so masking state survives across ingestion batches; the
-// shipper emits the same sentinels for blocks it masked itself.
+// distinct from the body mask. Masking state survives across ingestion
+// batches because these lines are persisted; the shipper emits the same
+// sentinels for blocks it masked itself.
 const (
 	pemBeginSentinel = "[REDACTED PRIVATE KEY BEGIN]"
 	pemEndSentinel   = "[REDACTED PRIVATE KEY END]"
 	redactedLine     = "[REDACTED]"
 )
 
-// pemInProgress reports whether the stored log for the run ends inside an
-// unterminated private-key block: the latest stored BEGIN/END sentinel
-// before this batch decides. Querying the sentinel directly (not a
-// bounded lookback) keeps a long masked body from exhausting the scan.
-func pemInProgress(db *gorm.DB, runID int, beforeSeq int64) bool {
-	var boundary []string
-	if err := db.Model(&models.AgentRunLog{}).
-		Where("agent_run_id = ? AND seq < ? AND (line = ? OR line = ?)",
-			runID, beforeSeq, pemBeginSentinel, pemEndSentinel).
-		Order("seq DESC").
-		Limit(1).
-		Pluck("line", &boundary).Error; err != nil {
-		return false
-	}
-	return len(boundary) > 0 && boundary[0] == pemBeginSentinel
-}
+// seqAttemptStride mirrors the shipper's per-attempt seq partitioning
+// (attempt n emits seqs starting at n*stride+1), so stored boundaries
+// from an earlier attempt must not seed this attempt's masking state.
+const seqAttemptStride = int64(1_000_000_000)
 
 // lockAndTxDB acquires the MySQL named lock on a dedicated connection and
 // returns a *gorm.DB bound to that same physical connection, so callers
@@ -265,18 +254,44 @@ func HandleAgentRunLogs(c *gin.Context) {
 		// on the first line, base64 body after) defeats per-line patterns,
 		// so mask every line between BEGIN and END like the shipper does.
 		// Masking state must survive the request — a block spanning two
-		// POSTs would otherwise resume unmasked — so inPEM seeds from
-		// previously stored lines. Doing it inside the lock/transaction
+		// POSTs would otherwise resume unmasked — so it replays the stored
+		// BEGIN/END sentinels preceding each entry. Replaying per entry
+		// (not once at min(seq)) handles overlapping batches: a duplicate
+		// low seq followed by new higher seqs would otherwise miss a
+		// stored BEGIN between them. Doing it inside the lock/transaction
 		// keeps a racing earlier batch's BEGIN visible here.
-		minSeq := req.Entries[0].Seq
-		for _, e := range req.Entries {
-			if e.Seq < minSeq {
-				minSeq = e.Seq
-			}
+		entries := make([]LogEntryRequest, len(req.Entries))
+		copy(entries, req.Entries)
+		sort.SliceStable(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
+		minSeq, maxSeq := entries[0].Seq, entries[len(entries)-1].Seq
+		minAttemptBase := (minSeq / seqAttemptStride) * seqAttemptStride
+		var sentinels []models.AgentRunLog
+		if err := tx.Model(&models.AgentRunLog{}).
+			Select("seq", "line").
+			Where("agent_run_id = ? AND seq >= ? AND seq <= ? AND (line = ? OR line = ?)",
+				run.ID, minAttemptBase, maxSeq, pemBeginSentinel, pemEndSentinel).
+			Order("seq").
+			Scan(&sentinels).Error; err != nil {
+			return err
 		}
-		inPEM := pemInProgress(tx, run.ID, minSeq)
-		logs := make([]*models.AgentRunLog, 0, len(req.Entries))
-		for _, entry := range req.Entries {
+		inPEM := false
+		sentIdx := 0
+		lastBase := minAttemptBase
+		logs := make([]*models.AgentRunLog, 0, len(entries))
+		for _, entry := range entries {
+			entryBase := (entry.Seq / seqAttemptStride) * seqAttemptStride
+			if entryBase != lastBase {
+				// Crossing an attempt boundary: a BEGIN left unterminated by
+				// the previous attempt must not mask this attempt's lines.
+				inPEM = false
+				lastBase = entryBase
+			}
+			for sentIdx < len(sentinels) && sentinels[sentIdx].Seq < entry.Seq {
+				if sentinels[sentIdx].Seq >= entryBase {
+					inPEM = sentinels[sentIdx].Line == pemBeginSentinel
+				}
+				sentIdx++
+			}
 			// Redact credentials before anything is persisted or streamed:
 			// agent stderr can leak tokens injected into the runner env.
 			line := logredact.Line(entry.Line)
