@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
@@ -53,6 +54,44 @@ func lockForRun(runID int) *sync.Mutex {
 
 func ingestLockName(runID int) string {
 	return fmt.Sprintf("agentic:log-ingest:%d", runID)
+}
+
+// lockAndTxDB acquires the MySQL named lock on a dedicated connection and
+// returns a *gorm.DB bound to that same physical connection, so callers
+// can run a gorm Transaction while the lock is held — and released only
+// after commit. release() must be called once the transaction returns; it
+// runs on context.Background() because the request context may be done.
+func lockAndTxDB(ctx context.Context, db *gorm.DB, lockName string) (*gorm.DB, func(), error) {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, nil, err
+	}
+	lockConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var got sql.NullInt64
+	if err := lockConn.QueryRowContext(ctx,
+		"SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&got); err != nil || !got.Valid || got.Int64 != 1 {
+		_ = lockConn.Close()
+		if err == nil {
+			err = fmt.Errorf("not granted")
+		}
+		return nil, nil, err
+	}
+	release := func() {
+		_, _ = lockConn.ExecContext(context.Background(),
+			"SELECT RELEASE_LOCK(?)", lockName)
+		_ = lockConn.Close()
+	}
+	txDB, err := gorm.Open(mysql.New(mysql.Config{Conn: lockConn}), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	})
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return txDB, release, nil
 }
 
 func seqsOf(logs []*models.AgentRunLog) []int64 {
@@ -155,48 +194,33 @@ func HandleAgentRunLogs(c *gin.Context) {
 	defer mu.Unlock()
 
 	lockName := ingestLockName(run.ID)
-	var lockConn *sql.Conn
+	// txDB carries the transaction below. On MySQL the named lock must be
+	// held through commit, so the lock and the transaction run on ONE
+	// dedicated connection (wrapped as a gorm.DB bound to that conn).
+	// Holding one pooled conn while Transaction() waits for a second would
+	// deadlock once every pool slot is taken by a lock-holder.
+	txDB := db
 	if db.Dialector.Name() == "mysql" {
-		sqlDB, derr := db.DB()
-		if derr == nil {
-			lockConn, derr = sqlDB.Conn(c.Request.Context())
-		}
-		if derr != nil {
-			logger.Error("Failed to get ingest lock connection",
-				config.Int("agent_run_id", runID), config.Error(derr))
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error":   "INTERNAL_ERROR",
-				"message": "failed to store logs",
-			})
-			return
-		}
-		var got sql.NullInt64
-		if err := lockConn.QueryRowContext(c.Request.Context(),
-			"SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&got); err != nil || !got.Valid || got.Int64 != 1 {
-			_ = lockConn.Close()
-			if err == nil {
-				err = fmt.Errorf("not granted")
-			}
+		var lerr error
+		var release func()
+		txDB, release, lerr = lockAndTxDB(c.Request.Context(), db, lockName)
+		if lerr != nil {
 			logger.Error("Failed to acquire ingest lock",
-				config.Int("agent_run_id", runID), config.Error(err))
+				config.Int("agent_run_id", runID), config.Error(lerr))
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "INTERNAL_ERROR",
 				"message": "failed to store logs",
 			})
 			return
 		}
-		// Release after the transaction below has committed (defer order)
-		// and on Background: the request context may already be done.
-		defer func() {
-			_, _ = lockConn.ExecContext(context.Background(),
-				"SELECT RELEASE_LOCK(?)", lockName)
-			_ = lockConn.Close()
-		}()
+		// release() frees the lock AFTER txDB.Transaction has committed
+		// (defer order) and on Background: the request context may be done.
+		defer release()
 	}
 
 	var stored int
 	var toPublish []loghub.Event
-	err = db.Transaction(func(tx *gorm.DB) error {
+	err = txDB.Transaction(func(tx *gorm.DB) error {
 		logRepo := repositories.NewAgentRunLogRepository(tx)
 		// OnConflict DoNothing makes re-posted batches idempotent for
 		// storage, but live publication must be limited to rows actually
