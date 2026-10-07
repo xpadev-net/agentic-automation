@@ -436,8 +436,18 @@ func HandlePullRequestReviewWithDeps(c *gin.Context, deps PullRequestReviewDeps)
 					discordSvc := services.NewDiscordNotificationService(discordClient, logger)
 					_ = discordSvc.NotifyMergeFailure(ctx, pr, issue, mergeErr.Error(), services.ClassifyMergeError(mergeErr))
 				}()
+				// Appends the AgentRun logs link when PUBLIC_URL is set (no-op
+				// otherwise) — same helper as the issue_comment approval flow so
+				// merge-failure comments keep their diagnostic link.
+				withLogsLink := func(body string) string {
+					agentRunRepo := repositories.NewAgentRunRepository(config.GetDB())
+					if url := config.AgentRunURL(latestAgentRunIDForPRRepo(agentRunRepo, pr.ID)); url != "" {
+						body += "\n\n**Logs**: " + url
+					}
+					return body
+				}
 				// 任意通知（軽量）：PR に結果コメントを投稿（ベストエフォート）
-				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, "⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts.")
+				_, _ = githubClient.CreateIssueComment(ctx, owner, repo, pr.Number, withLogsLink("⚠️ Auto-merge attempt failed after Codex approval. Please check CI/conflicts."))
 				c.JSON(http.StatusOK, gin.H{
 					"status":      "merge_attempt_failed",
 					"delivery_id": deliveryID,
