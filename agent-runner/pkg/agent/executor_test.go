@@ -933,3 +933,25 @@ func TestExecutor_ExecuteWithOptions_Cursor_MissingAPIKey(t *testing.T) {
 		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
 	}
 }
+
+// The real subprocess path (no cmdRunner mock) must propagate non-zero
+// exits: a shadowed error would silently report success. Uses a fake
+// claude-code executable on PATH.
+func TestExecutor_Execute_ClaudeCode_SubprocessFailure(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude-code")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho fake-error >&2\nexit 3\n"), 0o755); err != nil {
+		t.Fatalf("write fake claude-code: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	executor := NewExecutor("claude-code")
+	_, err := executor.Execute(t.TempDir(), "prompt")
+	if err == nil {
+		t.Fatal("expected subprocess failure to propagate, got nil error")
+	}
+	if !strings.Contains(err.Error(), "claude-code execution failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
