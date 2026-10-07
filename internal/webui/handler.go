@@ -50,6 +50,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	ui.GET("/runs/:id", h.HandleGetRun)
 	ui.GET("/runs/:id/logs", h.HandleGetRunLogs)
 	ui.GET("/runs/:id/logs/stream", h.HandleStreamRunLogs)
+
+	h.registerSPA(r)
 }
 
 // HandleMe returns the authenticated user's identity.

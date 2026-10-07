@@ -1,0 +1,81 @@
+:root {
+  --bg: #0d1117;
+  --fg: #c9d1d9;
+  --dim: #8b949e;
+  --border: #30363d;
+  --accent: #58a6ff;
+  --ok: #3fb950;
+  --err: #f85149;
+  --warn: #d29922;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.5 -apple-system, "Segoe UI", "Hiragino Sans", sans-serif;
+}
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 16px; margin: 0; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+main { padding: 16px; max-width: 1200px; margin: 0 auto; }
+.loading, .empty { color: var(--dim); }
+
+.login-box {
+  text-align: center;
+  padding: 80px 0;
+}
+.btn {
+  display: inline-block;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #21262d;
+  color: var(--fg);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--dim); text-decoration: none; }
+
+table.runs { width: 100%; border-collapse: collapse; }
+table.runs th, table.runs td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+table.runs td:last-child { width: 100%; white-space: normal; }
+table.runs tbody tr { cursor: pointer; }
+table.runs tbody tr:hover { background: #161b22; }
+
+.state { font-weight: 600; }
+.state-succeeded { color: var(--ok); }
+.state-failed { color: var(--err); }
+.state-started, .state-queued { color: var(--warn); }
+
+.meta { color: var(--dim); margin-bottom: 12px; }
+.meta b { color: var(--fg); }
+
+.logpane {
+  background: #010409;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  height: 70vh;
+  overflow-y: auto;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-line { display: flex; gap: 12px; }
+.log-line .seq { color: var(--dim); min-width: 5em; text-align: right; user-select: none; }
+.log-line .ts { color: var(--dim); user-select: none; }
+.log-line .txt { flex: 1; }
+.log-gap { color: var(--warn); padding-left: 7em; }
+.log-status { color: var(--dim); padding: 6px 0; }
