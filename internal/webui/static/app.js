@@ -110,14 +110,16 @@ function gapEl(after, next) {
 
 async function renderRunDetail(id) {
   app.innerHTML = '<p class="loading">loading run…</p>';
-  let run;
+  let data;
   try {
-    run = await api(`/api/ui/runs/${id}`);
+    data = await api(`/api/ui/runs/${id}`);
   } catch (e) {
     app.innerHTML = `<p class="empty">${esc(e.message)}</p>`;
     return;
   }
-  if (!run) return;
+  if (!data) return;
+  const run = data.run;
+  const jobName = data.job_name;
 
   app.innerHTML = `
     <p><a href="#/">← runs</a></p>
@@ -126,7 +128,7 @@ async function renderRunDetail(id) {
       <span class="${stateClass(run.state)}">${esc(run.state)}</span>
       ${esc(run.agent_type || "")} —
       ${esc(run.repo || "")}#${run.issue_number ?? ""} ${esc(run.issue_title || "")} —
-      started ${fmtTime(run.created_at)}${run.job_name ? ` — job ${esc(run.job_name)}` : ""}
+      started ${fmtTime(run.created_at)}${jobName ? ` — job ${esc(jobName)}` : ""}
     </div>
     <div class="logpane" id="logpane"></div>
     <p class="log-status" id="logstatus"></p>`;
@@ -161,7 +163,7 @@ async function renderRunDetail(id) {
   eventSource = es;
   status.textContent = "live";
 
-  es.addEventListener("log", (ev) => {
+  es.addEventListener("message", (ev) => {
     try {
       addEntry(JSON.parse(ev.data));
     } catch (_) {}
