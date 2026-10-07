@@ -76,6 +76,11 @@ func setupRouter(logger *config.AppLogger) *gin.Engine {
 		middleware.VerifyBearerToken(),
 		handlers.HandleAgentReport)
 
+	// Runner log ingestion (Bearer認証)
+	router.POST("/api/agent-runs/:id/logs",
+		middleware.VerifyBearerToken(),
+		handlers.HandleAgentRunLogs)
+
 	return router
 }
 

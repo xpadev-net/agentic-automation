@@ -15,6 +15,7 @@ import (
 	"agent-runner/pkg/config"
 	"agent-runner/pkg/git"
 	"agent-runner/pkg/hooks"
+	"agent-runner/pkg/logship"
 	"agent-runner/pkg/parser"
 	"agent-runner/pkg/prompts"
 	"agent-runner/pkg/reporter"
@@ -460,6 +461,14 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 	if err != nil {
 		return fmt.Errorf("environment validation failed: %w", err)
 	}
+
+	// Tee stderr to the Operator log ingestion endpoint (best-effort).
+	// From here on, everything written to os.Stderr is also shipped.
+	shipper, err := logship.Attach(envCfg.OperatorAPIURL, envCfg.OperatorAPIToken, envCfg.AgentRunID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: log shipping unavailable: %v\n", err)
+	}
+	defer shipper.Close()
 
 	if executionMode == "plan_creation" {
 		// プラン作成モードではwriteを不可に強制
