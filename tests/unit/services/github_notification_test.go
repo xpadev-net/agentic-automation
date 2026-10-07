@@ -29,7 +29,7 @@ func TestNotifyPRCreated_NewPostsToIssueAndPR(t *testing.T) {
 	sha := "0123456789abcdef"
 	idem := "delivery-1"
 
-	err := svc.NotifyPRCreated(ctx, owner, repo, issueNum, prNum, prURL, branch, sha, idem)
+	err := svc.NotifyPRCreated(ctx, owner, repo, issueNum, prNum, prURL, branch, sha, idem, 0)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
@@ -67,7 +67,7 @@ func TestNotifyPRCreated_Idempotent_IssueHasMarkerOnly(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyPRCreated(ctx, "o", "r", 100, 200, "https://github.com/o/r/pull/200", "b", "abcdef0", idem)
+	err := svc.NotifyPRCreated(ctx, "o", "r", 100, 200, "https://github.com/o/r/pull/200", "b", "abcdef0", idem, 0)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
@@ -90,7 +90,7 @@ func TestNotifyPRCreated_Idempotent_BothHaveMarker(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", idem)
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", idem, 0)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
@@ -106,7 +106,7 @@ func TestNotifyPRCreated_SkipWhenMissingPRNumber(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 0, "", "b", "abcd12", "id1")
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 0, "", "b", "abcd12", "id1", 0)
 	require.NoError(t, err)
 	require.Len(t, mock.Posts(), 0)
 }
@@ -121,7 +121,7 @@ func TestNotifyPRCreated_IssueList500_ReturnsErrorButPRPosts(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX", 0)
 	require.Error(t, err)
 
 	posts := mock.Posts()
@@ -146,7 +146,7 @@ func TestNotifyPRCreated_PRPost500_ReturnsErrorButIssuePosts(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
+	err := svc.NotifyPRCreated(ctx, "o", "r", 10, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX", 0)
 	require.Error(t, err)
 
 	posts := mock.Posts()
@@ -170,11 +170,11 @@ func TestNotifyPRCreated_ShortSHABoundary(t *testing.T) {
 	ctx := context.Background()
 
 	// 6 chars -> unchanged
-	_ = svc.NotifyPRCreated(ctx, "o", "r", 1, 2, "https://github.com/o/r/pull/2", "b", "123456", "i1")
+	_ = svc.NotifyPRCreated(ctx, "o", "r", 1, 2, "https://github.com/o/r/pull/2", "b", "123456", "i1", 0)
 	// 7 chars -> unchanged
-	_ = svc.NotifyPRCreated(ctx, "o", "r", 3, 4, "https://github.com/o/r/pull/4", "b", "1234567", "i2")
+	_ = svc.NotifyPRCreated(ctx, "o", "r", 3, 4, "https://github.com/o/r/pull/4", "b", "1234567", "i2", 0)
 	// 8 chars -> trimmed to 7
-	_ = svc.NotifyPRCreated(ctx, "o", "r", 5, 6, "https://github.com/o/r/pull/6", "b", "12345678", "i3")
+	_ = svc.NotifyPRCreated(ctx, "o", "r", 5, 6, "https://github.com/o/r/pull/6", "b", "12345678", "i3", 0)
 
 	posts := mock.Posts()
 	// We made 3 invocations, each should post 2 comments (issue+pr) = 6 posts
@@ -201,7 +201,7 @@ func TestNotifyPRCreated_NoIssueNumber_PROnly(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyPRCreated(ctx, "o", "r", 0, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX")
+	err := svc.NotifyPRCreated(ctx, "o", "r", 0, 20, "https://github.com/o/r/pull/20", "b", "abcdef0", "idX", 0)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
@@ -251,13 +251,33 @@ func TestUpdatePlanExecutionStartedComment_CreatesWhenMissing(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.UpdatePlanExecutionStartedComment(ctx, "org", "repo", 42, "cursor-agent", 555)
+	err := svc.UpdatePlanExecutionStartedComment(ctx, "org", "repo", 42, "cursor-agent", 555, 777)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
 	require.Len(t, posts, 1)
 	require.Contains(t, posts[0].Body, "<!-- agent:execution-start:555 -->")
 	require.Contains(t, posts[0].Body, "🚀 Plan execution started...")
+}
+
+// The Logs link in plan-execution progress comments must point at the
+// execution run, not the plan-creation run used to locate the comment.
+func TestUpdatePlanExecutionStartedComment_LogsLinkUsesExecutionRunID(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "https://ops.example.com")
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	err := svc.UpdatePlanExecutionStartedComment(context.Background(), "org", "repo", 42, "cursor-agent", 555, 777)
+	require.NoError(t, err)
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Contains(t, posts[0].Body, "**Logs**: https://ops.example.com/runs/777")
+	require.NotContains(t, posts[0].Body, "runs/555")
 }
 
 // -----------------------------------------------------------------------------
@@ -365,7 +385,7 @@ func TestNotifyRetryProgress_NewPostsToIssueAndPR(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 20, 5, 50, "Test error", "delivery-1")
+	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 20, 5, 50, "Test error", "delivery-1", 0)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
@@ -403,7 +423,7 @@ func TestNotifyRetryProgress_UpdatesExistingComment(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyRetryProgress(ctx, "o", "r", 100, 0, 3, 50, "New error", idem)
+	err := svc.NotifyRetryProgress(ctx, "o", "r", 100, 0, 3, 50, "New error", idem, 0)
 	require.NoError(t, err)
 
 	// Should have one update (PATCH) call
@@ -426,17 +446,17 @@ func TestNotifyRetryProgress_InputValidation(t *testing.T) {
 	ctx := context.Background()
 
 	// Negative retryCount
-	err := svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, -1, 50, "error", "key")
+	err := svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, -1, 50, "error", "key", 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "retryCount must be >= 0")
 
 	// Zero maxRetries
-	err = svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, 5, 0, "error", "key")
+	err = svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, 5, 0, "error", "key", 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "maxRetries must be > 0")
 
 	// Empty idempotencyKey
-	err = svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, 5, 50, "error", "")
+	err = svc.NotifyRetryProgress(ctx, "o", "r", 10, 20, 5, 50, "error", "", 0)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "idempotencyKey must not be empty")
 }
@@ -450,7 +470,7 @@ func TestNotifyRetryProgress_IssueOnly(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 0, 2, 50, "Error", "key1")
+	err := svc.NotifyRetryProgress(ctx, "org", "repo", 10, 0, 2, 50, "Error", "key1", 0)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
@@ -467,7 +487,7 @@ func TestNotifyRetryProgress_PROnly(t *testing.T) {
 	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
 
 	ctx := context.Background()
-	err := svc.NotifyRetryProgress(ctx, "org", "repo", 0, 20, 2, 50, "Error", "key2")
+	err := svc.NotifyRetryProgress(ctx, "org", "repo", 0, 20, 2, 50, "Error", "key2", 0)
 	require.NoError(t, err)
 
 	posts := mock.Posts()
@@ -655,4 +675,89 @@ func TestNotifyDependencyViolation_PROnly(t *testing.T) {
 	posts := mock.Posts()
 	require.Len(t, posts, 1)
 	require.Equal(t, 20, posts[0].Number)
+}
+
+func TestRunLogsLink_ExecutionStartWithPublicURL(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "https://ui.example.com/")
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	require.NoError(t, svc.PostExecutionStartComment(context.Background(), "o", "r", 10, "claude-code", 42))
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.Contains(t, posts[0].Body, "**Logs**: https://ui.example.com/runs/42")
+}
+
+func TestRunLogsLink_OmittedWhenPublicURLUnset(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "")
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	require.NoError(t, svc.PostExecutionStartComment(context.Background(), "o", "r", 10, "claude-code", 42))
+
+	posts := mock.Posts()
+	require.Len(t, posts, 1)
+	require.NotContains(t, posts[0].Body, "**Logs**:")
+}
+
+func TestRunLogsLink_PRCreatedWithPublicURL(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "https://ui.example.com")
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	err := svc.NotifyPRCreated(context.Background(), "o", "r", 10, 20,
+		"https://github.com/o/r/pull/20", "b", "abcdef0", "id1", 42)
+	require.NoError(t, err)
+
+	for _, p := range mock.Posts() {
+		require.Contains(t, p.Body, "**Logs**: https://ui.example.com/runs/42")
+	}
+}
+
+func TestRunLogsLink_RetryProgressWithPublicURL(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "https://ui.example.com")
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	err := svc.NotifyRetryProgress(context.Background(), "o", "r", 10, 20, 5, 50, "boom", "key1", 42)
+	require.NoError(t, err)
+
+	for _, p := range mock.Posts() {
+		require.Contains(t, p.Body, "**Logs**: https://ui.example.com/runs/42")
+	}
+}
+
+func TestRunLogsLink_ZeroAgentRunIDOmitsLink(t *testing.T) {
+	t.Setenv("PUBLIC_URL", "https://ui.example.com")
+	mock := testmocks.NewGitHubIssueCommentsServer()
+	t.Cleanup(mock.Close)
+	mock.Reset()
+
+	gh := buildTestGitHubClient(t, mock.URL())
+	svc := services.NewGitHubNotificationService(gh, config.NewNopLogger())
+
+	err := svc.NotifyPRCreated(context.Background(), "o", "r", 10, 20,
+		"https://github.com/o/r/pull/20", "b", "abcdef0", "id1", 0)
+	require.NoError(t, err)
+
+	for _, p := range mock.Posts() {
+		require.NotContains(t, p.Body, "**Logs**:")
+	}
 }
