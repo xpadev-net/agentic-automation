@@ -451,7 +451,7 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 // Run executes the agent-runner workflow.
 // This function is exported for testing purposes.
 
-func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode string) error {
+func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode string) (retErr error) {
 	executionMode = normalizeExecutionMode(executionMode)
 	if executionMode == "" {
 		return fmt.Errorf("invalid execution mode")
@@ -469,6 +469,15 @@ func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode stri
 		fmt.Fprintf(os.Stderr, "WARNING: log shipping unavailable: %v\n", err)
 	}
 	defer shipper.Close()
+	// Print the returned error while the shipper is still attached so the
+	// failure reason reaches the shipped log — cobra only prints it after
+	// Run returns, which is after the shipper has closed. (Registered after
+	// the Close defer so it runs first.)
+	defer func() {
+		if retErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", retErr)
+		}
+	}()
 
 	if executionMode == "plan_creation" {
 		// プラン作成モードではwriteを不可に強制

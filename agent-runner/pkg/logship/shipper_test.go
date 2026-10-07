@@ -22,7 +22,9 @@ func newCaptureServer(t *testing.T) (*captured, *httptest.Server) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		var req logsRequest
+		var req struct {
+			Entries []logEntry `json:"entries"`
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -164,7 +166,9 @@ func TestShipperRetriesOn429(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		var req logsRequest
+		var req struct {
+			Entries []logEntry `json:"entries"`
+		}
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -197,5 +201,36 @@ func TestShipperDropsOn4xx(t *testing.T) {
 	s.Close()
 	if s.dropped == 0 {
 		t.Fatalf("expected dropped count > 0")
+	}
+}
+
+func TestEncodeBatchSplitsByEncodedSize(t *testing.T) {
+	// '<' marshals to < — six bytes per character — so raw-size
+	// budgeting would overshoot the encoded body cap.
+	line := strings.Repeat("<", maxShipLineBytes)
+	entries := make([]logEntry, 200)
+	for i := range entries {
+		entries[i] = logEntry{Seq: int64(i + 1), Line: line}
+	}
+	var consumed, bodies int
+	for consumed < len(entries) {
+		body, n := encodeBatch(entries[consumed:])
+		if n == 0 {
+			t.Fatal("encodeBatch made no progress")
+		}
+		if len(body) > maxRequestBodyJSON {
+			t.Fatalf("body of %d bytes exceeds cap %d", len(body), maxRequestBodyJSON)
+		}
+		var req struct {
+			Entries []logEntry `json:"entries"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil || len(req.Entries) != n {
+			t.Fatalf("invalid encoded body: n=%d err=%v", n, err)
+		}
+		consumed += n
+		bodies++
+	}
+	if bodies < 2 {
+		t.Fatalf("expected the batch to split, got %d body", bodies)
 	}
 }
