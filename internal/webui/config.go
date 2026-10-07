@@ -80,5 +80,3 @@ func LoadConfig() *Config {
 		APIBaseURL:   config.GetEnv("GITHUB_API_BASE_URL", "https://api.github.com"),
 	}
 }
-
-
