@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -34,7 +35,7 @@ func newCaptureServer(t *testing.T) (*captured, *httptest.Server) {
 }
 
 func TestAttachDisabledWithoutConfig(t *testing.T) {
-	s, err := Attach("", "tok", 1)
+	s, err := Attach("", "tok", 1, 0)
 	if err != nil || s != nil {
 		t.Fatalf("expected disabled shipper, got %v %v", s, err)
 	}
@@ -44,7 +45,7 @@ func TestAttachDisabledWithoutConfig(t *testing.T) {
 func TestShipperForwardsStderrLines(t *testing.T) {
 	c, srv := newCaptureServer(t)
 
-	s, err := Attach(srv.URL, "tok", 7)
+	s, err := Attach(srv.URL, "tok", 7, 0)
 	if err != nil || s == nil {
 		t.Fatalf("attach failed: %v", err)
 	}
@@ -75,13 +76,61 @@ func TestShipperForwardsStderrLines(t *testing.T) {
 	}
 }
 
+// A retry (RetryCount>0) must start its sequence in a disjoint range so it
+// cannot collide with entries persisted by the earlier attempt.
+func TestShipperSeqPartitionedByRetryCount(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 2)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "retry line\n")
+	s.Close()
+
+	var seqs []int64
+	for _, b := range c.batches {
+		for _, e := range b {
+			seqs = append(seqs, e.Seq)
+		}
+	}
+	if len(seqs) != 1 || seqs[0] != 2*seqAttemptStride+1 {
+		t.Fatalf("expected seq 2*stride+1, got %v", seqs)
+	}
+}
+
+// Lines larger than the scanner-era 1MiB cap must not kill readLoop: the
+// line is still mirrored and shipped, and later lines keep flowing.
+func TestShipperOversizedLineStillFlows(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	big := strings.Repeat("x", 2*1024*1024)
+	fmt.Fprintf(os.Stderr, "%s\n", big)
+	fmt.Fprintf(os.Stderr, "after big\n")
+	s.Close()
+
+	var lines []string
+	for _, b := range c.batches {
+		for _, e := range b {
+			lines = append(lines, e.Line)
+		}
+	}
+	if len(lines) != 2 || lines[0] != big || lines[1] != "after big" {
+		t.Fatalf("unexpected lines (count=%d)", len(lines))
+	}
+}
+
 func TestShipperDropsOn4xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	t.Cleanup(srv.Close)
 
-	s, err := Attach(srv.URL, "tok", 7)
+	s, err := Attach(srv.URL, "tok", 7, 0)
 	if err != nil || s == nil {
 		t.Fatalf("attach failed: %v", err)
 	}
