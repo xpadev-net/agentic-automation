@@ -146,6 +146,15 @@ func (s *Shipper) Close() {
 	})
 }
 
+// Stored sentinel values for a masked private-key block. The ingestion
+// handler uses the same values so it can reconstruct masking state from
+// previously stored lines (a PEM block may span POST requests).
+const (
+	pemBeginSentinel = "[REDACTED PRIVATE KEY BEGIN]"
+	pemEndSentinel   = "[REDACTED PRIVATE KEY END]"
+	redactedLine     = "[REDACTED]"
+)
+
 // maxLineBufBytes caps how much of a single newline-free stderr record is
 // accumulated for shipping. The pipe keeps being drained and mirrored raw
 // beyond the cap, so a writer dumping a huge record neither blocks nor can
@@ -189,14 +198,18 @@ func (s *Shipper) readLoop() {
 		line := truncateShipLine(redact.String(raw))
 		// The BEGIN marker may sit behind an assignment prefix
 		// (GITHUB_PRIVATE_KEY=-----BEGIN RSA...), so match Contains, not
-		// just a line prefix.
+		// just a line prefix. BEGIN/END emit distinct sentinel lines so the
+		// ingestion side can tell where a masked block starts and ends.
 		if strings.Contains(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY") {
 			inPEM = true
-		}
-		if inPEM {
-			line = "[REDACTED]"
+			line = pemBeginSentinel
+		} else if inPEM {
+			line = redactedLine
 		}
 		if strings.Contains(raw, "-----END ") {
+			if inPEM {
+				line = pemEndSentinel
+			}
 			inPEM = false
 		}
 		select {
