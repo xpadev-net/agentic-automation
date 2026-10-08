@@ -376,3 +376,49 @@ func TestStreamSetStateReplaces(t *testing.T) {
 		t.Fatalf("quote state lingered: %q", got)
 	}
 }
+
+// Escaped single-quoted values mask the same as escaped double quotes.
+func TestMasksEscapedSingleQuotedValue(t *testing.T) {
+	got := String(`PASSWORD=\'correct horse battery staple\'`)
+	want := `***`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// JSONL output keeps newlines as literal `\n` — an unquoted credential
+// value must stop there instead of eating the following diagnostics.
+func TestUnquotedValueStopsAtEscapedNewline(t *testing.T) {
+	got := String(`CURSOR_API_KEY=xyz987uvw654\nERROR:ENOENT\nexit_code=1`)
+	want := `***\nERROR:ENOENT\nexit_code=1`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// A closing delimiter at the opener's own encoding depth ends the span;
+// a deeper-encoded value must not swallow the trailing diagnostic.
+func TestMasksDoublyEscapedQuotedValueAtDepth(t *testing.T) {
+	got := String(`PASSWORD=\\\"correct\\\" diagnostic=\\\"failed to load\\\"`)
+	want := `*** diagnostic=\\\"failed to load\\\"`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// An indented quote still starts a masked continuation.
+func TestStreamPendingIndentedQuotedContinuation(t *testing.T) {
+	s := Stream{}
+	if got := s.Line("PASSWORD="); got != "PASSWORD=" {
+		t.Fatalf("key: %q", got)
+	}
+	if got := s.Line(`  "correct`); got != "***" {
+		t.Fatalf("open: %q", got)
+	}
+	if got := s.Line("horse battery"); got != "***" {
+		t.Fatalf("body: %q", got)
+	}
+	if got := s.Line(`staple" done`); got != "*** done" {
+		t.Fatalf("close: %q", got)
+	}
+}
