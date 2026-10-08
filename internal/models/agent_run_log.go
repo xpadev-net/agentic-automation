@@ -8,12 +8,17 @@ import (
 // and pushed to the Operator for the WebUI. Seq is a per-run monotonically
 // increasing counter assigned by the runner; gaps mean lines were dropped.
 type AgentRunLog struct {
-	ID         uint64     `gorm:"primaryKey;autoIncrement" json:"id"`
-	AgentRunID int        `gorm:"column:agent_run_id;index:idx_agent_run_logs_run,priority:1;uniqueIndex:uq_agent_run_log_seq,priority:1" json:"agent_run_id"`
-	Seq        int64      `gorm:"column:seq;uniqueIndex:uq_agent_run_log_seq,priority:2" json:"seq"`
-	TS         *time.Time `gorm:"column:ts" json:"ts,omitempty"`
-	Line       string     `gorm:"column:line;type:mediumtext" json:"line"`
-	CreatedAt  time.Time  `gorm:"column:created_at;autoCreateTime;index:idx_agent_run_logs_created" json:"created_at"`
+	ID         uint64     `gorm:"primaryKey;autoIncrement"`
+	AgentRunID int        `gorm:"column:agent_run_id;index:idx_agent_run_logs_run,priority:1;uniqueIndex:uq_agent_run_log_seq,priority:1"`
+	Seq        int64      `gorm:"column:seq;uniqueIndex:uq_agent_run_log_seq,priority:2"`
+	TS         *time.Time `gorm:"column:ts"`
+	Line       string     `gorm:"column:line;type:mediumtext"`
+	// RedactState persists the masking state (PEM block + credential
+	// stream) left after this line, so a later ingestion batch resumes
+	// masking exactly where this row left off — across request and
+	// attempt boundaries alike.
+	RedactState string    `gorm:"column:redact_state;type:varchar(32)"`
+	CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime;index:idx_agent_run_logs_created"`
 }
 
 // TableName specifies the table name for AgentRunLog
