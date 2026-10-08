@@ -818,3 +818,77 @@ func TestUnknownStateResetsAtAttemptBoundary(t *testing.T) {
 		t.Fatalf("attempt 1 must start clean: %q state %q", l.Line, l.RedactState)
 	}
 }
+
+// A PEM closing line that also opens a quoted credential still advances
+// the credential tracker: the END marker masks the line, but
+// `PASSWORD="correct` on it keeps the next lines masked.
+func TestIngestLogsPEMLineAdvancesCredentialState(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "-----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 2, "line": "-----END RSA PRIVATE KEY----- PASSWORD=\"correct"},
+			{"seq": 3, "line": "horse battery"},
+			{"seq": 4, "line": `staple"`},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("batch: %d", w.Code)
+	}
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 4 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	if logs[1].Line != pemEndSentinel {
+		t.Fatalf("seq2: %q", logs[1].Line)
+	}
+	for i, want := range []string{"***", "***"} {
+		if logs[2+i].Line != want {
+			t.Fatalf("seq%d: %q", i+3, logs[2+i].Line)
+		}
+	}
+}
+
+// Multiple PEM markers in one entry are applied in textual order:
+// `END ... BEGIN` leaves the block open so the next body fragment is
+// still masked.
+func TestIngestLogsProcessesPEMMarkersInOrder(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "-----END RSA PRIVATE KEY----- -----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 2, "line": "shortkeyfragment"},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("batch: %d", w.Code)
+	}
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 2 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	if logs[0].Line != "***" {
+		t.Fatalf("mixed-marker line: %q", logs[0].Line)
+	}
+	if logs[1].Line != "[REDACTED]" {
+		t.Fatalf("body after END...BEGIN must stay masked: %q", logs[1].Line)
+	}
+}
