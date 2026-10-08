@@ -33,11 +33,14 @@ var patterns = []*regexp.Regexp{
 	// The name must END at a keyword boundary (\b) so usage counters
 	// like "input_tokens": 12345 or "max_tokens": 8192 survive; the
 	// separator accepts =, :, or any whitespace (tabs/newlines
-	// included). The value is either a quoted string (whitespace and
+	// included), plus whitespace AFTER it before the value starts
+	// (`KEY= "v"`, `{"KEY": "v"}`) — without consuming it the
+	// quoted alternatives can't anchor and only the first word is
+	// masked. The value is either a quoted string (whitespace and
 	// escaped delimiters included, matching quote required, optional
 	// backslash-escaped quotes for JSONL) or an unquoted run of >=4
 	// chars so prose like "token: is required" does not match.
-	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s](?:\\?"(?:[^"\\]|\\.)*\\?"|\\?'(?:[^'\\]|\\.)*\\?'|["'\\\s]*[^"'\s]{4,})`),
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(?:\\?"(?:[^"\\]|\\.)*\\?"|\\?'(?:[^'\\]|\\.)*\\?'|["'\\]*[^"'\s]{4,})`),
 }
 
 // pemComplete collapses an entire PEM block — JSONL escaped-newline

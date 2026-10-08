@@ -87,6 +87,11 @@ func TestLineMasksQuotedCredentialValues(t *testing.T) {
 		`PASSWORD="correct horse battery staple"`,
 		`SESSION_SECRET='multi word secret'`,
 		`{"API_KEY":"value with spaces"}`,
+		// Whitespace after the separator must not defeat the quoted
+		// alternatives (Codex finding: only the first word was masked).
+		`PASSWORD= "correct horse battery staple"`,
+		`SESSION_SECRET:   'multi word secret'`,
+		`{"API_KEY": "value with spaces"}`,
 	} {
 		got := Line(in)
 		for _, frag := range []string{"horse", "battery", "word secret", "with spaces"} {
