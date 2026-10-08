@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -96,6 +97,25 @@ const (
 	pemEndSentinel   = "[REDACTED PRIVATE KEY END]"
 	redactedLine     = "[REDACTED]"
 )
+
+// pemBoundaryRE matches an actual private-key marker inside an entry.
+// Entries can carry embedded newlines or several markers on one line,
+// so boundaries are processed in textual order — the LAST marker sets
+// the block state (`END ... BEGIN` leaves masking open).
+var pemBoundaryRE = regexp.MustCompile(`-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----`)
+
+// pemOrderedState applies every PEM marker in s, in order, to inPEM.
+func pemOrderedState(s string, inPEM bool) bool {
+	for _, m := range pemBoundaryRE.FindAllStringSubmatch(s, -1) {
+		inPEM = m[1] == "BEGIN"
+	}
+	return inPEM
+}
+
+// pemMarkerCount counts private-key markers in s.
+func pemMarkerCount(s string) int {
+	return len(pemBoundaryRE.FindAllStringIndex(s, -1))
+}
 
 // seqAttemptStride mirrors the shipper's per-attempt seq partitioning
 // (attempt n emits seqs starting at n*stride+1), so stored boundaries
@@ -393,15 +413,13 @@ func HandleAgentRunLogs(c *gin.Context) {
 				// raw text to the trackers so a recognizable quote or
 				// PEM block on this entry keeps its state recorded.
 				line = "***"
-				switch {
-				case entry.Line == pemBeginSentinel:
+				switch entry.Line {
+				case pemBeginSentinel:
 					inPEM = true
-				case entry.Line == pemEndSentinel:
+				case pemEndSentinel:
 					inPEM = false
-				case strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY"):
-					inPEM = true
-				case strings.Contains(entry.Line, "-----END ") && strings.Contains(entry.Line, "PRIVATE KEY"):
-					inPEM = false
+				default:
+					inPEM = pemOrderedState(entry.Line, inPEM)
 				}
 				_ = stream.Line(entry.Line)
 			case entry.Line == pemBeginSentinel:
@@ -412,22 +430,29 @@ func HandleAgentRunLogs(c *gin.Context) {
 				inPEM = false
 				line = entry.Line
 			default:
-				if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
-					inPEM = true
-					line = pemBeginSentinel
-				} else if inPEM {
-					line = redactedLine
-				} else {
-					line = stream.Line(entry.Line)
-				}
-				// Only a PRIVATE KEY end marker closes the block — an
-				// interleaved `-----END CERTIFICATE-----` must not leak
-				// the remaining key body (same fix as the shipper).
-				if strings.Contains(entry.Line, "-----END ") && strings.Contains(entry.Line, "PRIVATE KEY") {
+				// Advance credential tracking on EVERY entry — even a
+				// PEM-masked one can also open a quoted credential
+				// (`-----END RSA PRIVATE KEY----- PASSWORD="correct`),
+				// whose continuation would otherwise slip out unmasked.
+				masked := stream.Line(entry.Line)
+				// Markers are applied in textual order: a single entry
+				// carrying `END ... -----BEGIN ...` (embedded newlines are
+				// accepted) leaves the block OPEN at its last marker.
+				switch n := pemMarkerCount(entry.Line); {
+				case n > 1:
+					inPEM = pemOrderedState(entry.Line, inPEM)
+					line = "***"
+				case n == 1:
+					inPEM = pemOrderedState(entry.Line, inPEM)
 					if inPEM {
+						line = pemBeginSentinel
+					} else {
 						line = pemEndSentinel
 					}
-					inPEM = false
+				case inPEM:
+					line = redactedLine
+				default:
+					line = masked
 				}
 			}
 			if len(line) > maxLogLineBytes {
