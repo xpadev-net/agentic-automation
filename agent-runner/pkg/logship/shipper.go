@@ -192,58 +192,6 @@ func (s *Shipper) readLoop() {
 	var lineBuf []byte
 	overflow := false
 
-	// The discarded tail of an over-cap line still drives redaction
-	// state — a `KEY` ending the tail must mask the NEXT line — so keep
-	// its last bytes plus a marker carry to catch PEM markers straddling
-	// fragment boundaries.
-	var tailWindow []byte
-	// tailBoundary is the LAST PEM marker seen in the discarded tail
-	// ('B' = BEGIN, 'E' = END, 0 = none) — markers are recorded in
-	// textual order so `END ... BEGIN` in a tail leaves the block open.
-	var tailBoundary byte
-	markerCarry := ""
-	recordTailMarkers := func(check string) {
-		for _, m := range pemBoundaryRE.FindAllStringSubmatch(check, -1) {
-			tailBoundary = m[1][0]
-		}
-	}
-	appendSeg := func(seg []byte) {
-		rem := maxLineBufBytes - len(lineBuf)
-		if rem <= 0 {
-			overflow = true
-			check := markerCarry + string(seg)
-			recordTailMarkers(check)
-			if len(check) > 64 {
-				markerCarry = check[len(check)-64:]
-			} else {
-				markerCarry = check
-			}
-			tailWindow = append(tailWindow, seg...)
-			if len(tailWindow) > 256 {
-				tailWindow = tailWindow[len(tailWindow)-256:]
-			}
-			return
-		}
-		if len(seg) > rem {
-			overflow = true
-			discarded := seg[rem:]
-			seg = seg[:rem]
-			lineBuf = append(lineBuf, seg...)
-			check := markerCarry + string(discarded)
-			recordTailMarkers(check)
-			if len(check) > 64 {
-				markerCarry = check[len(check)-64:]
-			} else {
-				markerCarry = check
-			}
-			tailWindow = append(tailWindow, discarded...)
-			if len(tailWindow) > 256 {
-				tailWindow = tailWindow[len(tailWindow)-256:]
-			}
-			return
-		}
-		lineBuf = append(lineBuf, seg...)
-	}
 	// A multiline PEM value (e.g. GITHUB_PRIVATE_KEY) spills base64 body
 	// lines that no per-line pattern can identify reliably, so mask
 	// everything between the BEGIN/END markers.
@@ -251,6 +199,44 @@ func (s *Shipper) readLoop() {
 	// Cross-line credential state: `KEY\nvalue` and `KEY="...` fragments
 	// span line boundaries, so masking is a Stream, not a per-line call.
 	cred := redact.Stream{}
+	// The discarded tail of an over-cap line still drives redaction
+	// state — a `KEY` or open quote anywhere in it must mask the NEXT
+	// lines — so EVERY discarded fragment feeds the credential stream
+	// (a bare `PASSWORD="` in the middle must not go unnoticed), plus a
+	// marker carry to catch PEM markers straddling fragment boundaries.
+	// tailBoundary is the LAST PEM marker seen in the discarded tail
+	// ('B' = BEGIN, 'E' = END, 0 = none) — markers are recorded in
+	// textual order so `END ... BEGIN` in a tail leaves the block open.
+	var tailBoundary byte
+	markerCarry := ""
+	discard := func(seg []byte) {
+		check := markerCarry + string(seg)
+		for _, m := range pemBoundaryRE.FindAllStringSubmatch(check, -1) {
+			tailBoundary = m[1][0]
+		}
+		if len(check) > 64 {
+			markerCarry = check[len(check)-64:]
+		} else {
+			markerCarry = check
+		}
+		_ = cred.Line(strings.ToValidUTF8(string(seg), "\uFFFD"))
+	}
+	appendSeg := func(seg []byte) {
+		rem := maxLineBufBytes - len(lineBuf)
+		if rem <= 0 {
+			overflow = true
+			discard(seg)
+			return
+		}
+		if len(seg) > rem {
+			overflow = true
+			discarded := seg[rem:]
+			lineBuf = append(lineBuf, seg[:rem]...)
+			discard(discarded)
+			return
+		}
+		lineBuf = append(lineBuf, seg...)
+	}
 	emit := func() {
 		s.seq++
 		raw := string(lineBuf)
@@ -293,9 +279,9 @@ func (s *Shipper) readLoop() {
 			line = truncateShipLine(masked)
 		}
 		// An overflowed line's discarded tail still drives redaction
-		// state: the last marker seen there reopens/closes the block
-		// and the last bytes seed cross-line credential tracking, so a
-		// bare KEY past the cap still masks the value on the next line.
+		// state: the last marker seen there reopens/closes the block, and
+		// credential state was already advanced per discarded fragment —
+		// a `PASSWORD="` past the cap masks the value on the next lines.
 		if overflow {
 			switch tailBoundary {
 			case 'B':
@@ -307,9 +293,6 @@ func (s *Shipper) readLoop() {
 				}
 				inPEM = false
 			}
-			if len(tailWindow) > 0 {
-				_ = cred.Line(strings.ToValidUTF8(string(tailWindow), "\uFFFD"))
-			}
 		}
 		select {
 		case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
@@ -319,7 +302,6 @@ func (s *Shipper) readLoop() {
 		lineBuf = lineBuf[:0]
 		overflow = false
 		tailBoundary = 0
-		tailWindow = tailWindow[:0]
 		markerCarry = ""
 	}
 
