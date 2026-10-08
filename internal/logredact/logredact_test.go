@@ -393,3 +393,36 @@ func TestStreamPendingIndentedQuotedContinuation(t *testing.T) {
 		t.Fatalf("close: %q", got)
 	}
 }
+
+// Pending-value line carrying a further credential opener must keep
+// tracking it — `API_KEY=` then `abcd PASSWORD="correct` still masks
+// the following continuation lines.
+func TestStreamPendingLineTracksEmbeddedCredential(t *testing.T) {
+	s := &Stream{}
+	s.Line("API_KEY=")
+	if got := s.Line(`abcd PASSWORD="correct`); got != "***" {
+		t.Fatalf("pending line: %q", got)
+	}
+	for _, ln := range []string{"horse battery", `staple"`} {
+		if got := s.Line(ln); got != "***" {
+			t.Fatalf("continuation %q: %q", ln, got)
+		}
+	}
+	if s.openQuote != 0 || s.pendingValue {
+		t.Fatal("stream still open after close")
+	}
+}
+
+// Bash concatenates adjacent quoted fragments into one word:
+// `PASSWORD='correct'\”horse battery staple'` masks in full.
+func TestMasksShellConcatenatedQuotedValue(t *testing.T) {
+	got := Line(`PASSWORD='correct'\''horse battery staple'`)
+	if got != "***" {
+		t.Fatalf("concat: %q", got)
+	}
+	// And the mixed adjacent-quote form.
+	got = Line(`PASSWORD='correct'"horse battery staple"`)
+	if got != "***" {
+		t.Fatalf("mixed concat: %q", got)
+	}
+}
