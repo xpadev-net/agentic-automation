@@ -484,3 +484,49 @@ func TestIngestLogsPEMStateScopedToAttempt(t *testing.T) {
 		t.Fatalf("attempt 1 line must not be masked, got %q", logs[0].Line)
 	}
 }
+
+// A re-posted seq carrying an END sentinel where the stored row was a PEM
+// body line must not flip masking state: storage ignores the duplicate,
+// so a later fresh entry still inside the block stays masked.
+func TestIngestLogsDuplicateEntryCannotAlterPEMState(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 2, "line": "MIIEpAIBAAKCAQEA7body"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch1: expected 200, got %d", w.Code)
+	}
+	// Duplicate seq 2 now claims to be the END sentinel; seq 3 is a fresh
+	// key fragment that must remain masked because the block never closed.
+	w = postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 2, "line": "[REDACTED PRIVATE KEY END]"},
+			{"seq": 3, "line": "shortkeyfragment"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch2: expected 200, got %d", w.Code)
+	}
+
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 3 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	if logs[2].Seq != 3 || logs[2].Line != "[REDACTED]" {
+		t.Fatalf("fresh entry inside unclosed PEM must stay masked, got seq=%d line=%q",
+			logs[2].Seq, logs[2].Line)
+	}
+}
