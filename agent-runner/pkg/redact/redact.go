@@ -3,6 +3,7 @@
 package redact
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -30,12 +31,12 @@ var patterns = []*regexp.Regexp{
 	// (`KEY= "v"`, `{"KEY": "v"}`) — without consuming it the
 	// quoted alternatives can't anchor and only the first word is
 	// masked. The value is either a backslash-escaped quoted string
-	// (one or more backslashes, for JSONL/doubly-encoded JSON; the
-	// interior stops at the first backslash-run+quote so a closing
-	// `\"` is never eaten as an escape and trailing JSON survives),
+	// (one or more backslashes, for JSONL/doubly-encoded JSON; a
+	// `\\{2,}"` run inside is an interior escaped quote — a deeper
+	// encoding — so only a single-backslash `\"` closes it),
 	// a plain quoted string, or an unquoted run of >=4 chars so prose
 	// like "token: is required" does not match.
-	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|["'\\]*[^"'\s]{4,})`),
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(?:\\+"(?:[^"\\]|\\+[^"\\]|\\{2,}")*\\+"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|["'\\]*[^"'\s]{4,})`),
 }
 
 // pemComplete collapses an entire PEM block — JSONL escaped-newline
@@ -142,7 +143,54 @@ var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SEC
 type Stream struct {
 	pendingValue bool // previous line ended at a bare credential key
 	openQuote    byte // '"' or '\'' — quote of an unclosed KEY= value; 0 = none
-	openEscaped  bool // the open quote had a leading backslash (\"…)
+	openEscCount int  // backslashes before the open quote (0 = plain)
+}
+
+// SeedPending primes cross-line state from a previously processed line:
+// a bare credential key there means the next line continues its value.
+// (An open quote can't be recovered — its lines were masked to "***" —
+// so only the pending-key case can resume; persisted rows carry the full
+// State() instead.)
+func (s *Stream) SeedPending(prev string) {
+	if credKeyTail.MatchString(prev) {
+		s.pendingValue = true
+	}
+}
+
+// State encodes the live cross-line state so a caller can persist it per
+// stored row and restore it exactly in a later batch. "p" = pending
+// value, "q<quote>:<esc>" = open quote; combined as "p;q34:1" when both
+// hold. "" = idle.
+func (s *Stream) State() string {
+	var st string
+	if s.pendingValue {
+		st = "p"
+	}
+	if s.openQuote != 0 {
+		if st != "" {
+			st += ";"
+		}
+		st += fmt.Sprintf("q%d:%d", s.openQuote, s.openEscCount)
+	}
+	return st
+}
+
+// SetState restores a State() encoding; unknown input leaves the stream
+// idle (fail open is fine — the stored lines themselves were masked).
+func (s *Stream) SetState(st string) {
+	for _, part := range strings.Split(st, ";") {
+		if part == "p" {
+			s.pendingValue = true
+			continue
+		}
+		if strings.HasPrefix(part, "q") {
+			var q, esc int
+			if n, _ := fmt.Sscanf(part[1:], "%d:%d", &q, &esc); n == 2 && q > 0 && q < 256 {
+				s.openQuote = byte(q)
+				s.openEscCount = esc
+			}
+		}
+	}
 }
 
 // Line redacts one line like String, plus cross-line credential state.
@@ -150,9 +198,12 @@ type Stream struct {
 // (they never contain the keyword tail).
 func (s *Stream) Line(raw string) string {
 	if s.openQuote != 0 {
-		if i := indexCloseQuote(raw, s.openQuote, s.openEscaped); i >= 0 {
+		if i := indexCloseQuote(raw, s.openQuote, s.openEscCount); i >= 0 {
 			s.openQuote = 0
-			return "***" + raw[i+1:]
+			s.openEscCount = 0
+			// The retained suffix can hold further credentials — even a
+			// new unclosed value — so run it through the same path.
+			return "***" + s.Line(raw[i+1:])
 		}
 		return "***"
 	}
@@ -160,14 +211,18 @@ func (s *Stream) Line(raw string) string {
 		s.pendingValue = false
 		return "***"
 	}
-	// KEY= with an unclosed quote on this line: mask from the quote and
-	// remember the delimiter. Runs before String because the unquoted
-	// fallback would otherwise mask only the first fragment's tail.
-	if loc := credKeyOpenQuote.FindStringSubmatchIndex(raw); loc != nil {
-		if qEnd := loc[3]; indexCloseQuote(raw[qEnd:], raw[qEnd-1], qEnd-1 > loc[2]) < 0 {
+	// Every credential assignment on the line must be checked for an
+	// unclosed quote — a closed first match (`FIRST="ok" PASS="x`) can't
+	// hide a leaking later one. Runs before String so the whole tail
+	// stays masked even when the fragment is short.
+	for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(raw, -1) {
+		qEnd := loc[3]
+		esc := qEnd - 1 - loc[2] // backslashes preceding the quote char
+		if indexCloseQuote(raw[qEnd:], raw[qEnd-1], esc) < 0 {
 			s.openQuote = raw[qEnd-1]
-			s.openEscaped = qEnd-1 > loc[2]
-			return raw[:loc[2]] + "***"
+			s.openEscCount = esc
+			// The retained prefix can hold its own credentials.
+			return String(raw[:loc[2]]) + "***"
 		}
 	}
 	out := String(raw)
@@ -177,26 +232,26 @@ func (s *Stream) Line(raw string) string {
 	return out
 }
 
-// indexCloseQuote finds where an open quote closes in s. For a plain
-// quote the close is the quote char not preceded by an odd number of
-// backslashes; for a backslash-escaped open the close is the matching
-// escaped pair (index of the quote char is returned).
-func indexCloseQuote(s string, quote byte, escaped bool) int {
+// indexCloseQuote finds where an open quote closes in s, returning the
+// index of the quote char. escCount is the backslash run that preceded
+// the OPENING quote: for a plain quote (0) the close is a quote not
+// preceded by an odd backslash run; for an escaped open the close needs
+// the same run length — a longer run (e.g. `\\\"` under a `\"` opener)
+// is an interior escaped quote at a deeper encoding, not the delimiter.
+func indexCloseQuote(s string, quote byte, escCount int) int {
 	for i := 0; i < len(s); i++ {
 		if s[i] != quote {
-			continue
-		}
-		if escaped {
-			if i > 0 && s[i-1] == '\\' {
-				return i
-			}
 			continue
 		}
 		bs := 0
 		for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
 			bs++
 		}
-		if bs%2 == 0 {
+		if escCount == 0 {
+			if bs%2 == 0 {
+				return i
+			}
+		} else if bs == escCount {
 			return i
 		}
 	}
