@@ -620,3 +620,118 @@ func TestIngestLogsPendingCredentialAcrossBatches(t *testing.T) {
 		t.Fatalf("state leaked past one line: %q", logs[2].Line)
 	}
 }
+
+// A gap with NO stored predecessor and no in-memory continuation means
+// the real masking state is unknowable (earlier batch not arrived /
+// dropped) — fail closed: mask the line and propagate "pending" so the
+// next line is masked as a possible continuation value.
+func TestUnknownStateGapMasksConservatively(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	// seq2 is still in flight when seq3..4 land first.
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 3, "line": "PASSWORD="},
+			{"seq": 4, "line": "secret-value"},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("first batch: %d", w.Code)
+	}
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 2 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	if logs[0].Line != "***" || logs[1].Line != "***" {
+		t.Fatalf("gap entries must fail closed: %q / %q", logs[0].Line, logs[1].Line)
+	}
+
+	// The missing seqs arrive: seq1 plain + seq2 a bare credential key.
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "running"},
+			{"seq": 2, "line": "GITHUB_TOKEN"},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("late batch: %d", w.Code)
+	}
+	var l2 models.AgentRunLog
+	if err := db.Where("agent_run_id = ? AND seq = 2", run.ID).First(&l2).Error; err != nil {
+		t.Fatal(err)
+	}
+	if l2.Line != "GITHUB_TOKEN" || l2.RedactState != "p" {
+		t.Fatalf("seq2: got %q state %q", l2.Line, l2.RedactState)
+	}
+}
+
+// In-batch gap with a stored but NON-adjacent predecessor still fails
+// closed — the missing seqs may carry masking state.
+func TestGapWithNonAdjacentStoredPredMasks(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{{"seq": 1, "line": "ok"}},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("seed: %d", w.Code)
+	}
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{{"seq": 3, "line": "hello"}},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("gap batch: %d", w.Code)
+	}
+	var l3 models.AgentRunLog
+	if err := db.Where("agent_run_id = ? AND seq = 3", run.ID).First(&l3).Error; err != nil {
+		t.Fatal(err)
+	}
+	if l3.Line != "***" {
+		t.Fatalf("non-adjacent stored pred should mask: %q", l3.Line)
+	}
+}
+
+// In-batch gap with NO stored predecessor in between keeps the in-memory
+// stream state — masking stays exact for consecutive batch entries.
+func TestInBatchGapKeepsInMemoryState(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	// seq1 bare key, seq2 dropped, seq3 is the value line — same batch:
+	// the pending state from seq1 must still mask seq3.
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "GITHUB_TOKEN"},
+			{"seq": 3, "line": "leaked-value"},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("batch: %d", w.Code)
+	}
+	var l3 models.AgentRunLog
+	if err := db.Where("agent_run_id = ? AND seq = 3", run.ID).First(&l3).Error; err != nil {
+		t.Fatal(err)
+	}
+	if l3.Line != "***" {
+		t.Fatalf("in-memory pending lost across gap: %q", l3.Line)
+	}
+}

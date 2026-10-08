@@ -123,6 +123,20 @@ func scrubBase64Runs(s string) string {
 func Line(s string) string {
 	s = pemComplete.ReplaceAllString(s, "***")
 	s = scrubPEMBlocks(s)
+	// Fail closed on an unterminated quoted credential BEFORE the pattern
+	// pass: the quoted alternatives below require a closing quote, so
+	// `KEY="correct horse` would otherwise fall through to the unquoted
+	// run and mask only its first word. A `KEY <sep> <quote>` with no
+	// matching close loses everything from the quote on. Closed
+	// assignments pass through untouched for the patterns to mask.
+	for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(s, -1) {
+		qEnd := loc[3]
+		esc := qEnd - 1 - loc[2]
+		if indexCloseQuote(s[qEnd:], s[qEnd-1], esc) < 0 {
+			s = s[:loc[2]] + "***"
+			break
+		}
+	}
 	for _, re := range patterns {
 		s = re.ReplaceAllString(s, "***")
 	}
@@ -140,6 +154,10 @@ var credKeyTail = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|P
 // quote; when no matching close exists on the same line the secret runs
 // into following lines.
 var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(\\*["'])`)
+
+// contQuote matches a line that STARTS a quoted value — the line after a
+// bare `KEY`/`KEY=`. Leading backslashes make it the escaped form.
+var contQuote = regexp.MustCompile(`^(\\*)(["'])`)
 
 // Stream carries credential state across consecutive lines fed through
 // Line: a bare `KEY` (or `KEY=`) masks the NEXT line entirely, and a
@@ -184,6 +202,11 @@ func (s *Stream) State() string {
 // SetState restores a State() encoding; unknown input leaves the stream
 // idle (fail open is fine — the stored lines themselves were masked).
 func (s *Stream) SetState(st string) {
+	// A snapshot replaces the whole state — reset first so fields absent
+	// from it don't linger from a previous stream position.
+	s.pendingValue = false
+	s.openQuote = 0
+	s.openEscCount = 0
 	for _, part := range strings.Split(st, ";") {
 		if part == "p" {
 			s.pendingValue = true
@@ -214,6 +237,15 @@ func (s *Stream) Line(raw string) string {
 	}
 	if s.pendingValue {
 		s.pendingValue = false
+		// The pending value may itself open a quoted string spanning
+		// further lines (`PASSWORD=` then `"correct` … `staple"`).
+		if loc := contQuote.FindStringSubmatchIndex(raw); loc != nil {
+			esc := loc[3] - loc[2]
+			if indexCloseQuote(raw[loc[5]:], raw[loc[4]], esc) < 0 {
+				s.openQuote = raw[loc[4]]
+				s.openEscCount = esc
+			}
+		}
 		return "***"
 	}
 	// Every credential assignment on the line must be checked for an
