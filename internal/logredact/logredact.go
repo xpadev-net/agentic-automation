@@ -3,15 +3,16 @@
 // agent-runner/pkg/redact; the separate operator module keeps its own copy
 // so third-party shippers get the same protection.
 //
-// Line is per-line and stateless: a PEM block split across lines is caught
-// by the complete-block / marker / base64-run patterns, but a short or
-// prefixed body line (<60 chars) between the markers can still survive.
-// Cross-line masking is handled upstream — the runner's shipper replaces
-// BEGIN..END ranges with sentinels, and the ingest handler replays stored
-// sentinels per attempt so a stray mask never runs to end-of-stream.
+// Line is per-line: BEGIN/END marker lines are rewritten to the shared
+// sentinel rows so the ingest handler can replay PEM state across stored
+// entries and mask the body lines in between (including short or
+// prefixed ones this per-line view cannot see).
 package logredact
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 var patterns = []*regexp.Regexp{
 	// GitHub tokens — open-ended so a longer token (e.g. refresh tokens)
@@ -25,12 +26,6 @@ var patterns = []*regexp.Regexp{
 	// Bearer authorization headers — agent output can echo the runner's
 	// OPERATOR_API_TOKEN or GitHub tokens inside HTTP traces.
 	regexp.MustCompile(`(?i)bearer[\s:=+]+[A-Za-z0-9._~+/-]{8,}`),
-	// A complete PEM block — agents printing JSONL emit the private key
-	// with newlines escaped as literal \n; [^-] also spans raw newlines
-	// (PEM base64 never contains '-'), so multiline blocks match too.
-	// Runs before the bare marker patterns so no partial match can
-	// destroy the BEGIN/END markers.
-	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[^-]*-----END [A-Z0-9 ]*PRIVATE KEY-----`),
 	// Credential-looking NAME assignments (NAME=value / NAME: value /
 	// "NAME": "value" / NAME value): covers every secret injected into
 	// runner jobs — OPERATOR_API_TOKEN, S3_SECRET_ACCESS_KEY,
@@ -38,30 +33,92 @@ var patterns = []*regexp.Regexp{
 	// The name must END at a keyword boundary (\b) so usage counters
 	// like "input_tokens": 12345 or "max_tokens": 8192 survive; the
 	// separator accepts =, :, or any whitespace (tabs/newlines
-	// included); the value requires >=4 chars so prose like
-	// "token: is required" does not match; backslash-escaped quotes are
-	// tolerated so JSONL-escaped assignments (\"KEY\":\"value\") still
-	// match.
-	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]["'\\\s]*[^"'\s]{4,}`),
-	// Multiline PEM values (e.g. GITHUB_PRIVATE_KEY) spill across lines:
-	// mask the BEGIN/END markers and any base64 body run (even when a
-	// log prefix precedes it). The complete-block pattern above already
-	// handles both the escaped-newline single-line form and real
-	// multiline blocks.
-	regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`),
-	regexp.MustCompile(`-----END [A-Z0-9 ]*PRIVATE KEY-----`),
+	// included). The value is either a quoted string (whitespace and
+	// escaped delimiters included, matching quote required, optional
+	// backslash-escaped quotes for JSONL) or an unquoted run of >=4
+	// chars so prose like "token: is required" does not match.
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s](?:\\?"(?:[^"\\]|\\.)*\\?"|\\?'(?:[^'\\]|\\.)*\\?'|["'\\\s]*[^"'\s]{4,})`),
 }
+
+// pemComplete collapses an entire PEM block — JSONL escaped-newline
+// single-line form and real multiline blocks alike ([^-] spans newlines
+// because PEM base64 never contains '-'). Runs before the line pass so
+// well-formed blocks never reach the BEGIN/END sentinel logic.
+var pemComplete = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[^-]*-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+
+var (
+	pemBeginMarker = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+	pemEndMarker   = regexp.MustCompile(`-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+)
+
+// Sentinel lines shared with the shipper and the ingest handler: a stored
+// row equal to one of these marks the boundary of a masked PEM range, so
+// server-side replay can keep masking body lines (including short or
+// prefixed ones) that Line() alone cannot see across calls.
+const (
+	PEMBeginSentinel = "[REDACTED PRIVATE KEY BEGIN]"
+	PEMEndSentinel   = "[REDACTED PRIVATE KEY END]"
+	RedactedLine     = "[REDACTED]"
+)
 
 // base64Run matches PEM body material inside a line: a >=60-char run of
 // base64 characters delimited by non-base64 characters or line edges.
-// It needs its own replacement (boundary groups preserved), so it lives
-// outside the uniform *** list.
 var base64Run = regexp.MustCompile(`(?m)(^|[^A-Za-z0-9+/])[A-Za-z0-9+/]{60,}={0,2}($|[^A-Za-z0-9+/=])`)
 
-// Line returns s with known credential patterns replaced by ***.
+// scrubPEMBlocks walks the text line by line, tracking PEM state. A line
+// containing a BEGIN marker becomes PEMBeginSentinel, every line inside
+// the block becomes RedactedLine, and the closing marker becomes
+// PEMEndSentinel. Whole-line replacement keeps stored rows identical to
+// the shipper's sentinels, letting the ingest-side state replay recognize
+// them. An unterminated BEGIN masks to the end of the input (fail closed).
+func scrubPEMBlocks(s string) string {
+	if !strings.Contains(s, "PRIVATE KEY-----") {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	inPEM := false
+	for i, ln := range lines {
+		hasBegin := pemBeginMarker.MatchString(ln)
+		hasEnd := pemEndMarker.MatchString(ln)
+		switch {
+		case hasBegin && hasEnd:
+			// A complete block on one line that pemComplete could not
+			// collapse — mask the whole line and do not leak state.
+			lines[i] = "***"
+			inPEM = false
+		case hasBegin:
+			lines[i] = PEMBeginSentinel
+			inPEM = true
+		case hasEnd:
+			lines[i] = PEMEndSentinel
+			inPEM = false
+		case inPEM:
+			lines[i] = RedactedLine
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// scrubBase64Runs masks >=60-char base64 runs. Replacement runs to a
+// fixpoint because a match consumes the shared delimiter that the next
+// adjacent run needs as its leading boundary.
+func scrubBase64Runs(s string) string {
+	for {
+		next := base64Run.ReplaceAllString(s, "${1}***${2}")
+		if next == s {
+			return s
+		}
+		s = next
+	}
+}
+
+// Line returns s with known credential patterns replaced by *** (or the
+// shared sentinel rows for PEM boundary lines).
 func Line(s string) string {
+	s = pemComplete.ReplaceAllString(s, "***")
+	s = scrubPEMBlocks(s)
 	for _, re := range patterns {
 		s = re.ReplaceAllString(s, "***")
 	}
-	return base64Run.ReplaceAllString(s, "${1}***${2}")
+	return scrubBase64Runs(s)
 }
