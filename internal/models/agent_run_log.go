@@ -13,7 +13,12 @@ type AgentRunLog struct {
 	Seq        int64      `gorm:"column:seq;uniqueIndex:uq_agent_run_log_seq,priority:2"`
 	TS         *time.Time `gorm:"column:ts"`
 	Line       string     `gorm:"column:line;type:mediumtext"`
-	CreatedAt  time.Time  `gorm:"column:created_at;autoCreateTime;index:idx_agent_run_logs_created"`
+	// RedactState persists the masking state (PEM block + credential
+	// stream) left after this line, so a later ingestion batch resumes
+	// masking exactly where this row left off — across request and
+	// attempt boundaries alike.
+	RedactState string    `gorm:"column:redact_state;type:varchar(32)"`
+	CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime;index:idx_agent_run_logs_created"`
 }
 
 // TableName specifies the table name for AgentRunLog
