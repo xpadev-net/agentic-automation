@@ -8,6 +8,7 @@ import (
 	"agentic-automation/internal/repositories"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -139,14 +140,6 @@ func lockAndTxDB(ctx context.Context, db *gorm.DB, lockName string) (*gorm.DB, f
 	return txDB, release, nil
 }
 
-func seqsOf(logs []*models.AgentRunLog) []int64 {
-	seqs := make([]int64, 0, len(logs))
-	for _, l := range logs {
-		seqs = append(seqs, l.Seq)
-	}
-	return seqs
-}
-
 // LogEntryRequest is one log line in the ingestion batch.
 type LogEntryRequest struct {
 	Seq  int64      `json:"seq" binding:"required,min=1"`
@@ -263,7 +256,33 @@ func HandleAgentRunLogs(c *gin.Context) {
 		entries := make([]LogEntryRequest, len(req.Entries))
 		copy(entries, req.Entries)
 		sort.SliceStable(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
-		minSeq, maxSeq := entries[0].Seq, entries[len(entries)-1].Seq
+		// Deduplicate BEFORE the PEM state replay: a re-posted seq carrying
+		// different text (e.g. an END sentinel where the stored row was a
+		// body line) must not flip masking state for later entries —
+		// storage ignores it, so masking must too. First occurrence wins,
+		// matching the row OnConflict keeps.
+		reqSeqs := make([]int64, len(entries))
+		for i, e := range entries {
+			reqSeqs[i] = e.Seq
+		}
+		existing, err := logRepo.ExistingSeqs(run.ID, reqSeqs)
+		if err != nil {
+			return err
+		}
+		seenReq := make(map[int64]bool, len(entries))
+		fresh := entries[:0]
+		for _, e := range entries {
+			if existing[e.Seq] || seenReq[e.Seq] {
+				continue
+			}
+			seenReq[e.Seq] = true
+			fresh = append(fresh, e)
+		}
+		if len(fresh) == 0 {
+			// Whole batch already stored — idempotent no-op.
+			return nil
+		}
+		minSeq, maxSeq := fresh[0].Seq, fresh[len(fresh)-1].Seq
 		minAttemptBase := (minSeq / seqAttemptStride) * seqAttemptStride
 		var sentinels []models.AgentRunLog
 		if err := tx.Model(&models.AgentRunLog{}).
@@ -277,13 +296,27 @@ func HandleAgentRunLogs(c *gin.Context) {
 		inPEM := false
 		sentIdx := 0
 		lastBase := minAttemptBase
-		logs := make([]*models.AgentRunLog, 0, len(entries))
-		for _, entry := range entries {
+		// Cross-line credential state for raw (non-shipper) posts, mirroring
+		// the shipper: `KEY\nvalue` and unclosed `KEY="...` must mask
+		// continuation lines too. Seeded from the last stored line in this
+		// attempt so a pending key survives a batch boundary.
+		stream := logredact.Stream{}
+		var prev models.AgentRunLog
+		if err := tx.Select("line").
+			Where("agent_run_id = ? AND seq >= ? AND seq < ?", run.ID, minAttemptBase, minSeq).
+			Order("seq DESC").Limit(1).Take(&prev).Error; err == nil {
+			stream.SeedPending(prev.Line)
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		logs := make([]*models.AgentRunLog, 0, len(fresh))
+		for _, entry := range fresh {
 			entryBase := (entry.Seq / seqAttemptStride) * seqAttemptStride
 			if entryBase != lastBase {
 				// Crossing an attempt boundary: a BEGIN left unterminated by
 				// the previous attempt must not mask this attempt's lines.
 				inPEM = false
+				stream = logredact.Stream{}
 				lastBase = entryBase
 			}
 			for sentIdx < len(sentinels) && sentinels[sentIdx].Seq < entry.Seq {
@@ -294,21 +327,30 @@ func HandleAgentRunLogs(c *gin.Context) {
 			}
 			// Redact credentials before anything is persisted or streamed:
 			// agent stderr can leak tokens injected into the runner env.
-			line := logredact.Line(entry.Line)
+			// PEM-body and sentinel lines bypass the credential stream —
+			// they are already fully masked and must not poison its state.
+			var line string
 			switch {
 			case entry.Line == pemBeginSentinel:
 				// Shipper already masked this block — just track state.
 				inPEM = true
+				line = entry.Line
 			case entry.Line == pemEndSentinel:
 				inPEM = false
+				line = entry.Line
 			default:
 				if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
 					inPEM = true
 					line = pemBeginSentinel
 				} else if inPEM {
 					line = redactedLine
+				} else {
+					line = stream.Line(entry.Line)
 				}
-				if strings.Contains(entry.Line, "-----END ") {
+				// Only a PRIVATE KEY end marker closes the block — an
+				// interleaved `-----END CERTIFICATE-----` must not leak
+				// the remaining key body (same fix as the shipper).
+				if strings.Contains(entry.Line, "-----END ") && strings.Contains(entry.Line, "PRIVATE KEY") {
 					if inPEM {
 						line = pemEndSentinel
 					}
@@ -328,11 +370,8 @@ func HandleAgentRunLogs(c *gin.Context) {
 		// OnConflict DoNothing makes re-posted batches idempotent for
 		// storage, but live publication must be limited to rows actually
 		// inserted or a retried batch would fan the same lines out to SSE
-		// subscribers twice.
-		existing, err := logRepo.ExistingSeqs(run.ID, seqsOf(logs))
-		if err != nil {
-			return err
-		}
+		// subscribers twice. `existing` was computed before dedup above and
+		// still guards the race window with a concurrent batch.
 		stored, err = logRepo.CreateBatch(logs)
 		if err != nil {
 			return err
