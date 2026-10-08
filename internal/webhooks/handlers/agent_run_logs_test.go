@@ -704,9 +704,9 @@ func TestGapWithNonAdjacentStoredPredMasks(t *testing.T) {
 	}
 }
 
-// In-batch gap with NO stored predecessor in between keeps the in-memory
-// stream state — masking stays exact for consecutive batch entries.
-func TestInBatchGapKeepsInMemoryState(t *testing.T) {
+// An in-batch gap is itself unknown state (the missing seq may have
+// opened a credential/PEM block) — the entry is masked conservatively.
+func TestInBatchGapMasksAsUnknown(t *testing.T) {
 	db := setupLogTestDB(t)
 	config.SetDBForTesting(db)
 	r := setupLogTestRouter(t)
@@ -733,5 +733,88 @@ func TestInBatchGapKeepsInMemoryState(t *testing.T) {
 	}
 	if l3.Line != "***" {
 		t.Fatalf("in-memory pending lost across gap: %q", l3.Line)
+	}
+}
+
+// Once the state is unknown it stays sticky for the rest of the attempt:
+// later benign-looking lines are masked too, because the missing seq may
+// have opened a quoted value or PEM block that never visibly closes.
+func TestUnknownStateIsStickyWithinAttempt(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	// seq1 missing; seqs 2-4 land as one batch.
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 2, "line": "beta"},
+			{"seq": 3, "line": "gamma"},
+			{"seq": 4, "line": `delta"`},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("batch: %d", w.Code)
+	}
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 3 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	for i, l := range logs {
+		if l.Line != "***" {
+			t.Fatalf("seq %d not masked: %q", i+2, l.Line)
+		}
+		if !strings.HasPrefix(l.RedactState, "u") {
+			t.Fatalf("seq %d state not unknown: %q", i+2, l.RedactState)
+		}
+	}
+
+	// A subsequent batch resuming from a "u" row keeps masking.
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{{"seq": 5, "line": "epsilon"}},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("followup: %d", w.Code)
+	}
+	var l5 models.AgentRunLog
+	if err := db.Where("agent_run_id = ? AND seq = 5", run.ID).First(&l5).Error; err != nil {
+		t.Fatal(err)
+	}
+	if l5.Line != "***" {
+		t.Fatalf("resume from u-row should mask: %q", l5.Line)
+	}
+}
+
+// A new attempt resets the unknown marker — the 1e9 stride boundary
+// starts clean again.
+func TestUnknownStateResetsAtAttemptBoundary(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	if w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 3, "line": "unknown-state line"},
+			{"seq": 1_000_000_001, "line": "new attempt first line"},
+		},
+	}); w.Code != http.StatusOK {
+		t.Fatalf("batch: %d", w.Code)
+	}
+	var l models.AgentRunLog
+	if err := db.Where("agent_run_id = ? AND seq = ?", run.ID, int64(1_000_000_001)).First(&l).Error; err != nil {
+		t.Fatal(err)
+	}
+	if l.Line != "new attempt first line" || l.RedactState != "" {
+		t.Fatalf("attempt 1 must start clean: %q state %q", l.Line, l.RedactState)
 	}
 }

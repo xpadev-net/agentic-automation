@@ -353,3 +353,43 @@ func TestStreamSetStateReplaces(t *testing.T) {
 		t.Fatalf("quote state lingered: %q", got)
 	}
 }
+
+func TestMasksEscapedSingleQuotedValue(t *testing.T) {
+	got := Line(`PASSWORD=\'correct horse battery staple\'`)
+	want := `***`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+func TestUnquotedValueStopsAtEscapedNewline(t *testing.T) {
+	got := Line(`CURSOR_API_KEY=xyz987uvw654\nERROR:ENOENT\nexit_code=1`)
+	want := `***\nERROR:ENOENT\nexit_code=1`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+func TestMasksDoublyEscapedQuotedValueAtDepth(t *testing.T) {
+	got := Line(`PASSWORD=\\\"correct\\\" diagnostic=\\\"failed to load\\\"`)
+	want := `*** diagnostic=\\\"failed to load\\\"`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+func TestStreamPendingIndentedQuotedContinuation(t *testing.T) {
+	s := Stream{}
+	if got := s.Line("PASSWORD="); got != "PASSWORD=" {
+		t.Fatalf("key: %q", got)
+	}
+	if got := s.Line(`  "correct`); got != "***" {
+		t.Fatalf("open: %q", got)
+	}
+	if got := s.Line("horse battery"); got != "***" {
+		t.Fatalf("body: %q", got)
+	}
+	if got := s.Line(`staple" done`); got != "*** done" {
+		t.Fatalf("close: %q", got)
+	}
+}
