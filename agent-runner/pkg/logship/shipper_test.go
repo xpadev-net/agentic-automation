@@ -459,6 +459,35 @@ func TestShipperOverflowTailStillMasksNextLine(t *testing.T) {
 	}
 }
 
+// A `PASSWORD="` in the MIDDLE of the discarded region (not the last
+// bytes) must still open quote tracking — the discarded tail is fed to
+// a shadow stream, not just its tail window.
+func TestShipperOverflowMidFragmentQuoteMasks(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	big := strings.Repeat("x ", 40*1024)
+	fmt.Fprintf(os.Stderr, "%sPASSWORD=\"%s\n", big, strings.Repeat("y", 600))
+	fmt.Fprintf(os.Stderr, "correct horse battery staple\n")
+	s.Close()
+
+	var lines []string
+	for _, b := range c.batches {
+		for _, e := range b {
+			lines = append(lines, e.Line)
+		}
+	}
+	if len(lines) != 2 {
+		t.Fatalf("unexpected lines (count=%d)", len(lines))
+	}
+	if lines[1] == "correct horse battery staple" {
+		t.Fatalf("quoted value continuation leaked: %q", lines[1])
+	}
+}
+
 // A PEM BEGIN marker in the discarded tail must still open masking for
 // following lines until its END marker.
 func TestShipperOverflowTailPEMMarkerStillMasks(t *testing.T) {
