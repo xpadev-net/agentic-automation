@@ -455,3 +455,54 @@ func TestMasksShellConcatenatedQuotedValue(t *testing.T) {
 		t.Fatalf("mixed concat: %q", got)
 	}
 }
+
+// A closed quoted segment followed by an unclosed adjacent segment
+// keeps the value alive across lines — the stream must carry it.
+func TestStreamUnclosedConcatenatedSegment(t *testing.T) {
+	s := &Stream{}
+	if got := s.Line(`PASSWORD='correct'"horse`); got == "" || got == `PASSWORD='correct'"horse` {
+		t.Fatalf("opener not masked: %q", got)
+	}
+	if got := s.Line(`battery staple"`); got != "***" {
+		t.Fatalf("concat continuation unmasked: %q", got)
+	}
+	if s.openQuote != 0 {
+		t.Fatal("stream still open after close")
+	}
+}
+
+// Plain unquoted text after a quoted segment is still the same shell
+// word — `PASSWORD='correct'horsebattery` masks completely.
+func TestMasksUnquotedConcatenatedTail(t *testing.T) {
+	if got := String(`PASSWORD='correct'horsebattery`); got != "***" {
+		t.Fatalf("unquoted tail leaked: %q", got)
+	}
+}
+
+// ANSI-quoted openers ($'...' / $"...") mask like plain quotes.
+func TestMasksANSIQuotedCredential(t *testing.T) {
+	if got := String(`PASSWORD=$'correct horse battery staple'`); got != "***" {
+		t.Fatalf("ANSI $' leaked: %q", got)
+	}
+	if got := String(`SECRET=$"correct horse battery staple"`); got != "***" {
+		t.Fatalf("ANSI $dquote leaked: %q", got)
+	}
+}
+
+// A dangling trailing backslash after a quoted credential must not
+// send shellConcatEnd out of bounds.
+func TestShellConcatTrailingBackslashNoPanic(t *testing.T) {
+	if got := String(`PASSWORD="abcd"\`); got == "" {
+		t.Fatal("empty result")
+	}
+}
+
+// ANSI-quoted pending value: `PASSWORD=` then `$'correct` opens state.
+func TestStreamPendingANSIQuotedValue(t *testing.T) {
+	s := &Stream{}
+	s.Line("PASSWORD=")
+	s.Line("$'correct horse")
+	if got := s.Line("battery staple'"); got != "***" {
+		t.Fatalf("ANSI continuation unmasked: %q", got)
+	}
+}
