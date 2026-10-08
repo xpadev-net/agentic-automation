@@ -1,0 +1,378 @@
+package handlers
+
+import (
+	"agentic-automation/internal/config"
+	"agentic-automation/internal/loghub"
+	"agentic-automation/internal/logredact"
+	"agentic-automation/internal/models"
+	"agentic-automation/internal/repositories"
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/driver/mysql"
+	"gorm.io/gorm"
+)
+
+// Limits for the log ingestion endpoint.
+const (
+	maxLogEntriesPerRequest = 500
+	maxLogLineBytes         = 8192
+	maxLogRequestBodyBytes  = 4 << 20 // 4 MiB
+)
+
+// truncateLineUTF8 cuts a line at maxBytes on a rune boundary and marks it
+// truncated. A raw byte slice could split a multibyte rune and produce
+// invalid UTF-8 that utf8mb4 columns then reject.
+func truncateLineUTF8(line string, maxBytes int) string {
+	cut := maxBytes
+	for cut > 0 && !utf8.ValidString(line[:cut]) {
+		cut--
+	}
+	return line[:cut] + "…[truncated]"
+}
+
+// ingestLocks serializes the check-existing/insert/publish sequence per
+// AgentRun within this process. Without it two overlapping requests
+// carrying the same seqs (e.g. a resend racing the original) could both
+// pass ExistingSeqs before either inserts, and both would publish —
+// OnConflict only dedups storage. Cross-replica serialization uses a MySQL
+// named lock inside the transaction below; this mutex still covers the
+// sqlite path used by tests. Entries are reference-counted so the map does
+// not grow with every historical run id.
+var (
+	ingestLocksMu sync.Mutex
+	ingestLocks   = map[int]*ingestLock{}
+)
+
+type ingestLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// acquireIngestLock takes the per-run mutex and returns the release
+// function; the map entry is dropped once the last holder releases.
+func acquireIngestLock(runID int) func() {
+	ingestLocksMu.Lock()
+	l := ingestLocks[runID]
+	if l == nil {
+		l = &ingestLock{}
+		ingestLocks[runID] = l
+	}
+	l.refs++
+	ingestLocksMu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		ingestLocksMu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(ingestLocks, runID)
+		}
+		ingestLocksMu.Unlock()
+	}
+}
+
+func ingestLockName(runID int) string {
+	return fmt.Sprintf("agentic:log-ingest:%d", runID)
+}
+
+// Stored sentinel lines marking the edges of a masked private-key block,
+// distinct from the body mask. Masking state survives across ingestion
+// batches because these lines are persisted; the shipper emits the same
+// sentinels for blocks it masked itself.
+const (
+	pemBeginSentinel = "[REDACTED PRIVATE KEY BEGIN]"
+	pemEndSentinel   = "[REDACTED PRIVATE KEY END]"
+	redactedLine     = "[REDACTED]"
+)
+
+// seqAttemptStride mirrors the shipper's per-attempt seq partitioning
+// (attempt n emits seqs starting at n*stride+1), so stored boundaries
+// from an earlier attempt must not seed this attempt's masking state.
+const seqAttemptStride = int64(1_000_000_000)
+
+// lockAndTxDB acquires the MySQL named lock on a dedicated connection and
+// returns a *gorm.DB bound to that same physical connection, so callers
+// can run a gorm Transaction while the lock is held — and released only
+// after commit. release() must be called once the transaction returns; it
+// runs on context.Background() because the request context may be done.
+func lockAndTxDB(ctx context.Context, db *gorm.DB, lockName string) (*gorm.DB, func(), error) {
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, nil, err
+	}
+	lockConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var got sql.NullInt64
+	if err := lockConn.QueryRowContext(ctx,
+		"SELECT GET_LOCK(?, ?)", lockName, 10).Scan(&got); err != nil || !got.Valid || got.Int64 != 1 {
+		_ = lockConn.Close()
+		if err == nil {
+			err = fmt.Errorf("not granted")
+		}
+		return nil, nil, err
+	}
+	release := func() {
+		_, _ = lockConn.ExecContext(context.Background(),
+			"SELECT RELEASE_LOCK(?)", lockName)
+		_ = lockConn.Close()
+	}
+	txDB, err := gorm.Open(mysql.New(mysql.Config{Conn: lockConn}), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	})
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	return txDB, release, nil
+}
+
+func seqsOf(logs []*models.AgentRunLog) []int64 {
+	seqs := make([]int64, 0, len(logs))
+	for _, l := range logs {
+		seqs = append(seqs, l.Seq)
+	}
+	return seqs
+}
+
+// LogEntryRequest is one log line in the ingestion batch.
+type LogEntryRequest struct {
+	Seq  int64      `json:"seq" binding:"required,min=1"`
+	TS   *time.Time `json:"ts,omitempty"`
+	Line string     `json:"line"`
+}
+
+// AgentRunLogsRequest is the request body of POST /api/agent-runs/:id/logs.
+type AgentRunLogsRequest struct {
+	Entries []LogEntryRequest `json:"entries" binding:"required,min=1,dive"`
+}
+
+// HandleAgentRunLogs ingests batched log lines from an agent-runner pod.
+// Bearer-authenticated like the report endpoint; entries are stored
+// idempotently on (agent_run_id, seq) and published to the live log hub.
+func HandleAgentRunLogs(c *gin.Context) {
+	logger := config.GetLogger()
+
+	runID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || runID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_AGENT_RUN_ID",
+			"message": "agent run id must be a positive integer",
+		})
+		return
+	}
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxLogRequestBodyBytes)
+	var req AgentRunLogsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "request body must be JSON with a non-empty entries array",
+		})
+		return
+	}
+	if len(req.Entries) > maxLogEntriesPerRequest {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "TOO_MANY_ENTRIES",
+			"message": "entries exceeds the per-request maximum",
+		})
+		return
+	}
+
+	db := config.GetDB()
+	runRepo := repositories.NewAgentRunRepository(db)
+	run, err := runRepo.GetByID(runID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":   "AGENT_RUN_NOT_FOUND",
+				"message": "agent run not found",
+			})
+			return
+		}
+		logger.Error("Failed to load agent run for log ingestion",
+			config.Int("agent_run_id", runID), config.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "failed to load agent run",
+		})
+		return
+	}
+
+	// Serialize check + insert + publish-decision per run so publication is
+	// atomic with the insert: a concurrent same-seq request waits, then sees
+	// the rows the first request stored. On MySQL a named lock serializes
+	// across operator replicas; it is taken on a dedicated connection held
+	// until AFTER the transaction commits (releasing inside the callback
+	// would reopen the cross-replica race just before rows become visible).
+	// The process-local mutex covers the sqlite path used by tests.
+	unlock := acquireIngestLock(run.ID)
+	defer unlock()
+
+	lockName := ingestLockName(run.ID)
+	// txDB carries the transaction below. On MySQL the named lock must be
+	// held through commit, so the lock and the transaction run on ONE
+	// dedicated connection (wrapped as a gorm.DB bound to that conn).
+	// Holding one pooled conn while Transaction() waits for a second would
+	// deadlock once every pool slot is taken by a lock-holder.
+	txDB := db
+	if db.Dialector.Name() == "mysql" {
+		var lerr error
+		var release func()
+		txDB, release, lerr = lockAndTxDB(c.Request.Context(), db, lockName)
+		if lerr != nil {
+			logger.Error("Failed to acquire ingest lock",
+				config.Int("agent_run_id", runID), config.Error(lerr))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "INTERNAL_ERROR",
+				"message": "failed to store logs",
+			})
+			return
+		}
+		// release() frees the lock AFTER txDB.Transaction has committed
+		// (defer order) and on Background: the request context may be done.
+		defer release()
+	}
+
+	var stored int
+	var toPublish []loghub.Event
+	err = txDB.Transaction(func(tx *gorm.DB) error {
+		logRepo := repositories.NewAgentRunLogRepository(tx)
+		// A PEM value split across entries (GITHUB_PRIVATE_KEY=-----BEGIN...
+		// on the first line, base64 body after) defeats per-line patterns,
+		// so mask every line between BEGIN and END like the shipper does.
+		// Masking state must survive the request — a block spanning two
+		// POSTs would otherwise resume unmasked — so it replays the stored
+		// BEGIN/END sentinels preceding each entry. Replaying per entry
+		// (not once at min(seq)) handles overlapping batches: a duplicate
+		// low seq followed by new higher seqs would otherwise miss a
+		// stored BEGIN between them. Doing it inside the lock/transaction
+		// keeps a racing earlier batch's BEGIN visible here.
+		entries := make([]LogEntryRequest, len(req.Entries))
+		copy(entries, req.Entries)
+		sort.SliceStable(entries, func(i, j int) bool { return entries[i].Seq < entries[j].Seq })
+		minSeq, maxSeq := entries[0].Seq, entries[len(entries)-1].Seq
+		minAttemptBase := (minSeq / seqAttemptStride) * seqAttemptStride
+		var sentinels []models.AgentRunLog
+		if err := tx.Model(&models.AgentRunLog{}).
+			Select("seq", "line").
+			Where("agent_run_id = ? AND seq >= ? AND seq <= ? AND (line = ? OR line = ?)",
+				run.ID, minAttemptBase, maxSeq, pemBeginSentinel, pemEndSentinel).
+			Order("seq").
+			Scan(&sentinels).Error; err != nil {
+			return err
+		}
+		inPEM := false
+		sentIdx := 0
+		lastBase := minAttemptBase
+		logs := make([]*models.AgentRunLog, 0, len(entries))
+		for _, entry := range entries {
+			entryBase := (entry.Seq / seqAttemptStride) * seqAttemptStride
+			if entryBase != lastBase {
+				// Crossing an attempt boundary: a BEGIN left unterminated by
+				// the previous attempt must not mask this attempt's lines.
+				inPEM = false
+				lastBase = entryBase
+			}
+			for sentIdx < len(sentinels) && sentinels[sentIdx].Seq < entry.Seq {
+				if sentinels[sentIdx].Seq >= entryBase {
+					inPEM = sentinels[sentIdx].Line == pemBeginSentinel
+				}
+				sentIdx++
+			}
+			// Redact credentials before anything is persisted or streamed:
+			// agent stderr can leak tokens injected into the runner env.
+			line := logredact.Line(entry.Line)
+			switch {
+			case entry.Line == pemBeginSentinel:
+				// Shipper already masked this block — just track state.
+				inPEM = true
+			case entry.Line == pemEndSentinel:
+				inPEM = false
+			default:
+				if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
+					inPEM = true
+					line = pemBeginSentinel
+				} else if inPEM {
+					line = redactedLine
+				}
+				if strings.Contains(entry.Line, "-----END ") {
+					if inPEM {
+						line = pemEndSentinel
+					}
+					inPEM = false
+				}
+			}
+			if len(line) > maxLogLineBytes {
+				line = truncateLineUTF8(line, maxLogLineBytes)
+			}
+			logs = append(logs, &models.AgentRunLog{
+				AgentRunID: run.ID,
+				Seq:        entry.Seq,
+				TS:         entry.TS,
+				Line:       line,
+			})
+		}
+		// OnConflict DoNothing makes re-posted batches idempotent for
+		// storage, but live publication must be limited to rows actually
+		// inserted or a retried batch would fan the same lines out to SSE
+		// subscribers twice.
+		existing, err := logRepo.ExistingSeqs(run.ID, seqsOf(logs))
+		if err != nil {
+			return err
+		}
+		stored, err = logRepo.CreateBatch(logs)
+		if err != nil {
+			return err
+		}
+		seen := make(map[int64]bool, len(logs))
+		for _, l := range logs {
+			if existing[l.Seq] || seen[l.Seq] {
+				continue
+			}
+			seen[l.Seq] = true
+			toPublish = append(toPublish, loghub.Event{
+				AgentRunID: l.AgentRunID,
+				Seq:        l.Seq,
+				TS:         l.TS,
+				Line:       l.Line,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		logger.Error("Failed to store agent run logs",
+			config.Int("agent_run_id", runID), config.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "INTERNAL_ERROR",
+			"message": "failed to store logs",
+		})
+		return
+	}
+
+	// Publish while still holding the per-run mutex so events reach
+	// subscribers in request order; the decision itself was made atomically
+	// under the DB lock.
+	for _, ev := range toPublish {
+		loghub.Publish(ev)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "logs ingested",
+		"agent_run_id": runID,
+		"received":     len(req.Entries),
+		"stored":       stored,
+	})
+}
