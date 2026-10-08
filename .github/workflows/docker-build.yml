@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-and-push-images:
     name: Build and Push ${{ matrix.component.name }}
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -38,8 +38,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: kubernetes
 
       - name: Set owner and image metadata
         id: meta
@@ -70,5 +68,5 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
             BUILT_AT=${{ steps.meta.outputs.BUILT_AT }}
-          # cache-from: type=gha,scope=${{ matrix.component.name }}
-          # cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}
+          cache-from: type=gha,scope=${{ matrix.component.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component.name }}

@@ -14,7 +14,7 @@ jobs:
   # 依存関係チェック
   deps:
     name: Dependencies Check
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,23 +23,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.9'
-          cache: false
-
-      - name: Cache Go modules (MinIO)
-        uses: tespkg/actions-cache@v1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.MINIO_REGION }}
-        with:
-          endpoint: ${{ secrets.MINIO_ENDPOINT }}
-          port: ${{ secrets.MINIO_PORT }}
-          bucket: ${{ secrets.MINIO_BUCKET }}
-          use-fallback: false
-          insecure: true
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          path: |
-            ~/go/pkg/mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent-runner/go.sum
 
       - name: Download dependencies
         run: go mod download
@@ -57,7 +44,7 @@ jobs:
 
   deps-agent-runner:
     name: Dependencies Check (agent-runner)
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -66,23 +53,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.9'
-          cache: false
-
-      - name: Cache Go modules (MinIO)
-        uses: tespkg/actions-cache@v1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.MINIO_REGION }}
-        with:
-          endpoint: ${{ secrets.MINIO_ENDPOINT }}
-          port: ${{ secrets.MINIO_PORT }}
-          bucket: ${{ secrets.MINIO_BUCKET }}
-          use-fallback: false
-          insecure: true
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          path: |
-            ~/go/pkg/mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent-runner/go.sum
 
       - name: Download dependencies (agent-runner)
         working-directory: agent-runner
@@ -104,7 +78,7 @@ jobs:
   # フォーマットチェック
   fmt:
     name: Format Check
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -113,7 +87,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.9'
-          cache: false
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent-runner/go.sum
 
       - name: Check formatting
         run: |
@@ -126,7 +103,7 @@ jobs:
   # リント
   vet:
     name: Lint
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -135,23 +112,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.9'
-          cache: false
-
-      - name: Cache Go modules (MinIO)
-        uses: tespkg/actions-cache@v1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.MINIO_REGION }}
-        with:
-          endpoint: ${{ secrets.MINIO_ENDPOINT }}
-          port: ${{ secrets.MINIO_PORT }}
-          bucket: ${{ secrets.MINIO_BUCKET }}
-          use-fallback: false
-          insecure: true
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          path: |
-            ~/go/pkg/mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent-runner/go.sum
 
       - name: Download dependencies
         run: go mod download
@@ -162,7 +126,7 @@ jobs:
   # テスト実行
   test:
     name: Test
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -171,23 +135,10 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.9'
-          cache: false
-
-      - name: Cache Go modules (MinIO)
-        uses: tespkg/actions-cache@v1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.MINIO_REGION }}
-        with:
-          endpoint: ${{ secrets.MINIO_ENDPOINT }}
-          port: ${{ secrets.MINIO_PORT }}
-          bucket: ${{ secrets.MINIO_BUCKET }}
-          use-fallback: false
-          insecure: true
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          path: |
-            ~/go/pkg/mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent-runner/go.sum
 
       - name: Install build dependencies (for CGO)
         run: |
@@ -211,7 +162,7 @@ jobs:
   # ビルド検証
   build:
     name: Build
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -220,24 +171,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.9'
-          cache: false
+          cache: true
+          cache-dependency-path: |
+            go.sum
+            agent-runner/go.sum
   
-      - name: Cache Go modules (MinIO)
-        uses: tespkg/actions-cache@v1
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.MINIO_REGION }}
-        with:
-          endpoint: ${{ secrets.MINIO_ENDPOINT }}
-          port: ${{ secrets.MINIO_PORT }}
-          bucket: ${{ secrets.MINIO_BUCKET }}
-          use-fallback: false
-          insecure: true
-          key: go-modules-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
-          path: |
-            ~/go/pkg/mod
-
       - name: Download dependencies
         run: go mod download
 

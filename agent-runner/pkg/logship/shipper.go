@@ -189,24 +189,39 @@ func (s *Shipper) readLoop() {
 	// lines that no per-line pattern can identify reliably, so mask
 	// everything between the BEGIN/END markers.
 	inPEM := false
+	// Cross-line credential state: `KEY\nvalue` and `KEY="...` fragments
+	// span line boundaries, so masking is a Stream, not a per-line call.
+	cred := redact.Stream{}
 	emit := func() {
 		s.seq++
 		raw := string(lineBuf)
 		// Redact credentials before queueing for shipment: agent stderr
 		// can echo secrets from the runner env and these lines are
 		// persisted + streamed to the WebUI.
-		line := truncateShipLine(redact.String(raw))
 		// The BEGIN marker may sit behind an assignment prefix
 		// (GITHUB_PRIVATE_KEY=-----BEGIN RSA...), so match Contains, not
 		// just a line prefix. BEGIN/END emit distinct sentinel lines so the
 		// ingestion side can tell where a masked block starts and ends.
-		if strings.Contains(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY") {
+		// PEM-body lines bypass the credential stream — they are already
+		// fully masked and must not poison its cross-line state.
+		hasBegin := strings.Contains(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY")
+		hasEnd := strings.Contains(raw, "-----END ") && strings.Contains(raw, "PRIVATE KEY")
+		var line string
+		switch {
+		case hasBegin:
 			inPEM = true
 			line = pemBeginSentinel
-		} else if inPEM {
+		case inPEM:
 			line = redactedLine
+		default:
+			// Redact credentials before queueing for shipment: agent stderr
+			// can echo secrets from the runner env and these lines are
+			// persisted + streamed to the WebUI.
+			line = truncateShipLine(cred.Line(raw))
 		}
-		if strings.Contains(raw, "-----END ") {
+		// Only a PRIVATE KEY end marker closes the block — an interleaved
+		// `-----END CERTIFICATE-----` must not leak the remaining body.
+		if hasEnd {
 			if inPEM {
 				line = pemEndSentinel
 			}
