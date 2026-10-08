@@ -174,3 +174,62 @@ func TestLineMasksBearerAndModernKeys(t *testing.T) {
 		}
 	}
 }
+
+// The escaped-quote alternative must stop at the matching \" delimiter:
+// eating it as an interior escape ran on to the next plain quote and
+// swallowed unrelated JSON diagnostics.
+func TestLineStopsEscapedQuoteAtDelimiter(t *testing.T) {
+	in := `{"output":"PASSWORD=\"correct horse\"\nfailed to load configuration"}`
+	got := Line(in)
+	if strings.Contains(got, "correct horse") {
+		t.Fatalf("secret leaked: %q", got)
+	}
+	if !strings.Contains(got, "failed to load configuration") {
+		t.Fatalf("trailing diagnostics swallowed: %q", got)
+	}
+}
+
+// Doubly-encoded JSON triples the quote escapes; the whole secret must
+// still mask rather than falling back to the unquoted run.
+func TestLineMasksMultiplyEscapedQuotedCredential(t *testing.T) {
+	for _, in := range []string{
+		`PASSWORD=\\\"correct horse battery staple\\\"`,
+		`{"API_KEY":\\\"multi word secret\\\"}`,
+	} {
+		got := Line(in)
+		for _, frag := range []string{"horse", "battery", "word secret"} {
+			if strings.Contains(got, frag) {
+				t.Fatalf("multiply-escaped secret leaked: %q -> %q", in, got)
+			}
+		}
+	}
+}
+
+func TestStreamMasksValueOnNextLine(t *testing.T) {
+	var s Stream
+	if got := s.Line("CURSOR_API_KEY"); got != "CURSOR_API_KEY" {
+		t.Fatalf("bare key line changed: %q", got)
+	}
+	if got := s.Line("xyz987uvw654"); got != "***" {
+		t.Fatalf("continuation value not masked: %q", got)
+	}
+	if got := s.Line("following line"); got != "following line" {
+		t.Fatalf("state leaked past one line: %q", got)
+	}
+}
+
+func TestStreamMasksMultilineQuotedValue(t *testing.T) {
+	var s Stream
+	if got := s.Line(`PASSWORD="correct`); got != "PASSWORD=***" {
+		t.Fatalf("open fragment not masked: %q", got)
+	}
+	if got := s.Line(`horse battery`); got != "***" {
+		t.Fatalf("interior line not masked: %q", got)
+	}
+	if got := s.Line(`staple" trailing`); got != "*** trailing" {
+		t.Fatalf("closing line: want suffix kept, got %q", got)
+	}
+	if got := s.Line("clean"); got != "clean" {
+		t.Fatalf("state leaked past close: %q", got)
+	}
+}
