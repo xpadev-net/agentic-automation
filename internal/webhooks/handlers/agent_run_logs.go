@@ -8,6 +8,7 @@ import (
 	"agentic-automation/internal/repositories"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -295,6 +296,19 @@ func HandleAgentRunLogs(c *gin.Context) {
 		inPEM := false
 		sentIdx := 0
 		lastBase := minAttemptBase
+		// Cross-line credential state for raw (non-shipper) posts, mirroring
+		// the shipper: `KEY\nvalue` and unclosed `KEY="...` must mask
+		// continuation lines too. Seeded from the last stored line in this
+		// attempt so a pending key survives a batch boundary.
+		stream := logredact.Stream{}
+		var prev models.AgentRunLog
+		if err := tx.Select("line").
+			Where("agent_run_id = ? AND seq >= ? AND seq < ?", run.ID, minAttemptBase, minSeq).
+			Order("seq DESC").Limit(1).Take(&prev).Error; err == nil {
+			stream.SeedPending(prev.Line)
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 		logs := make([]*models.AgentRunLog, 0, len(fresh))
 		for _, entry := range fresh {
 			entryBase := (entry.Seq / seqAttemptStride) * seqAttemptStride
@@ -302,6 +316,7 @@ func HandleAgentRunLogs(c *gin.Context) {
 				// Crossing an attempt boundary: a BEGIN left unterminated by
 				// the previous attempt must not mask this attempt's lines.
 				inPEM = false
+				stream = logredact.Stream{}
 				lastBase = entryBase
 			}
 			for sentIdx < len(sentinels) && sentinels[sentIdx].Seq < entry.Seq {
@@ -312,21 +327,30 @@ func HandleAgentRunLogs(c *gin.Context) {
 			}
 			// Redact credentials before anything is persisted or streamed:
 			// agent stderr can leak tokens injected into the runner env.
-			line := logredact.Line(entry.Line)
+			// PEM-body and sentinel lines bypass the credential stream —
+			// they are already fully masked and must not poison its state.
+			var line string
 			switch {
 			case entry.Line == pemBeginSentinel:
 				// Shipper already masked this block — just track state.
 				inPEM = true
+				line = entry.Line
 			case entry.Line == pemEndSentinel:
 				inPEM = false
+				line = entry.Line
 			default:
 				if strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY") {
 					inPEM = true
 					line = pemBeginSentinel
 				} else if inPEM {
 					line = redactedLine
+				} else {
+					line = stream.Line(entry.Line)
 				}
-				if strings.Contains(entry.Line, "-----END ") {
+				// Only a PRIVATE KEY end marker closes the block — an
+				// interleaved `-----END CERTIFICATE-----` must not leak
+				// the remaining key body (same fix as the shipper).
+				if strings.Contains(entry.Line, "-----END ") && strings.Contains(entry.Line, "PRIVATE KEY") {
 					if inPEM {
 						line = pemEndSentinel
 					}

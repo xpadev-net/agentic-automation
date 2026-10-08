@@ -530,3 +530,93 @@ func TestIngestLogsDuplicateEntryCannotAlterPEMState(t *testing.T) {
 			logs[2].Seq, logs[2].Line)
 	}
 }
+
+// A `-----END CERTIFICATE-----` line interleaved inside an open
+// private-key block must not close masking — remaining body stays
+// redacted and is never the stored end sentinel.
+func TestIngestLogsCertificateEndDoesNotClosePEM(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----"},
+			{"seq": 2, "line": "-----END CERTIFICATE-----"},
+			{"seq": 3, "line": "shortkeyfrag"},
+			{"seq": 4, "line": "-----END RSA PRIVATE KEY-----"},
+			{"seq": 5, "line": "done"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 5 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	want := []string{
+		"[REDACTED PRIVATE KEY BEGIN]",
+		"[REDACTED]",
+		"[REDACTED]",
+		"[REDACTED PRIVATE KEY END]",
+		"done",
+	}
+	for i, l := range logs {
+		if l.Line != want[i] {
+			t.Fatalf("seq %d: want %q got %q", i+1, want[i], l.Line)
+		}
+	}
+}
+
+// A stored line ending at a bare credential key primes pending state for
+// the next batch: its first line is the value and must be masked.
+func TestIngestLogsPendingCredentialAcrossBatches(t *testing.T) {
+	db := setupLogTestDB(t)
+	config.SetDBForTesting(db)
+	r := setupLogTestRouter(t)
+
+	run := &models.AgentRun{IssueID: 1, State: "started"}
+	if err := db.Create(run).Error; err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	path := "/api/agent-runs/" + itoa(run.ID) + "/logs"
+
+	w := postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 1, "line": "CURSOR_API_KEY"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch1: expected 200, got %d", w.Code)
+	}
+	w = postLogs(t, r, path, map[string]any{
+		"entries": []map[string]any{
+			{"seq": 2, "line": "xyz987uvw654"},
+			{"seq": 3, "line": "after"},
+		},
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch2: expected 200, got %d", w.Code)
+	}
+
+	repo := repositories.NewAgentRunLogRepository(db)
+	logs, err := repo.GetAfterSeq(run.ID, 0, 10)
+	if err != nil || len(logs) != 3 {
+		t.Fatalf("get logs: %v len=%d", err, len(logs))
+	}
+	if logs[1].Line != "***" {
+		t.Fatalf("pending value not masked: %q", logs[1].Line)
+	}
+	if logs[2].Line != "after" {
+		t.Fatalf("state leaked past one line: %q", logs[2].Line)
+	}
+}
