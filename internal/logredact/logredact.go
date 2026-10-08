@@ -1,0 +1,414 @@
+// Package logredact masks credentials in ingested runner logs before they
+// are persisted and published to the WebUI. Pattern list mirrors
+// agent-runner/pkg/redact; the separate operator module keeps its own copy
+// so third-party shippers get the same protection.
+//
+// Line is per-line: BEGIN/END marker lines are rewritten to the shared
+// sentinel rows so the ingest handler can replay PEM state across stored
+// entries and mask the body lines in between (including short or
+// prefixed ones this per-line view cannot see).
+package logredact
+
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+var patterns = []*regexp.Regexp{
+	// GitHub tokens — open-ended so a longer token (e.g. refresh tokens)
+	// can't leak its tail through a fixed-width prefix match.
+	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{36,}`),
+	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),
+	// sk- keys — the modern variable-length class covers the legacy
+	// 48-char form too, so no fixed-width prefix can match first and
+	// leave a longer key's tail exposed.
+	regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`),
+	// Bearer authorization headers — agent output can echo the runner's
+	// OPERATOR_API_TOKEN or GitHub tokens inside HTTP traces.
+	regexp.MustCompile(`(?i)bearer[\s:=+]+[A-Za-z0-9._~+/-]{8,}`),
+	// Credential-looking NAME assignments (NAME=value / NAME: value /
+	// "NAME": "value" / NAME value): covers every secret injected into
+	// runner jobs — OPERATOR_API_TOKEN, S3_SECRET_ACCESS_KEY,
+	// GITHUB_PRIVATE_KEY, ANTHROPIC_API_KEY, NPM_TOKEN, ...
+	// The name must END at a keyword boundary (\b) so usage counters
+	// like "input_tokens": 12345 or "max_tokens": 8192 survive; the
+	// separator accepts =, :, or any whitespace (tabs/newlines
+	// included), plus whitespace AFTER it before the value starts
+	// (`KEY= "v"`, `{"KEY": "v"}`). Quoted values — plain and
+	// backslash-escaped at any encoding depth — are handled by
+	// maskQuotedSpans BEFORE this pattern runs, so only the unquoted
+	// alternative lives here. It takes a run of >=4 chars so prose like
+	// "token: is required" does not match, and stops at a JSONL-escaped
+	// `\n`/`\r`/`\t` boundary so `KEY=v\nERROR:ENOENT` masks the value
+	// without eating the following diagnostics.
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*["'\\]*(?:[^\\"'\s]|\\[^nrt]){4,}`),
+}
+
+// pemComplete collapses an entire PEM block — JSONL escaped-newline
+// single-line form and real multiline blocks alike ([^-] spans newlines
+// because PEM base64 never contains '-'). Runs before the line pass so
+// well-formed blocks never reach the BEGIN/END sentinel logic.
+var pemComplete = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[^-]*-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+
+var (
+	pemBeginMarker = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+	pemEndMarker   = regexp.MustCompile(`-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+)
+
+// Sentinel lines shared with the shipper and the ingest handler: a stored
+// row equal to one of these marks the boundary of a masked PEM range, so
+// server-side replay can keep masking body lines (including short or
+// prefixed ones) that Line() alone cannot see across calls.
+const (
+	PEMBeginSentinel = "[REDACTED PRIVATE KEY BEGIN]"
+	PEMEndSentinel   = "[REDACTED PRIVATE KEY END]"
+	RedactedLine     = "[REDACTED]"
+)
+
+// base64Run matches PEM body material inside a line: a >=60-char run of
+// base64 characters delimited by non-base64 characters or line edges.
+var base64Run = regexp.MustCompile(`(?m)(^|[^A-Za-z0-9+/])[A-Za-z0-9+/]{60,}={0,2}($|[^A-Za-z0-9+/=])`)
+
+// scrubPEMBlocks walks the text line by line, tracking PEM state. A line
+// containing a BEGIN marker becomes PEMBeginSentinel, every line inside
+// the block becomes RedactedLine, and the closing marker becomes
+// PEMEndSentinel. Whole-line replacement keeps stored rows identical to
+// the shipper's sentinels, letting the ingest-side state replay recognize
+// them. An unterminated BEGIN masks to the end of the input (fail closed).
+func scrubPEMBlocks(s string) string {
+	if !strings.Contains(s, "PRIVATE KEY-----") {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	inPEM := false
+	for i, ln := range lines {
+		hasBegin := pemBeginMarker.MatchString(ln)
+		hasEnd := pemEndMarker.MatchString(ln)
+		switch {
+		case hasBegin && hasEnd:
+			// A complete block on one line that pemComplete could not
+			// collapse — mask the whole line and do not leak state.
+			lines[i] = "***"
+			inPEM = false
+		case hasBegin:
+			lines[i] = PEMBeginSentinel
+			inPEM = true
+		case hasEnd:
+			lines[i] = PEMEndSentinel
+			inPEM = false
+		case inPEM:
+			lines[i] = RedactedLine
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// scrubBase64Runs masks >=60-char base64 runs. Replacement runs to a
+// fixpoint because a match consumes the shared delimiter that the next
+// adjacent run needs as its leading boundary.
+func scrubBase64Runs(s string) string {
+	for {
+		next := base64Run.ReplaceAllString(s, "${1}***${2}")
+		if next == s {
+			return s
+		}
+		s = next
+	}
+}
+
+// Line returns s with known credential patterns replaced by *** (or the
+// shared sentinel rows for PEM boundary lines).
+func Line(s string) string {
+	s = pemComplete.ReplaceAllString(s, "***")
+	s = scrubPEMBlocks(s)
+	s = maskQuotedSpans(s)
+	for _, re := range patterns {
+		s = re.ReplaceAllString(s, "***")
+	}
+	return scrubBase64Runs(s)
+}
+
+// maskQuotedSpans masks every `KEY <sep> <quote>...` value whose quote
+// structure indexCloseQuote can resolve — plain and backslash-escaped
+// alike, at whatever encoding depth the opener used (`\"` closes under
+// a `\"` opener, `\\\"` under `\\\"`). This replaces the pattern's
+// quoted alternatives, which couldn't express "close at the opener's
+// depth" and therefore either over-consumed (a deeper-encoded `\\{2,}"`
+// interior also ate the delimiter and trailing diagnostics) or missed
+// escaped single quotes entirely. An unterminated quote fails closed:
+// the tail from the key's separator on becomes `***`. Matches are
+// replaced right-to-left so earlier positions stay valid.
+// (Mirrors agent-runner/pkg/redact.maskQuotedSpans.)
+func maskQuotedSpans(s string) string {
+	locs := credKeyOpenQuote.FindAllStringSubmatchIndex(s, -1)
+	for i := len(locs) - 1; i >= 0; i-- {
+		loc := locs[i]
+		qEnd := loc[3]           // index just after the opening quote char
+		esc := qEnd - 1 - loc[2] // backslash run before that quote
+		if s[qEnd-2] == '$' {
+			esc-- // ANSI opener sits between backslashes and quote
+		}
+		if j := indexCloseQuote(s[qEnd:], s[qEnd-1], esc); j >= 0 {
+			end, _ := shellConcatEnd(s, qEnd+j+1)
+			s = s[:loc[0]] + "***" + s[end:]
+		} else {
+			s = s[:loc[2]] + "***"
+		}
+	}
+	return s
+}
+
+// credKeyTail matches a line that ENDS at a credential keyword plus
+// trailing separators — `CURSOR_API_KEY` alone, `KEY=`, `"KEY":`. The
+// assignment pattern's separator class includes newline, so in multiline
+// Line() `KEY\nvalue` masks both lines; line-by-line callers must carry
+// the same state, which is what Stream does.
+var credKeyTail = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"':=\s]*$`)
+
+// credKeyOpenQuote matches `KEY <sep> <quote>` where the value opens a
+// quote; when no matching close exists on the same line the secret runs
+// into following lines.
+var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(\\*\$?["'])`)
+
+// contQuote matches a line that STARTS a quoted value — the line after a
+// bare `KEY`/`KEY=`. Leading whitespace (a log indent) is skipped;
+// leading backslashes make it the escaped form.
+var contQuote = regexp.MustCompile(`^[ \t]*(\\*)(\$?)(["'])`)
+
+// Stream carries credential state across consecutive lines fed through
+// Line: a bare `KEY` (or `KEY=`) masks the NEXT line entirely, and a
+// `KEY="...` value left unclosed masks through the line that closes it.
+// Mirrors agent-runner/pkg/redact.Stream; PEM sentinels are tracked
+// separately (they survive as their own stored lines).
+type Stream struct {
+	pendingValue bool // previous line ended at a bare credential key
+	openQuote    byte // '"' or '\'' — quote of an unclosed KEY= value; 0 = none
+	openEscCount int  // backslashes before the open quote (0 = plain)
+}
+
+// SeedPending primes cross-line state from a previously processed line:
+// a bare credential key there means the next line continues its value.
+// (An open quote can't be recovered — its lines were masked to "***" —
+// so only the pending-key case can resume; persisted rows carry the full
+// State() instead.)
+func (s *Stream) SeedPending(prev string) {
+	if credKeyTail.MatchString(prev) {
+		s.pendingValue = true
+	}
+}
+
+// State encodes the live cross-line state so a caller can persist it per
+// stored row and restore it exactly in a later batch. "p" = pending
+// value, "q<quote>:<esc>" = open quote; combined as "p;q34:1" when both
+// hold. "" = idle.
+func (s *Stream) State() string {
+	var st string
+	if s.pendingValue {
+		st = "p"
+	}
+	if s.openQuote != 0 {
+		if st != "" {
+			st += ";"
+		}
+		st += fmt.Sprintf("q%d:%d", s.openQuote, s.openEscCount)
+	}
+	return st
+}
+
+// SetState restores a State() encoding; unknown input leaves the stream
+// idle (fail open is fine — the stored lines themselves were masked).
+func (s *Stream) SetState(st string) {
+	// A snapshot replaces the whole state — reset first so fields absent
+	// from it don't linger from a previous stream position.
+	s.pendingValue = false
+	s.openQuote = 0
+	s.openEscCount = 0
+	for _, part := range strings.Split(st, ";") {
+		if part == "p" {
+			s.pendingValue = true
+			continue
+		}
+		if strings.HasPrefix(part, "q") {
+			var q, esc int
+			if n, _ := fmt.Sscanf(part[1:], "%d:%d", &q, &esc); n == 2 && q > 0 && q < 256 {
+				s.openQuote = byte(q)
+				s.openEscCount = esc
+			}
+		}
+	}
+}
+
+// Line redacts one line like the package-level Line, plus cross-line
+// credential state. Pass lines in stream order.
+func (s *Stream) Line(raw string) string {
+	if s.openQuote != 0 {
+		if i := indexCloseQuote(raw, s.openQuote, s.openEscCount); i >= 0 {
+			s.openQuote = 0
+			s.openEscCount = 0
+			// Shell concatenation can extend the value past this close;
+			// if the last segment never closes, keep masking.
+			end, uq := shellConcatEnd(raw, i+1)
+			if uq != 0 {
+				s.openQuote = uq
+				s.openEscCount = 0
+				return "***"
+			}
+			// The retained suffix can hold further credentials — even a
+			// new unclosed value — so run it through the same path.
+			return "***" + s.Line(raw[end:])
+		}
+		return "***"
+	}
+	if s.pendingValue {
+		s.pendingValue = false
+		// The pending value may itself open a quoted string spanning
+		// further lines (`PASSWORD=` then `"correct` … `staple"`), and a
+		// line not starting with the quote can still carry a further
+		// credential opener (`abcd PASSWORD="correct`) — inspect both.
+		rest := raw
+		if loc := contQuote.FindStringSubmatchIndex(rest); loc != nil {
+			esc := loc[3] - loc[2]
+			if j := indexCloseQuote(rest[loc[7]:], rest[loc[6]], esc); j < 0 {
+				s.openQuote = rest[loc[6]]
+				s.openEscCount = esc
+				return "***"
+			} else {
+				end, uq := shellConcatEnd(rest, loc[7]+j+1)
+				if uq != 0 {
+					s.openQuote = uq
+					s.openEscCount = 0
+					return "***"
+				}
+				rest = rest[end:]
+			}
+		}
+		// Any further credential opener on the rest of the line keeps
+		// its continuation state — `abcd PASSWORD="x` must still mask
+		// the following lines.
+		for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(rest, -1) {
+			qEnd := loc[3]
+			esc := qEnd - 1 - loc[2]
+			if rest[qEnd-2] == '$' {
+				esc--
+			}
+			j := indexCloseQuote(rest[qEnd:], rest[qEnd-1], esc)
+			if j < 0 {
+				s.openQuote = rest[qEnd-1]
+				s.openEscCount = esc
+				break
+			}
+			if _, uq := shellConcatEnd(rest, qEnd+j+1); uq != 0 {
+				s.openQuote = uq
+				s.openEscCount = 0
+				break
+			}
+		}
+		return "***"
+	}
+	// Every credential assignment on the line must be checked for an
+	// unclosed quote — a closed first match (`FIRST="ok" PASS="x`) can't
+	// hide a leaking later one, and neither can a closed segment whose
+	// shell concatenation stays open (`PASS='ok'"rest`). Runs before
+	// Line so the whole tail stays masked even when the fragment is
+	// short.
+	for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(raw, -1) {
+		qEnd := loc[3]
+		esc := qEnd - 1 - loc[2] // backslashes preceding the quote char
+		if raw[qEnd-2] == '$' {
+			esc-- // ANSI opener sits between backslashes and quote
+		}
+		j := indexCloseQuote(raw[qEnd:], raw[qEnd-1], esc)
+		if j < 0 {
+			s.openQuote = raw[qEnd-1]
+			s.openEscCount = esc
+			// The retained prefix can hold its own credentials.
+			return Line(raw[:loc[2]]) + "***"
+		}
+		if _, uq := shellConcatEnd(raw, qEnd+j+1); uq != 0 {
+			s.openQuote = uq
+			s.openEscCount = 0
+			// The retained prefix can hold its own credentials.
+			return Line(raw[:loc[2]]) + "***"
+		}
+	}
+	out := Line(raw)
+	if credKeyTail.MatchString(out) {
+		s.pendingValue = true
+	}
+	return out
+}
+
+// shellConcatEnd extends a value's end past shell-style word
+// concatenation: after a quoted segment closes, the word stays alive
+// through adjacent escaped chars, further quoted or ANSI-quoted
+// segments, and plain unquoted text (`'a'\”b'`, `'a'b`, `"a"$'c'`). It
+// ends at a shell break or at end of input. pos is the index right
+// after a quoted segment's closing quote; returns where the
+// concatenated value ends and, when the final segment never closes,
+// its quote char.
+func shellConcatEnd(s string, pos int) (end int, unclosed byte) {
+	for pos < len(s) {
+		switch {
+		case s[pos] == '\\':
+			if pos+1 < len(s) && s[pos+1] != 'n' && s[pos+1] != 'r' && s[pos+1] != 't' {
+				pos += 2 // escaped char is part of the word
+			} else if pos+1 < len(s) {
+				return pos, 0 // `\n`/`\r`/`\t` is a JSONL field boundary
+			} else {
+				pos = len(s) // dangling escape — never overshoot
+			}
+		case s[pos] == '\'' || s[pos] == '"':
+			q := s[pos]
+			j := indexCloseQuote(s[pos+1:], q, 0)
+			if j < 0 {
+				return len(s), q
+			}
+			pos += j + 2
+		case s[pos] == '$' && pos+1 < len(s) && (s[pos+1] == '\'' || s[pos+1] == '"'):
+			pos++
+		case isShellBreak(s[pos]):
+			return pos, 0
+		default:
+			pos++ // unquoted concatenated text stays in the word
+		}
+	}
+	return pos, 0
+}
+
+// isShellBreak reports the characters that end a shell word outside
+// quotes — whitespace and the shell metacharacters that can't appear in
+// an unquoted segment.
+func isShellBreak(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '<', '>':
+		return true
+	}
+	return false
+}
+
+// indexCloseQuote finds where an open quote closes in s, returning the
+// index of the quote char. escCount is the backslash run that preceded
+// the OPENING quote: for a plain quote (0) the close is a quote not
+// preceded by an odd backslash run; for an escaped open the close needs
+// the same run length — a longer run (e.g. `\\\"` under a `\"` opener)
+// is an interior escaped quote at a deeper encoding, not the delimiter.
+func indexCloseQuote(s string, quote byte, escCount int) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] != quote {
+			continue
+		}
+		bs := 0
+		for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+			bs++
+		}
+		if escCount == 0 {
+			if bs%2 == 0 {
+				return i
+			}
+		} else if bs == escCount {
+			return i
+		}
+	}
+	return -1
+}
