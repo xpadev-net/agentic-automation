@@ -28,15 +28,14 @@ var patterns = []*regexp.Regexp{
 	// like "input_tokens": 12345 or "max_tokens": 8192 survive; the
 	// separator accepts =, :, or any whitespace (tabs/newlines
 	// included), plus whitespace AFTER it before the value starts
-	// (`KEY= "v"`, `{"KEY": "v"}`) — without consuming it the
-	// quoted alternatives can't anchor and only the first word is
-	// masked. The value is either a backslash-escaped quoted string
-	// (one or more backslashes, for JSONL/doubly-encoded JSON; a
-	// `\\{2,}"` run inside is an interior escaped quote — a deeper
-	// encoding — so only a single-backslash `\"` closes it),
-	// a plain quoted string, or an unquoted run of >=4 chars so prose
-	// like "token: is required" does not match.
-	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(?:\\+"(?:[^"\\]|\\+[^"\\]|\\{2,}")*\\+"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|["'\\]*[^"'\s]{4,})`),
+	// (`KEY= "v"`, `{"KEY": "v"}`). Quoted values — plain and
+	// backslash-escaped at any encoding depth — are handled by
+	// maskQuotedSpans BEFORE this pattern runs, so only the unquoted
+	// alternative lives here. It takes a run of >=4 chars so prose like
+	// "token: is required" does not match, and stops at a JSONL-escaped
+	// `\n`/`\r`/`\t` boundary so `KEY=v\nERROR:ENOENT` masks the value
+	// without eating the following diagnostics.
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*["'\\]*(?:[^\\"'\s]|\\[^nrt]){4,}`),
 }
 
 // pemComplete collapses an entire PEM block — JSONL escaped-newline
@@ -117,24 +116,36 @@ func scrubBase64Runs(s string) string {
 func String(s string) string {
 	s = pemComplete.ReplaceAllString(s, "***")
 	s = scrubPEMBlocks(s)
-	// Fail closed on an unterminated quoted credential BEFORE the pattern
-	// pass: the quoted alternatives below require a closing quote, so
-	// `KEY="correct horse` would otherwise fall through to the unquoted
-	// run and mask only its first word. A `KEY <sep> <quote>` with no
-	// matching close loses everything from the quote on. Closed
-	// assignments pass through untouched for the patterns to mask.
-	for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(s, -1) {
-		qEnd := loc[3]
-		esc := qEnd - 1 - loc[2]
-		if indexCloseQuote(s[qEnd:], s[qEnd-1], esc) < 0 {
-			s = s[:loc[2]] + "***"
-			break
-		}
-	}
+	s = maskQuotedSpans(s)
 	for _, re := range patterns {
 		s = re.ReplaceAllString(s, "***")
 	}
 	return scrubBase64Runs(s)
+}
+
+// maskQuotedSpans masks every `KEY <sep> <quote>...` value whose quote
+// structure indexCloseQuote can resolve — plain and backslash-escaped
+// alike, at whatever encoding depth the opener used (`\"` closes under
+// a `\"` opener, `\\\"` under `\\\"`). This replaces the pattern's
+// quoted alternatives, which couldn't express "close at the opener's
+// depth" and therefore either over-consumed (a deeper-encoded `\\{2,}"`
+// interior also ate the delimiter and trailing diagnostics) or missed
+// escaped single quotes entirely. An unterminated quote fails closed:
+// the tail from the key's separator on becomes `***`. Matches are
+// replaced right-to-left so earlier positions stay valid.
+func maskQuotedSpans(s string) string {
+	locs := credKeyOpenQuote.FindAllStringSubmatchIndex(s, -1)
+	for i := len(locs) - 1; i >= 0; i-- {
+		loc := locs[i]
+		qEnd := loc[3]           // index just after the opening quote char
+		esc := qEnd - 1 - loc[2] // backslash run before that quote
+		if j := indexCloseQuote(s[qEnd:], s[qEnd-1], esc); j >= 0 {
+			s = s[:loc[0]] + "***" + s[qEnd+j+1:]
+		} else {
+			s = s[:loc[2]] + "***"
+		}
+	}
+	return s
 }
 
 // credKeyTail matches a line that ENDS at a credential keyword plus
@@ -150,8 +161,9 @@ var credKeyTail = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|P
 var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(\\*["'])`)
 
 // contQuote matches a line that STARTS a quoted value — the line after a
-// bare `KEY`/`KEY=`. Leading backslashes make it the escaped form.
-var contQuote = regexp.MustCompile(`^(\\*)(["'])`)
+// bare `KEY`/`KEY=`. Leading whitespace (a log indent) is skipped;
+// leading backslashes make it the escaped form.
+var contQuote = regexp.MustCompile(`^[ \t]*(\\*)(["'])`)
 
 // Stream carries credential state across consecutive lines fed through
 // Line: a bare `KEY` (or `KEY=`) masks the NEXT line entirely, and a
