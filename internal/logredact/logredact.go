@@ -146,6 +146,9 @@ func maskQuotedSpans(s string) string {
 		loc := locs[i]
 		qEnd := loc[3]           // index just after the opening quote char
 		esc := qEnd - 1 - loc[2] // backslash run before that quote
+		if s[qEnd-2] == '$' {
+			esc-- // ANSI opener sits between backslashes and quote
+		}
 		if j := indexCloseQuote(s[qEnd:], s[qEnd-1], esc); j >= 0 {
 			end, _ := shellConcatEnd(s, qEnd+j+1)
 			s = s[:loc[0]] + "***" + s[end:]
@@ -166,12 +169,12 @@ var credKeyTail = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|P
 // credKeyOpenQuote matches `KEY <sep> <quote>` where the value opens a
 // quote; when no matching close exists on the same line the secret runs
 // into following lines.
-var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(\\*["'])`)
+var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(\\*\$?["'])`)
 
 // contQuote matches a line that STARTS a quoted value — the line after a
 // bare `KEY`/`KEY=`. Leading whitespace (a log indent) is skipped;
 // leading backslashes make it the escaped form.
-var contQuote = regexp.MustCompile(`^[ \t]*(\\*)(["'])`)
+var contQuote = regexp.MustCompile(`^[ \t]*(\\*)(\$?)(["'])`)
 
 // Stream carries credential state across consecutive lines fed through
 // Line: a bare `KEY` (or `KEY=`) masks the NEXT line entirely, and a
@@ -266,12 +269,12 @@ func (s *Stream) Line(raw string) string {
 		rest := raw
 		if loc := contQuote.FindStringSubmatchIndex(rest); loc != nil {
 			esc := loc[3] - loc[2]
-			if j := indexCloseQuote(rest[loc[5]:], rest[loc[4]], esc); j < 0 {
-				s.openQuote = rest[loc[4]]
+			if j := indexCloseQuote(rest[loc[7]:], rest[loc[6]], esc); j < 0 {
+				s.openQuote = rest[loc[6]]
 				s.openEscCount = esc
 				return "***"
 			} else {
-				end, uq := shellConcatEnd(rest, loc[5]+j+1)
+				end, uq := shellConcatEnd(rest, loc[7]+j+1)
 				if uq != 0 {
 					s.openQuote = uq
 					s.openEscCount = 0
@@ -280,12 +283,24 @@ func (s *Stream) Line(raw string) string {
 				rest = rest[end:]
 			}
 		}
+		// Any further credential opener on the rest of the line keeps
+		// its continuation state — `abcd PASSWORD="x` must still mask
+		// the following lines.
 		for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(rest, -1) {
 			qEnd := loc[3]
 			esc := qEnd - 1 - loc[2]
-			if indexCloseQuote(rest[qEnd:], rest[qEnd-1], esc) < 0 {
+			if rest[qEnd-2] == '$' {
+				esc--
+			}
+			j := indexCloseQuote(rest[qEnd:], rest[qEnd-1], esc)
+			if j < 0 {
 				s.openQuote = rest[qEnd-1]
 				s.openEscCount = esc
+				break
+			}
+			if _, uq := shellConcatEnd(rest, qEnd+j+1); uq != 0 {
+				s.openQuote = uq
+				s.openEscCount = 0
 				break
 			}
 		}
@@ -293,14 +308,26 @@ func (s *Stream) Line(raw string) string {
 	}
 	// Every credential assignment on the line must be checked for an
 	// unclosed quote — a closed first match (`FIRST="ok" PASS="x`) can't
-	// hide a leaking later one. Runs before Line so the whole tail
-	// stays masked even when the fragment is short.
+	// hide a leaking later one, and neither can a closed segment whose
+	// shell concatenation stays open (`PASS='ok'"rest`). Runs before
+	// Line so the whole tail stays masked even when the fragment is
+	// short.
 	for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(raw, -1) {
 		qEnd := loc[3]
 		esc := qEnd - 1 - loc[2] // backslashes preceding the quote char
-		if indexCloseQuote(raw[qEnd:], raw[qEnd-1], esc) < 0 {
+		if raw[qEnd-2] == '$' {
+			esc-- // ANSI opener sits between backslashes and quote
+		}
+		j := indexCloseQuote(raw[qEnd:], raw[qEnd-1], esc)
+		if j < 0 {
 			s.openQuote = raw[qEnd-1]
 			s.openEscCount = esc
+			// The retained prefix can hold its own credentials.
+			return Line(raw[:loc[2]]) + "***"
+		}
+		if _, uq := shellConcatEnd(raw, qEnd+j+1); uq != 0 {
+			s.openQuote = uq
+			s.openEscCount = 0
 			// The retained prefix can hold its own credentials.
 			return Line(raw[:loc[2]]) + "***"
 		}
@@ -312,23 +339,25 @@ func (s *Stream) Line(raw string) string {
 	return out
 }
 
-// indexCloseQuote finds where an open quote closes in s, returning the
-// index of the quote char. escCount is the backslash run that preceded
-// the OPENING quote: for a plain quote (0) the close is a quote not
-// preceded by an odd backslash run; for an escaped open the close needs
-// the same run length — a longer run (e.g. `\\\"` under a `\"` opener)
-// is an interior escaped quote at a deeper encoding, not the delimiter.
-// shellConcatEnd extends a value's end past shell-style quote
-// concatenation: immediately adjacent escaped chars or further
-// quoted/ANSI-quoted segments continue the same shell word
-// (`'a'\”b'`, `"a"$'b'`). pos is the index right after a quoted
-// segment's closing quote; returns where the concatenated value ends
-// and, when the final segment never closes, its quote char.
+// shellConcatEnd extends a value's end past shell-style word
+// concatenation: after a quoted segment closes, the word stays alive
+// through adjacent escaped chars, further quoted or ANSI-quoted
+// segments, and plain unquoted text (`'a'\”b'`, `'a'b`, `"a"$'c'`). It
+// ends at a shell break or at end of input. pos is the index right
+// after a quoted segment's closing quote; returns where the
+// concatenated value ends and, when the final segment never closes,
+// its quote char.
 func shellConcatEnd(s string, pos int) (end int, unclosed byte) {
 	for pos < len(s) {
 		switch {
 		case s[pos] == '\\':
-			pos += 2
+			if pos+1 < len(s) && s[pos+1] != 'n' && s[pos+1] != 'r' && s[pos+1] != 't' {
+				pos += 2 // escaped char is part of the word
+			} else if pos+1 < len(s) {
+				return pos, 0 // `\n`/`\r`/`\t` is a JSONL field boundary
+			} else {
+				pos = len(s) // dangling escape — never overshoot
+			}
 		case s[pos] == '\'' || s[pos] == '"':
 			q := s[pos]
 			j := indexCloseQuote(s[pos+1:], q, 0)
@@ -338,11 +367,24 @@ func shellConcatEnd(s string, pos int) (end int, unclosed byte) {
 			pos += j + 2
 		case s[pos] == '$' && pos+1 < len(s) && (s[pos+1] == '\'' || s[pos+1] == '"'):
 			pos++
-		default:
+		case isShellBreak(s[pos]):
 			return pos, 0
+		default:
+			pos++ // unquoted concatenated text stays in the word
 		}
 	}
 	return pos, 0
+}
+
+// isShellBreak reports the characters that end a shell word outside
+// quotes — whitespace and the shell metacharacters that can't appear in
+// an unquoted segment.
+func isShellBreak(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', ';', '&', '|', '(', ')', '<', '>':
+		return true
+	}
+	return false
 }
 
 // indexCloseQuote finds where an open quote closes in s, returning the
