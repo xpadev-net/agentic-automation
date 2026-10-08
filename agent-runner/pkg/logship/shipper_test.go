@@ -1,6 +1,7 @@
 package logship
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type captured struct {
@@ -426,5 +428,92 @@ func TestShipperCertificateEndDoesNotClosePEM(t *testing.T) {
 		if lines[i].Line != w {
 			t.Fatalf("line %d: want %q got %q (all: %+v)", i, w, lines[i].Line, lines)
 		}
+	}
+}
+
+// A credential key buried past the 64 KiB accumulation cap must still
+// prime redaction state: the next line is the value and ships masked.
+func TestShipperOverflowTailStillMasksNextLine(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	big := strings.Repeat("x ", 40*1024) // >64 KiB so the key lands in the discarded tail
+	fmt.Fprintf(os.Stderr, "%sOPERATOR_API_TOKEN\n", big)
+	fmt.Fprintf(os.Stderr, "xyz987uvw654\n")
+	s.Close()
+
+	var lines []string
+	for _, b := range c.batches {
+		for _, e := range b {
+			lines = append(lines, e.Line)
+		}
+	}
+	if len(lines) != 2 {
+		t.Fatalf("unexpected lines (count=%d)", len(lines))
+	}
+	if lines[1] != "***" {
+		t.Fatalf("credential value after overflowed KEY leaked: %q", lines[1])
+	}
+}
+
+// A PEM BEGIN marker in the discarded tail must still open masking for
+// following lines until its END marker.
+func TestShipperOverflowTailPEMMarkerStillMasks(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	big := strings.Repeat("x ", 40*1024)
+	fmt.Fprintf(os.Stderr, "%s-----BEGIN RSA PRIVATE KEY-----\n", big)
+	fmt.Fprintf(os.Stderr, "shortkeybody\n")
+	fmt.Fprintf(os.Stderr, "-----END RSA PRIVATE KEY-----\n")
+	fmt.Fprintf(os.Stderr, "after\n")
+	s.Close()
+
+	var lines []string
+	for _, b := range c.batches {
+		for _, e := range b {
+			lines = append(lines, e.Line)
+		}
+	}
+	if len(lines) != 4 {
+		t.Fatalf("unexpected lines (count=%d): %v", len(lines), lines)
+	}
+	if lines[1] != redactedLine || lines[2] != pemEndSentinel || lines[3] != "after" {
+		t.Fatalf("tail PEM marker did not mask body: %v", lines)
+	}
+}
+
+// Invalid UTF-8 must be normalized before the byte limit — otherwise a
+// 5000-byte 0xff line JSON-decodes to 15000 bytes and the batch 400s.
+func TestShipperInvalidUTF8StaysUnderLimit(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	os.Stderr.Write(bytes.Repeat([]byte{0xff}, 5000))
+	os.Stderr.Write([]byte("\n"))
+	s.Close()
+
+	var lines []string
+	for _, b := range c.batches {
+		for _, e := range b {
+			lines = append(lines, e.Line)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("unexpected lines (count=%d)", len(lines))
+	}
+	// ToValidUTF8 collapses the invalid run to one U+FFFD — far under the
+	// limit — and the decoded JSON line is valid UTF-8 either way.
+	if !utf8.ValidString(lines[0]) || len(lines[0]) > 8192 {
+		t.Fatalf("invalid UTF-8 line escaped the byte limit: len=%d", len(lines[0]))
 	}
 }

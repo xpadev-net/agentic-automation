@@ -172,16 +172,57 @@ func (s *Shipper) readLoop() {
 	var lineBuf []byte
 	overflow := false
 
-	// append keeps at most maxLineBufBytes of the current line.
+	// The discarded tail of an over-cap line still drives redaction
+	// state — a `KEY` ending the tail must mask the NEXT line — so keep
+	// its last bytes plus a marker carry to catch PEM markers straddling
+	// fragment boundaries.
+	var tailWindow []byte
+	tailBegin, tailEnd := false, false
+	markerCarry := ""
 	appendSeg := func(seg []byte) {
 		rem := maxLineBufBytes - len(lineBuf)
 		if rem <= 0 {
 			overflow = true
+			check := markerCarry + string(seg)
+			if strings.Contains(check, "-----BEGIN ") && strings.Contains(check, "PRIVATE KEY") {
+				tailBegin = true
+			}
+			if strings.Contains(check, "-----END ") && strings.Contains(check, "PRIVATE KEY") {
+				tailEnd = true
+			}
+			if len(check) > 64 {
+				markerCarry = check[len(check)-64:]
+			} else {
+				markerCarry = check
+			}
+			tailWindow = append(tailWindow, seg...)
+			if len(tailWindow) > 256 {
+				tailWindow = tailWindow[len(tailWindow)-256:]
+			}
 			return
 		}
 		if len(seg) > rem {
-			seg = seg[:rem]
 			overflow = true
+			discarded := seg[rem:]
+			seg = seg[:rem]
+			lineBuf = append(lineBuf, seg...)
+			check := markerCarry + string(discarded)
+			if strings.Contains(check, "-----BEGIN ") && strings.Contains(check, "PRIVATE KEY") {
+				tailBegin = true
+			}
+			if strings.Contains(check, "-----END ") && strings.Contains(check, "PRIVATE KEY") {
+				tailEnd = true
+			}
+			if len(check) > 64 {
+				markerCarry = check[len(check)-64:]
+			} else {
+				markerCarry = check
+			}
+			tailWindow = append(tailWindow, discarded...)
+			if len(tailWindow) > 256 {
+				tailWindow = tailWindow[len(tailWindow)-256:]
+			}
+			return
 		}
 		lineBuf = append(lineBuf, seg...)
 	}
@@ -216,8 +257,10 @@ func (s *Shipper) readLoop() {
 		default:
 			// Redact credentials before queueing for shipment: agent stderr
 			// can echo secrets from the runner env and these lines are
-			// persisted + streamed to the WebUI.
-			line = truncateShipLine(cred.Line(raw))
+			// persisted + streamed to the WebUI. Invalid UTF-8 is
+			// normalized BEFORE the byte limit — json.Marshal would
+			// otherwise expand it to U+FFFD on the way out.
+			line = truncateShipLine(cred.Line(strings.ToValidUTF8(raw, "\uFFFD")))
 		}
 		// Only a PRIVATE KEY end marker closes the block — an interleaved
 		// `-----END CERTIFICATE-----` must not leak the remaining body.
@@ -227,6 +270,25 @@ func (s *Shipper) readLoop() {
 			}
 			inPEM = false
 		}
+		// An overflowed line's discarded tail still feeds the state
+		// machines: PEM markers seen there reopen/close the block and the
+		// last bytes seed cross-line credential tracking, so a bare KEY
+		// past the cap still masks the value on the next line.
+		if overflow {
+			if tailBegin {
+				inPEM = true
+				line = pemBeginSentinel
+			}
+			if tailEnd {
+				if inPEM {
+					line = pemEndSentinel
+				}
+				inPEM = false
+			}
+			if !inPEM && !tailBegin && len(tailWindow) > 0 {
+				_ = cred.Line(strings.ToValidUTF8(string(tailWindow), "\uFFFD"))
+			}
+		}
 		select {
 		case s.lines <- logEntry{Seq: s.seq, TS: time.Now().UTC(), Line: line}:
 		default:
@@ -234,6 +296,9 @@ func (s *Shipper) readLoop() {
 		}
 		lineBuf = lineBuf[:0]
 		overflow = false
+		tailBegin, tailEnd = false, false
+		tailWindow = tailWindow[:0]
+		markerCarry = ""
 	}
 
 	for {
