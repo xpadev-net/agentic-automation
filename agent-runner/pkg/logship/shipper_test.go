@@ -517,3 +517,64 @@ func TestShipperInvalidUTF8StaysUnderLimit(t *testing.T) {
 		t.Fatalf("invalid UTF-8 line escaped the byte limit: len=%d", len(lines[0]))
 	}
 }
+
+// A PEM closing line that also opens a quoted credential must keep the
+// credential tracker alive — the continuation lines still mask.
+func TestShipperPEMLineAdvancesCredentialState(t *testing.T) {
+	c, srv := newCaptureServer(t)
+	s, err := Attach(srv.URL, "tok", 8, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintln(os.Stderr, "-----BEGIN RSA PRIVATE KEY-----")
+	fmt.Fprintln(os.Stderr, `-----END RSA PRIVATE KEY----- PASSWORD="correct`)
+	fmt.Fprintln(os.Stderr, "horse battery")
+	fmt.Fprintln(os.Stderr, `staple"`)
+	s.Close()
+
+	var lines []logEntry
+	for _, b := range c.batches {
+		lines = append(lines, b...)
+	}
+	if len(lines) != 4 {
+		t.Fatalf("entries: %+v", lines)
+	}
+	if lines[0].Line != pemBeginSentinel {
+		t.Fatalf("begin: %q", lines[0].Line)
+	}
+	if lines[1].Line != pemEndSentinel {
+		t.Fatalf("end+cred: %q", lines[1].Line)
+	}
+	for i := 2; i < 4; i++ {
+		if lines[i].Line != "***" {
+			t.Fatalf("continuation %d: %q", i, lines[i].Line)
+		}
+	}
+}
+
+// `END ... BEGIN` on one line leaves the block open at its last marker —
+// a following body fragment still ships masked.
+func TestShipperPEMMarkersAppliedInOrder(t *testing.T) {
+	c, srv := newCaptureServer(t)
+	s, err := Attach(srv.URL, "tok", 8, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintln(os.Stderr, "-----END RSA PRIVATE KEY----- -----BEGIN RSA PRIVATE KEY-----")
+	fmt.Fprintln(os.Stderr, "shortkeyfragment")
+	s.Close()
+
+	var lines []logEntry
+	for _, b := range c.batches {
+		lines = append(lines, b...)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("entries: %+v", lines)
+	}
+	if lines[0].Line != "***" {
+		t.Fatalf("mixed-marker line: %q", lines[0].Line)
+	}
+	if lines[1].Line != redactedLine {
+		t.Fatalf("body after END...BEGIN must stay masked: %q", lines[1].Line)
+	}
+}

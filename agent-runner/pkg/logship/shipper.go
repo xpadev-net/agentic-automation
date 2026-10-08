@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,6 +147,25 @@ func (s *Shipper) Close() {
 	})
 }
 
+// pemBoundaryRE matches an actual private-key marker; markers inside a
+// line apply in textual order so the LAST one sets block state
+// (`END ... BEGIN` leaves the block open). `-----END CERTIFICATE-----`
+// does not match, so an interleaved certificate end can't leak the body.
+var pemBoundaryRE = regexp.MustCompile(`-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----`)
+
+// pemOrderedState applies every PEM marker in s, in order, to inPEM.
+func pemOrderedState(s string, inPEM bool) bool {
+	for _, m := range pemBoundaryRE.FindAllStringSubmatch(s, -1) {
+		inPEM = m[1] == "BEGIN"
+	}
+	return inPEM
+}
+
+// pemMarkerCount counts private-key markers in s.
+func pemMarkerCount(s string) int {
+	return len(pemBoundaryRE.FindAllStringIndex(s, -1))
+}
+
 // Stored sentinel values for a masked private-key block. The ingestion
 // handler uses the same values so it can reconstruct masking state from
 // previously stored lines (a PEM block may span POST requests).
@@ -177,19 +197,22 @@ func (s *Shipper) readLoop() {
 	// its last bytes plus a marker carry to catch PEM markers straddling
 	// fragment boundaries.
 	var tailWindow []byte
-	tailBegin, tailEnd := false, false
+	// tailBoundary is the LAST PEM marker seen in the discarded tail
+	// ('B' = BEGIN, 'E' = END, 0 = none) — markers are recorded in
+	// textual order so `END ... BEGIN` in a tail leaves the block open.
+	var tailBoundary byte
 	markerCarry := ""
+	recordTailMarkers := func(check string) {
+		for _, m := range pemBoundaryRE.FindAllStringSubmatch(check, -1) {
+			tailBoundary = m[1][0]
+		}
+	}
 	appendSeg := func(seg []byte) {
 		rem := maxLineBufBytes - len(lineBuf)
 		if rem <= 0 {
 			overflow = true
 			check := markerCarry + string(seg)
-			if strings.Contains(check, "-----BEGIN ") && strings.Contains(check, "PRIVATE KEY") {
-				tailBegin = true
-			}
-			if strings.Contains(check, "-----END ") && strings.Contains(check, "PRIVATE KEY") {
-				tailEnd = true
-			}
+			recordTailMarkers(check)
 			if len(check) > 64 {
 				markerCarry = check[len(check)-64:]
 			} else {
@@ -207,12 +230,7 @@ func (s *Shipper) readLoop() {
 			seg = seg[:rem]
 			lineBuf = append(lineBuf, seg...)
 			check := markerCarry + string(discarded)
-			if strings.Contains(check, "-----BEGIN ") && strings.Contains(check, "PRIVATE KEY") {
-				tailBegin = true
-			}
-			if strings.Contains(check, "-----END ") && strings.Contains(check, "PRIVATE KEY") {
-				tailEnd = true
-			}
+			recordTailMarkers(check)
 			if len(check) > 64 {
 				markerCarry = check[len(check)-64:]
 			} else {
@@ -245,47 +263,51 @@ func (s *Shipper) readLoop() {
 		// ingestion side can tell where a masked block starts and ends.
 		// PEM-body lines bypass the credential stream — they are already
 		// fully masked and must not poison its cross-line state.
-		hasBegin := strings.Contains(raw, "-----BEGIN ") && strings.Contains(raw, "PRIVATE KEY")
-		hasEnd := strings.Contains(raw, "-----END ") && strings.Contains(raw, "PRIVATE KEY")
+		// Advance credential tracking on EVERY line — a PEM boundary
+		// line can also open a quoted credential
+		// (`-----END RSA PRIVATE KEY----- PASSWORD="x`), so even masked
+		// PEM lines feed the stream (the result is used outside PEM
+		// regions only). Invalid UTF-8 is normalized BEFORE the byte
+		// limit — json.Marshal would otherwise expand it to U+FFFD on
+		// the way out.
+		masked := cred.Line(strings.ToValidUTF8(raw, "\uFFFD"))
 		var line string
-		switch {
-		case hasBegin:
-			inPEM = true
-			line = pemBeginSentinel
+		// PEM markers apply in textual order — a single line can carry
+		// `END ... -----BEGIN ...` and the block stays open at the last
+		// marker. Only a PRIVATE KEY marker counts; an interleaved
+		// `-----END CERTIFICATE-----` must not close the block.
+		switch n := pemMarkerCount(raw); {
+		case n > 1:
+			inPEM = pemOrderedState(raw, inPEM)
+			line = "***"
+		case n == 1:
+			inPEM = pemOrderedState(raw, inPEM)
+			if inPEM {
+				line = pemBeginSentinel
+			} else {
+				line = pemEndSentinel
+			}
 		case inPEM:
 			line = redactedLine
 		default:
-			// Redact credentials before queueing for shipment: agent stderr
-			// can echo secrets from the runner env and these lines are
-			// persisted + streamed to the WebUI. Invalid UTF-8 is
-			// normalized BEFORE the byte limit — json.Marshal would
-			// otherwise expand it to U+FFFD on the way out.
-			line = truncateShipLine(cred.Line(strings.ToValidUTF8(raw, "\uFFFD")))
+			line = truncateShipLine(masked)
 		}
-		// Only a PRIVATE KEY end marker closes the block — an interleaved
-		// `-----END CERTIFICATE-----` must not leak the remaining body.
-		if hasEnd {
-			if inPEM {
-				line = pemEndSentinel
-			}
-			inPEM = false
-		}
-		// An overflowed line's discarded tail still feeds the state
-		// machines: PEM markers seen there reopen/close the block and the
-		// last bytes seed cross-line credential tracking, so a bare KEY
-		// past the cap still masks the value on the next line.
+		// An overflowed line's discarded tail still drives redaction
+		// state: the last marker seen there reopens/closes the block
+		// and the last bytes seed cross-line credential tracking, so a
+		// bare KEY past the cap still masks the value on the next line.
 		if overflow {
-			if tailBegin {
+			switch tailBoundary {
+			case 'B':
 				inPEM = true
 				line = pemBeginSentinel
-			}
-			if tailEnd {
+			case 'E':
 				if inPEM {
 					line = pemEndSentinel
 				}
 				inPEM = false
 			}
-			if !inPEM && !tailBegin && len(tailWindow) > 0 {
+			if len(tailWindow) > 0 {
 				_ = cred.Line(strings.ToValidUTF8(string(tailWindow), "\uFFFD"))
 			}
 		}
@@ -296,7 +318,7 @@ func (s *Shipper) readLoop() {
 		}
 		lineBuf = lineBuf[:0]
 		overflow = false
-		tailBegin, tailEnd = false, false
+		tailBoundary = 0
 		tailWindow = tailWindow[:0]
 		markerCarry = ""
 	}
