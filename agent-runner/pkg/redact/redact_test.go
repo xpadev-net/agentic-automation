@@ -319,3 +319,60 @@ func TestStreamStateRoundTrip(t *testing.T) {
 		t.Fatalf("restored open state did not mask: %q", got)
 	}
 }
+
+// Unterminated quoted credentials must fail closed in String() — the
+// unquoted fallback would otherwise leak the tail (`PASSWORD="correct
+// horse battery staple` must not leave "horse battery staple" visible).
+func TestMasksUnterminatedQuotedCredential(t *testing.T) {
+	got := String(`PASSWORD="correct horse battery staple`)
+	want := `PASSWORD=***`
+	if got != want {
+		t.Fatalf("single-line: want %q, got %q", want, got)
+	}
+	got = String("line1\n" + `PASSWORD="unclosed a` + "\nb")
+	want = "line1\nPASSWORD=***"
+	if got != want {
+		t.Fatalf("multiline: want %q, got %q", want, got)
+	}
+	// A closed assignment before the unclosed one must also survive.
+	got = String(`FIRST_TOKEN="ok" PASSWORD="tail`)
+	want = `*** PASSWORD=***`
+	if got != want {
+		t.Fatalf("mixed: want %q, got %q", want, got)
+	}
+}
+
+// A quoted value that starts on the line AFTER a bare credential key
+// keeps masking until its closing quote.
+func TestStreamPendingQuotedContinuation(t *testing.T) {
+	s := Stream{}
+	if got := s.Line("PASSWORD="); got != "PASSWORD=" {
+		t.Fatalf("key line: %q", got)
+	}
+	if got := s.Line(`"correct`); got != "***" {
+		t.Fatalf("open: %q", got)
+	}
+	if got := s.Line("horse battery"); got != "***" {
+		t.Fatalf("body: %q", got)
+	}
+	if got := s.Line(`staple" after`); got != "*** after" {
+		t.Fatalf("close: %q", got)
+	}
+}
+
+// SetState replaces rather than merges: restoring idle clears pending
+// and open-quote state.
+func TestStreamSetStateReplaces(t *testing.T) {
+	s := Stream{}
+	s.SetState("p")
+	s.SetState("")
+	if got := s.Line("ordinary line"); got != "ordinary line" {
+		t.Fatalf("idle restore still masked: %q", got)
+	}
+	s2 := Stream{}
+	s2.SetState("q34:0")
+	s2.SetState("")
+	if got := s2.Line("next"); got != "next" {
+		t.Fatalf("quote state lingered: %q", got)
+	}
+}
