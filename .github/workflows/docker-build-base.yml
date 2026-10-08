@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build-and-push-base:
     name: Build and Push Base Image
-    runs-on: arc-runners-agentic-automation
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -24,8 +24,6 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: kubernetes
 
       - name: Set owner and image metadata
         id: meta
@@ -55,5 +53,5 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             BUILT_AT=${{ steps.meta.outputs.BUILT_AT }}
-          # cache-from: type=gha,scope=runner-base
-          # cache-to: type=gha,mode=max,scope=runner-base
+          cache-from: type=gha,scope=runner-base
+          cache-to: type=gha,mode=max,scope=runner-base
