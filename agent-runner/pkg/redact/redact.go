@@ -26,11 +26,16 @@ var patterns = []*regexp.Regexp{
 	// The name must END at a keyword boundary (\b) so usage counters
 	// like "input_tokens": 12345 or "max_tokens": 8192 survive; the
 	// separator accepts =, :, or any whitespace (tabs/newlines
-	// included). The value is either a quoted string (whitespace and
-	// escaped delimiters included, matching quote required, optional
-	// backslash-escaped quotes for JSONL) or an unquoted run of >=4
-	// chars so prose like "token: is required" does not match.
-	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s](?:\\?"(?:[^"\\]|\\.)*\\?"|\\?'(?:[^'\\]|\\.)*\\?'|["'\\\s]*[^"'\s]{4,})`),
+	// included), plus whitespace AFTER it before the value starts
+	// (`KEY= "v"`, `{"KEY": "v"}`) — without consuming it the
+	// quoted alternatives can't anchor and only the first word is
+	// masked. The value is either a backslash-escaped quoted string
+	// (one or more backslashes, for JSONL/doubly-encoded JSON; the
+	// interior stops at the first backslash-run+quote so a closing
+	// `\"` is never eaten as an escape and trailing JSON survives),
+	// a plain quoted string, or an unquoted run of >=4 chars so prose
+	// like "token: is required" does not match.
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(?:\\+"(?:[^"\\]|\\+[^"\\])*\\+"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|["'\\]*[^"'\s]{4,})`),
 }
 
 // pemComplete collapses an entire PEM block — JSONL escaped-newline
@@ -115,4 +120,95 @@ func String(s string) string {
 		s = re.ReplaceAllString(s, "***")
 	}
 	return scrubBase64Runs(s)
+}
+
+// credKeyTail matches a line that ENDS at a credential keyword plus
+// trailing separators — `CURSOR_API_KEY` alone, `KEY=`, `"KEY":`. The
+// assignment pattern's separator class includes newline, so in multiline
+// String() `KEY\nvalue` masks both lines; line-by-line callers must
+// carry the same state, which is what Stream does.
+var credKeyTail = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"':=\s]*$`)
+
+// credKeyOpenQuote matches `KEY <sep> <quote>` where the value opens a
+// quote; when no matching close exists on the same line the secret runs
+// into following lines.
+var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(\\*["'])`)
+
+// Stream carries credential state across consecutive lines fed through
+// Line: a bare `KEY` (or `KEY=`) masks the NEXT line entirely, and a
+// `KEY="...` value left unclosed masks through the line that closes it.
+// Shipper and ingest-side replay share these semantics — PEM sentinels
+// are tracked separately (they survive as their own stored lines).
+type Stream struct {
+	pendingValue bool // previous line ended at a bare credential key
+	openQuote    byte // '"' or '\'' — quote of an unclosed KEY= value; 0 = none
+	openEscaped  bool // the open quote had a leading backslash (\"…)
+}
+
+// SeedPending primes cross-line state from a previously processed line:
+// a bare credential key there means the next line continues its value.
+// (An open quote can't be recovered — its lines were masked to "***" —
+// so only the pending-key case can resume.)
+func (s *Stream) SeedPending(prev string) {
+	if credKeyTail.MatchString(prev) {
+		s.pendingValue = true
+	}
+}
+
+// Line redacts one line like String, plus cross-line credential state.
+// Pass lines in stream order; sentinel lines pass through untouched
+// (they never contain the keyword tail).
+func (s *Stream) Line(raw string) string {
+	if s.openQuote != 0 {
+		if i := indexCloseQuote(raw, s.openQuote, s.openEscaped); i >= 0 {
+			s.openQuote = 0
+			return "***" + raw[i+1:]
+		}
+		return "***"
+	}
+	if s.pendingValue {
+		s.pendingValue = false
+		return "***"
+	}
+	// KEY= with an unclosed quote on this line: mask from the quote and
+	// remember the delimiter. Runs before String because the unquoted
+	// fallback would otherwise mask only the first fragment's tail.
+	if loc := credKeyOpenQuote.FindStringSubmatchIndex(raw); loc != nil {
+		if qEnd := loc[3]; indexCloseQuote(raw[qEnd:], raw[qEnd-1], qEnd-1 > loc[2]) < 0 {
+			s.openQuote = raw[qEnd-1]
+			s.openEscaped = qEnd-1 > loc[2]
+			return raw[:loc[2]] + "***"
+		}
+	}
+	out := String(raw)
+	if credKeyTail.MatchString(out) {
+		s.pendingValue = true
+	}
+	return out
+}
+
+// indexCloseQuote finds where an open quote closes in s. For a plain
+// quote the close is the quote char not preceded by an odd number of
+// backslashes; for a backslash-escaped open the close is the matching
+// escaped pair (index of the quote char is returned).
+func indexCloseQuote(s string, quote byte, escaped bool) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] != quote {
+			continue
+		}
+		if escaped {
+			if i > 0 && s[i-1] == '\\' {
+				return i
+			}
+			continue
+		}
+		bs := 0
+		for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+			bs++
+		}
+		if bs%2 == 0 {
+			return i
+		}
+	}
+	return -1
 }
