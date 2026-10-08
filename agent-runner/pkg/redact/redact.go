@@ -28,15 +28,14 @@ var patterns = []*regexp.Regexp{
 	// like "input_tokens": 12345 or "max_tokens": 8192 survive; the
 	// separator accepts =, :, or any whitespace (tabs/newlines
 	// included), plus whitespace AFTER it before the value starts
-	// (`KEY= "v"`, `{"KEY": "v"}`) — without consuming it the
-	// quoted alternatives can't anchor and only the first word is
-	// masked. The value is either a backslash-escaped quoted string
-	// (one or more backslashes, for JSONL/doubly-encoded JSON; a
-	// `\\{2,}"` run inside is an interior escaped quote — a deeper
-	// encoding — so only a single-backslash `\"` closes it),
-	// a plain quoted string, or an unquoted run of >=4 chars so prose
-	// like "token: is required" does not match.
-	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(?:\\+"(?:[^"\\]|\\+[^"\\]|\\{2,}")*\\+"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|["'\\]*[^"'\s]{4,})`),
+	// (`KEY= "v"`, `{"KEY": "v"}`). Quoted values — plain and
+	// backslash-escaped at any encoding depth — are handled by
+	// maskQuotedSpans BEFORE this pattern runs, so only the unquoted
+	// alternative lives here. It takes a run of >=4 chars so prose like
+	// "token: is required" does not match, and stops at a JSONL-escaped
+	// `\n`/`\r`/`\t` boundary so `KEY=v\nERROR:ENOENT` masks the value
+	// without eating the following diagnostics.
+	regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*["'\\]*(?:[^\\"'\s]|\\[^nrt]){4,}`),
 }
 
 // pemComplete collapses an entire PEM block — JSONL escaped-newline
@@ -117,10 +116,37 @@ func scrubBase64Runs(s string) string {
 func String(s string) string {
 	s = pemComplete.ReplaceAllString(s, "***")
 	s = scrubPEMBlocks(s)
+	s = maskQuotedSpans(s)
 	for _, re := range patterns {
 		s = re.ReplaceAllString(s, "***")
 	}
 	return scrubBase64Runs(s)
+}
+
+// maskQuotedSpans masks every `KEY <sep> <quote>...` value whose quote
+// structure indexCloseQuote can resolve — plain and backslash-escaped
+// alike, at whatever encoding depth the opener used (`\"` closes under
+// a `\"` opener, `\\\"` under `\\\"`). This replaces the pattern's
+// quoted alternatives, which couldn't express "close at the opener's
+// depth" and therefore either over-consumed (a deeper-encoded `\\{2,}"`
+// interior also ate the delimiter and trailing diagnostics) or missed
+// escaped single quotes entirely. An unterminated quote fails closed:
+// the tail from the key's separator on becomes `***`. Matches are
+// replaced right-to-left so earlier positions stay valid.
+func maskQuotedSpans(s string) string {
+	locs := credKeyOpenQuote.FindAllStringSubmatchIndex(s, -1)
+	for i := len(locs) - 1; i >= 0; i-- {
+		loc := locs[i]
+		qEnd := loc[3]           // index just after the opening quote char
+		esc := qEnd - 1 - loc[2] // backslash run before that quote
+		if j := indexCloseQuote(s[qEnd:], s[qEnd-1], esc); j >= 0 {
+			end, _ := shellConcatEnd(s, qEnd+j+1)
+			s = s[:loc[0]] + "***" + s[end:]
+		} else {
+			s = s[:loc[2]] + "***"
+		}
+	}
+	return s
 }
 
 // credKeyTail matches a line that ENDS at a credential keyword plus
@@ -134,6 +160,11 @@ var credKeyTail = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|P
 // quote; when no matching close exists on the same line the secret runs
 // into following lines.
 var credKeyOpenQuote = regexp.MustCompile(`(?i)[A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|_KEY)\b[\\"']*\s*[=:\s]\s*(\\*["'])`)
+
+// contQuote matches a line that STARTS a quoted value — the line after a
+// bare `KEY`/`KEY=`. Leading whitespace (a log indent) is skipped;
+// leading backslashes make it the escaped form.
+var contQuote = regexp.MustCompile(`^[ \t]*(\\*)(["'])`)
 
 // Stream carries credential state across consecutive lines fed through
 // Line: a bare `KEY` (or `KEY=`) masks the NEXT line entirely, and a
@@ -178,6 +209,11 @@ func (s *Stream) State() string {
 // SetState restores a State() encoding; unknown input leaves the stream
 // idle (fail open is fine — the stored lines themselves were masked).
 func (s *Stream) SetState(st string) {
+	// A snapshot replaces the whole state — reset first so fields absent
+	// from it don't linger from a previous stream position.
+	s.pendingValue = false
+	s.openQuote = 0
+	s.openEscCount = 0
 	for _, part := range strings.Split(st, ";") {
 		if part == "p" {
 			s.pendingValue = true
@@ -201,14 +237,52 @@ func (s *Stream) Line(raw string) string {
 		if i := indexCloseQuote(raw, s.openQuote, s.openEscCount); i >= 0 {
 			s.openQuote = 0
 			s.openEscCount = 0
+			// Shell concatenation can extend the value past this close;
+			// if the last segment never closes, keep masking.
+			end, uq := shellConcatEnd(raw, i+1)
+			if uq != 0 {
+				s.openQuote = uq
+				s.openEscCount = 0
+				return "***"
+			}
 			// The retained suffix can hold further credentials — even a
 			// new unclosed value — so run it through the same path.
-			return "***" + s.Line(raw[i+1:])
+			return "***" + s.Line(raw[end:])
 		}
 		return "***"
 	}
 	if s.pendingValue {
 		s.pendingValue = false
+		// The pending value may itself open a quoted string spanning
+		// further lines (`PASSWORD=` then `"correct` … `staple"`), and a
+		// line not starting with the quote can still carry a further
+		// credential opener (`abcd PASSWORD="correct`) — inspect both.
+		rest := raw
+		if loc := contQuote.FindStringSubmatchIndex(rest); loc != nil {
+			esc := loc[3] - loc[2]
+			if j := indexCloseQuote(rest[loc[5]:], rest[loc[4]], esc); j < 0 {
+				s.openQuote = rest[loc[4]]
+				s.openEscCount = esc
+				return "***"
+			} else {
+				end, uq := shellConcatEnd(rest, loc[5]+j+1)
+				if uq != 0 {
+					s.openQuote = uq
+					s.openEscCount = 0
+					return "***"
+				}
+				rest = rest[end:]
+			}
+		}
+		for _, loc := range credKeyOpenQuote.FindAllStringSubmatchIndex(rest, -1) {
+			qEnd := loc[3]
+			esc := qEnd - 1 - loc[2]
+			if indexCloseQuote(rest[qEnd:], rest[qEnd-1], esc) < 0 {
+				s.openQuote = rest[qEnd-1]
+				s.openEscCount = esc
+				break
+			}
+		}
 		return "***"
 	}
 	// Every credential assignment on the line must be checked for an
@@ -230,6 +304,39 @@ func (s *Stream) Line(raw string) string {
 		s.pendingValue = true
 	}
 	return out
+}
+
+// indexCloseQuote finds where an open quote closes in s, returning the
+// index of the quote char. escCount is the backslash run that preceded
+// the OPENING quote: for a plain quote (0) the close is a quote not
+// preceded by an odd backslash run; for an escaped open the close needs
+// the same run length — a longer run (e.g. `\\\"` under a `\"` opener)
+// is an interior escaped quote at a deeper encoding, not the delimiter.
+// shellConcatEnd extends a value's end past shell-style quote
+// concatenation: immediately adjacent escaped chars or further
+// quoted/ANSI-quoted segments continue the same shell word
+// (`'a'\”b'`, `"a"$'b'`). pos is the index right after a quoted
+// segment's closing quote; returns where the concatenated value ends
+// and, when the final segment never closes, its quote char.
+func shellConcatEnd(s string, pos int) (end int, unclosed byte) {
+	for pos < len(s) {
+		switch {
+		case s[pos] == '\\':
+			pos += 2
+		case s[pos] == '\'' || s[pos] == '"':
+			q := s[pos]
+			j := indexCloseQuote(s[pos+1:], q, 0)
+			if j < 0 {
+				return len(s), q
+			}
+			pos += j + 2
+		case s[pos] == '$' && pos+1 < len(s) && (s[pos+1] == '\'' || s[pos+1] == '"'):
+			pos++
+		default:
+			return pos, 0
+		}
+	}
+	return pos, 0
 }
 
 // indexCloseQuote finds where an open quote closes in s, returning the
