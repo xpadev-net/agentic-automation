@@ -304,3 +304,52 @@ func TestStreamStateRoundTrip(t *testing.T) {
 		t.Fatalf("restored open state did not mask: %q", got)
 	}
 }
+
+func TestMasksUnterminatedQuotedCredential(t *testing.T) {
+	got := Line(`PASSWORD="correct horse battery staple`)
+	want := `PASSWORD=***`
+	if got != want {
+		t.Fatalf("single-line: want %q, got %q", want, got)
+	}
+	got = Line("line1\n" + `PASSWORD="unclosed a` + "\nb")
+	want = "line1\nPASSWORD=***"
+	if got != want {
+		t.Fatalf("multiline: want %q, got %q", want, got)
+	}
+	got = Line(`FIRST_TOKEN="ok" PASSWORD="tail`)
+	want = `*** PASSWORD=***`
+	if got != want {
+		t.Fatalf("mixed: want %q, got %q", want, got)
+	}
+}
+
+func TestStreamPendingQuotedContinuation(t *testing.T) {
+	s := Stream{}
+	if got := s.Line("PASSWORD="); got != "PASSWORD=" {
+		t.Fatalf("key line: %q", got)
+	}
+	if got := s.Line(`"correct`); got != "***" {
+		t.Fatalf("open: %q", got)
+	}
+	if got := s.Line("horse battery"); got != "***" {
+		t.Fatalf("body: %q", got)
+	}
+	if got := s.Line(`staple" after`); got != "*** after" {
+		t.Fatalf("close: %q", got)
+	}
+}
+
+func TestStreamSetStateReplaces(t *testing.T) {
+	s := Stream{}
+	s.SetState("p")
+	s.SetState("")
+	if got := s.Line("ordinary line"); got != "ordinary line" {
+		t.Fatalf("idle restore still masked: %q", got)
+	}
+	s2 := Stream{}
+	s2.SetState("q34:0")
+	s2.SetState("")
+	if got := s2.Line("next"); got != "next" {
+		t.Fatalf("quote state lingered: %q", got)
+	}
+}

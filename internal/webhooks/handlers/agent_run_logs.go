@@ -307,50 +307,74 @@ func HandleAgentRunLogs(c *gin.Context) {
 		}
 		// Masking state is persisted per row: every stored line carries
 		// the redaction state it left behind (inPEM + credential Stream),
-		// so each fresh entry seeds from the latest stored row of ITS
-		// attempt — surviving batch boundaries, unclosed quoted values,
-		// and overlapping resends alike (a stored bare `GITHUB_TOKEN`
-		// between fresh entries masks the value after it).
+		// so an entry seeds from the latest stored row inside its gap —
+		// surviving batch boundaries, unclosed quoted values, and
+		// overlapping resends alike (a stored bare `GITHUB_TOKEN` between
+		// fresh entries masks the value after it).
 		inPEM := false
 		stream := logredact.Stream{}
-		seed := func(seq int64) error {
+		// pred returns the newest stored row strictly between the
+		// in-memory predecessor (prevSeq) and seq, within seq's attempt.
+		pred := func(prevSeq, seq int64) (*models.AgentRunLog, error) {
 			base := (seq / seqAttemptStride) * seqAttemptStride
-			var prev models.AgentRunLog
-			err := tx.Select("redact_state").
-				Where("agent_run_id = ? AND seq >= ? AND seq < ?", run.ID, base, seq).
-				Order("seq DESC").Limit(1).Take(&prev).Error
-			if err == nil {
-				var st string
-				inPEM, st = decodeLogState(prev.RedactState)
-				stream = logredact.Stream{}
-				stream.SetState(st)
-				return nil
+			var p models.AgentRunLog
+			err := tx.Select("seq", "redact_state").
+				Where("agent_run_id = ? AND seq >= ? AND seq > ? AND seq < ?",
+					run.ID, base, prevSeq, seq).
+				Order("seq DESC").Limit(1).Take(&p).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, nil
 			}
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
+			if err != nil {
+				return nil, err
 			}
-			// No stored predecessor in this attempt — idle state (this
-			// also resets state across an attempt boundary).
-			inPEM = false
-			stream = logredact.Stream{}
-			return nil
+			return &p, nil
 		}
 		logs := make([]*models.AgentRunLog, 0, len(fresh))
-		prevSeq := int64(0)
+		prevSeq, prevBase := int64(0), int64(-1)
 		for _, entry := range fresh {
-			if entry.Seq != prevSeq+1 || prevSeq == 0 {
-				// First entry or a gap (a stored row or dropped seq sits
-				// between): resume the state the stored predecessor left.
-				if err := seed(entry.Seq); err != nil {
+			entryBase := (entry.Seq / seqAttemptStride) * seqAttemptStride
+			unknown := false
+			if entry.Seq != prevSeq+1 || entryBase != prevBase {
+				p, err := pred(prevSeq, entry.Seq)
+				if err != nil {
 					return err
 				}
+				switch {
+				case p != nil && p.Seq == entry.Seq-1:
+					// Complete stored chain — resume its exact state.
+					var st string
+					inPEM, st = decodeLogState(p.RedactState)
+					stream = logredact.Stream{}
+					stream.SetState(st)
+				case p != nil || prevSeq == 0 || entryBase != prevBase:
+					if entry.Seq == entryBase+1 && p == nil {
+						// Genuine first line of an attempt — idle.
+						inPEM = false
+						stream = logredact.Stream{}
+					} else {
+						// Seqs between the predecessor and this entry are
+						// missing — an earlier batch that hasn't arrived
+						// (or was dropped): the masking state here is
+						// unknowable, so mask this line conservatively
+						// and mark the next as a potential continuation.
+						unknown = true
+					}
+				}
+				// p == nil && prevSeq > 0 && same attempt: the in-memory
+				// predecessor of THIS batch continues — keep its state.
 			}
-			// Redact credentials before anything is persisted or streamed:
-			// agent stderr can leak tokens injected into the runner env.
-			// PEM-body and sentinel lines bypass the credential stream —
-			// they are already fully masked and must not poison its state.
 			var line string
 			switch {
+			case unknown:
+				// Gap with no stored predecessor and no in-memory
+				// continuation: the real masking state is unknowable, so
+				// fail closed — mask this line and treat the next as a
+				// possible continuation value.
+				line = "***"
+				inPEM = false
+				stream = logredact.Stream{}
+				stream.SetState("p")
 			case entry.Line == pemBeginSentinel:
 				// Shipper already masked this block — just track state.
 				inPEM = true
@@ -387,7 +411,7 @@ func HandleAgentRunLogs(c *gin.Context) {
 				Line:        line,
 				RedactState: encodeLogState(inPEM, stream.State()),
 			})
-			prevSeq = entry.Seq
+			prevSeq, prevBase = entry.Seq, entryBase
 		}
 		// OnConflict DoNothing makes re-posted batches idempotent for
 		// storage, but live publication must be limited to rows actually
