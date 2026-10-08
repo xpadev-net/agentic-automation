@@ -201,15 +201,24 @@ func (s *Shipper) readLoop() {
 	cred := redact.Stream{}
 	// The discarded tail of an over-cap line still drives redaction
 	// state — a `KEY` or open quote anywhere in it must mask the NEXT
-	// lines — so EVERY discarded fragment feeds the credential stream
-	// (a bare `PASSWORD="` in the middle must not go unnoticed), plus a
-	// marker carry to catch PEM markers straddling fragment boundaries.
+	// lines — so EVERY discarded fragment feeds a shadow credential
+	// stream (a bare `PASSWORD="` in the middle must not go unnoticed),
+	// plus a marker carry to catch PEM markers straddling fragment
+	// boundaries. The shadow stream is seeded with the retained prefix
+	// so fragments are processed in line order (prefix, then discarded);
+	// it replaces `cred` at emit time.
 	// tailBoundary is the LAST PEM marker seen in the discarded tail
 	// ('B' = BEGIN, 'E' = END, 0 = none) — markers are recorded in
 	// textual order so `END ... BEGIN` in a tail leaves the block open.
 	var tailBoundary byte
 	markerCarry := ""
+	disc := redact.Stream{}
+	discSeeded := false
 	discard := func(seg []byte) {
+		if !discSeeded {
+			discSeeded = true
+			_ = disc.Line(string(lineBuf)) // retained prefix, in order
+		}
 		check := markerCarry + string(seg)
 		for _, m := range pemBoundaryRE.FindAllStringSubmatch(check, -1) {
 			tailBoundary = m[1][0]
@@ -219,7 +228,7 @@ func (s *Shipper) readLoop() {
 		} else {
 			markerCarry = check
 		}
-		_ = cred.Line(strings.ToValidUTF8(string(seg), "\uFFFD"))
+		_ = disc.Line(strings.ToValidUTF8(string(seg), "\uFFFD"))
 	}
 	appendSeg := func(seg []byte) {
 		rem := maxLineBufBytes - len(lineBuf)
@@ -280,9 +289,11 @@ func (s *Shipper) readLoop() {
 		}
 		// An overflowed line's discarded tail still drives redaction
 		// state: the last marker seen there reopens/closes the block, and
-		// credential state was already advanced per discarded fragment —
+		// the shadow stream — which saw the retained prefix plus every
+		// discarded fragment in order — becomes the credential state, so
 		// a `PASSWORD="` past the cap masks the value on the next lines.
 		if overflow {
+			cred = disc
 			switch tailBoundary {
 			case 'B':
 				inPEM = true
@@ -303,6 +314,8 @@ func (s *Shipper) readLoop() {
 		overflow = false
 		tailBoundary = 0
 		markerCarry = ""
+		disc = redact.Stream{}
+		discSeeded = false
 	}
 
 	for {
