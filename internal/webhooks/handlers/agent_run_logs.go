@@ -105,24 +105,42 @@ const seqAttemptStride = int64(1_000_000_000)
 // encodeLogState packs the PEM flag and the credential Stream state into
 // the redact_state column; decodeLogState reverses it. Rows without
 // state (pre-column or third-party inserts) decode to idle.
-func encodeLogState(inPEM bool, st string) string {
-	if inPEM {
-		if st == "" {
-			return "pem"
-		}
-		return "pem;" + st
+func encodeLogState(unknown, inPEM bool, st string) string {
+	var enc string
+	if unknown {
+		enc = "u"
 	}
-	return st
+	if inPEM {
+		if enc != "" {
+			enc += ";"
+		}
+		enc += "pem"
+	}
+	if st != "" {
+		if enc != "" {
+			enc += ";"
+		}
+		enc += st
+	}
+	return enc
 }
 
-func decodeLogState(enc string) (bool, string) {
-	if enc == "pem" {
-		return true, ""
+func decodeLogState(enc string) (unknown, inPEM bool, st string) {
+	for _, part := range strings.Split(enc, ";") {
+		switch part {
+		case "u":
+			unknown = true
+		case "pem":
+			inPEM = true
+		case "":
+		default:
+			if st != "" {
+				st += ";"
+			}
+			st += part
+		}
 	}
-	if strings.HasPrefix(enc, "pem;") {
-		return true, enc[len("pem;"):]
-	}
-	return false, enc
+	return unknown, inPEM, st
 }
 
 // lockAndTxDB acquires the MySQL named lock on a dedicated connection and
@@ -332,9 +350,14 @@ func HandleAgentRunLogs(c *gin.Context) {
 		}
 		logs := make([]*models.AgentRunLog, 0, len(fresh))
 		prevSeq, prevBase := int64(0), int64(-1)
+		unknown := false
 		for _, entry := range fresh {
 			entryBase := (entry.Seq / seqAttemptStride) * seqAttemptStride
-			unknown := false
+			if entryBase != prevBase {
+				// Attempt boundary: the previous attempt's state —
+				// including an unresolved unknown — never carries over.
+				inPEM, unknown, stream = false, false, logredact.Stream{}
+			}
 			if entry.Seq != prevSeq+1 || entryBase != prevBase {
 				p, err := pred(prevSeq, entry.Seq)
 				if err != nil {
@@ -342,39 +365,45 @@ func HandleAgentRunLogs(c *gin.Context) {
 				}
 				switch {
 				case p != nil && p.Seq == entry.Seq-1:
-					// Complete stored chain — resume its exact state.
+					// Complete stored chain — resume its exact state. A
+					// "u" marker persists unknown masking; a clean row
+					// restores full context.
 					var st string
-					inPEM, st = decodeLogState(p.RedactState)
+					unknown, inPEM, st = decodeLogState(p.RedactState)
 					stream = logredact.Stream{}
 					stream.SetState(st)
-				case p != nil || prevSeq == 0 || entryBase != prevBase:
-					if entry.Seq == entryBase+1 && p == nil {
-						// Genuine first line of an attempt — idle.
-						inPEM = false
-						stream = logredact.Stream{}
-					} else {
-						// Seqs between the predecessor and this entry are
-						// missing — an earlier batch that hasn't arrived
-						// (or was dropped): the masking state here is
-						// unknowable, so mask this line conservatively
-						// and mark the next as a potential continuation.
-						unknown = true
-					}
+				case entry.Seq == entryBase+1:
+					// Genuine first line of an attempt — idle.
+					inPEM, unknown, stream = false, false, logredact.Stream{}
+				default:
+					// Seqs between the predecessor and this entry are
+					// missing — an earlier batch that hasn't arrived, a
+					// dropped seq, or an in-batch gap: the masking state
+					// here is unknowable. A missing line could open a
+					// quoted value or PEM block, so the unknown marker
+					// stays sticky for the rest of the attempt rather
+					// than assuming a one-line continuation.
+					unknown = true
 				}
-				// p == nil && prevSeq > 0 && same attempt: the in-memory
-				// predecessor of THIS batch continues — keep its state.
 			}
 			var line string
 			switch {
 			case unknown:
-				// Gap with no stored predecessor and no in-memory
-				// continuation: the real masking state is unknowable, so
-				// fail closed — mask this line and treat the next as a
-				// possible continuation value.
+				// Mask the whole line conservatively, but still feed the
+				// raw text to the trackers so a recognizable quote or
+				// PEM block on this entry keeps its state recorded.
 				line = "***"
-				inPEM = false
-				stream = logredact.Stream{}
-				stream.SetState("p")
+				switch {
+				case entry.Line == pemBeginSentinel:
+					inPEM = true
+				case entry.Line == pemEndSentinel:
+					inPEM = false
+				case strings.Contains(entry.Line, "-----BEGIN ") && strings.Contains(entry.Line, "PRIVATE KEY"):
+					inPEM = true
+				case strings.Contains(entry.Line, "-----END ") && strings.Contains(entry.Line, "PRIVATE KEY"):
+					inPEM = false
+				}
+				_ = stream.Line(entry.Line)
 			case entry.Line == pemBeginSentinel:
 				// Shipper already masked this block — just track state.
 				inPEM = true
@@ -409,7 +438,7 @@ func HandleAgentRunLogs(c *gin.Context) {
 				Seq:         entry.Seq,
 				TS:          entry.TS,
 				Line:        line,
-				RedactState: encodeLogState(inPEM, stream.State()),
+				RedactState: encodeLogState(unknown, inPEM, stream.State()),
 			})
 			prevSeq, prevBase = entry.Seq, entryBase
 		}
