@@ -365,3 +365,66 @@ func TestShipperCloseRetriesInFlightBatch(t *testing.T) {
 		t.Fatalf("expected %d lines delivered via drain retry, got %d", n, len(got))
 	}
 }
+
+// A credential name on one line and its value on the next must mask the
+// value line — splitting before redaction would ship it raw.
+func TestShipperMasksCredentialValueOnNextLine(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "CURSOR_API_KEY\n")
+	fmt.Fprintf(os.Stderr, "xyz987uvw654\n")
+	fmt.Fprintf(os.Stderr, "after\n")
+	s.Close()
+
+	var lines []logEntry
+	for _, b := range c.batches {
+		lines = append(lines, b...)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("unexpected entries: %+v", lines)
+	}
+	if lines[0].Line != "CURSOR_API_KEY" || lines[1].Line != "***" || lines[2].Line != "after" {
+		t.Fatalf("cross-line credential not masked: %+v", lines)
+	}
+}
+
+// A `-----END CERTIFICATE-----` line inside an open private-key block must
+// not close masking — the remaining key body stays redacted.
+func TestShipperCertificateEndDoesNotClosePEM(t *testing.T) {
+	c, srv := newCaptureServer(t)
+
+	s, err := Attach(srv.URL, "tok", 7, 0)
+	if err != nil || s == nil {
+		t.Fatalf("attach failed: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "GITHUB_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\n")
+	fmt.Fprintf(os.Stderr, "-----END CERTIFICATE-----\n")
+	fmt.Fprintf(os.Stderr, "MIIEshortkeybody\n")
+	fmt.Fprintf(os.Stderr, "-----END RSA PRIVATE KEY-----\n")
+	fmt.Fprintf(os.Stderr, "done\n")
+	s.Close()
+
+	var lines []logEntry
+	for _, b := range c.batches {
+		lines = append(lines, b...)
+	}
+	want := []string{
+		"[REDACTED PRIVATE KEY BEGIN]",
+		"[REDACTED]",
+		"[REDACTED]",
+		"[REDACTED PRIVATE KEY END]",
+		"done",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("unexpected entries: %+v", lines)
+	}
+	for i, w := range want {
+		if lines[i].Line != w {
+			t.Fatalf("line %d: want %q got %q (all: %+v)", i, w, lines[i].Line, lines)
+		}
+	}
+}
