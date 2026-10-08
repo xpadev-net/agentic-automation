@@ -102,6 +102,29 @@ const (
 // from an earlier attempt must not seed this attempt's masking state.
 const seqAttemptStride = int64(1_000_000_000)
 
+// encodeLogState packs the PEM flag and the credential Stream state into
+// the redact_state column; decodeLogState reverses it. Rows without
+// state (pre-column or third-party inserts) decode to idle.
+func encodeLogState(inPEM bool, st string) string {
+	if inPEM {
+		if st == "" {
+			return "pem"
+		}
+		return "pem;" + st
+	}
+	return st
+}
+
+func decodeLogState(enc string) (bool, string) {
+	if enc == "pem" {
+		return true, ""
+	}
+	if strings.HasPrefix(enc, "pem;") {
+		return true, enc[len("pem;"):]
+	}
+	return false, enc
+}
+
 // lockAndTxDB acquires the MySQL named lock on a dedicated connection and
 // returns a *gorm.DB bound to that same physical connection, so callers
 // can run a gorm Transaction while the lock is held — and released only
@@ -282,48 +305,45 @@ func HandleAgentRunLogs(c *gin.Context) {
 			// Whole batch already stored — idempotent no-op.
 			return nil
 		}
-		minSeq, maxSeq := fresh[0].Seq, fresh[len(fresh)-1].Seq
-		minAttemptBase := (minSeq / seqAttemptStride) * seqAttemptStride
-		var sentinels []models.AgentRunLog
-		if err := tx.Model(&models.AgentRunLog{}).
-			Select("seq", "line").
-			Where("agent_run_id = ? AND seq >= ? AND seq <= ? AND (line = ? OR line = ?)",
-				run.ID, minAttemptBase, maxSeq, pemBeginSentinel, pemEndSentinel).
-			Order("seq").
-			Scan(&sentinels).Error; err != nil {
-			return err
-		}
+		// Masking state is persisted per row: every stored line carries
+		// the redaction state it left behind (inPEM + credential Stream),
+		// so each fresh entry seeds from the latest stored row of ITS
+		// attempt — surviving batch boundaries, unclosed quoted values,
+		// and overlapping resends alike (a stored bare `GITHUB_TOKEN`
+		// between fresh entries masks the value after it).
 		inPEM := false
-		sentIdx := 0
-		lastBase := minAttemptBase
-		// Cross-line credential state for raw (non-shipper) posts, mirroring
-		// the shipper: `KEY\nvalue` and unclosed `KEY="...` must mask
-		// continuation lines too. Seeded from the last stored line in this
-		// attempt so a pending key survives a batch boundary.
 		stream := logredact.Stream{}
-		var prev models.AgentRunLog
-		if err := tx.Select("line").
-			Where("agent_run_id = ? AND seq >= ? AND seq < ?", run.ID, minAttemptBase, minSeq).
-			Order("seq DESC").Limit(1).Take(&prev).Error; err == nil {
-			stream.SeedPending(prev.Line)
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+		seed := func(seq int64) error {
+			base := (seq / seqAttemptStride) * seqAttemptStride
+			var prev models.AgentRunLog
+			err := tx.Select("redact_state").
+				Where("agent_run_id = ? AND seq >= ? AND seq < ?", run.ID, base, seq).
+				Order("seq DESC").Limit(1).Take(&prev).Error
+			if err == nil {
+				var st string
+				inPEM, st = decodeLogState(prev.RedactState)
+				stream = logredact.Stream{}
+				stream.SetState(st)
+				return nil
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			// No stored predecessor in this attempt — idle state (this
+			// also resets state across an attempt boundary).
+			inPEM = false
+			stream = logredact.Stream{}
+			return nil
 		}
 		logs := make([]*models.AgentRunLog, 0, len(fresh))
+		prevSeq := int64(0)
 		for _, entry := range fresh {
-			entryBase := (entry.Seq / seqAttemptStride) * seqAttemptStride
-			if entryBase != lastBase {
-				// Crossing an attempt boundary: a BEGIN left unterminated by
-				// the previous attempt must not mask this attempt's lines.
-				inPEM = false
-				stream = logredact.Stream{}
-				lastBase = entryBase
-			}
-			for sentIdx < len(sentinels) && sentinels[sentIdx].Seq < entry.Seq {
-				if sentinels[sentIdx].Seq >= entryBase {
-					inPEM = sentinels[sentIdx].Line == pemBeginSentinel
+			if entry.Seq != prevSeq+1 || prevSeq == 0 {
+				// First entry or a gap (a stored row or dropped seq sits
+				// between): resume the state the stored predecessor left.
+				if err := seed(entry.Seq); err != nil {
+					return err
 				}
-				sentIdx++
 			}
 			// Redact credentials before anything is persisted or streamed:
 			// agent stderr can leak tokens injected into the runner env.
@@ -361,11 +381,13 @@ func HandleAgentRunLogs(c *gin.Context) {
 				line = truncateLineUTF8(line, maxLogLineBytes)
 			}
 			logs = append(logs, &models.AgentRunLog{
-				AgentRunID: run.ID,
-				Seq:        entry.Seq,
-				TS:         entry.TS,
-				Line:       line,
+				AgentRunID:  run.ID,
+				Seq:         entry.Seq,
+				TS:          entry.TS,
+				Line:        line,
+				RedactState: encodeLogState(inPEM, stream.State()),
 			})
+			prevSeq = entry.Seq
 		}
 		// OnConflict DoNothing makes re-posted batches idempotent for
 		// storage, but live publication must be limited to rows actually
