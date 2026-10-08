@@ -71,6 +71,65 @@ func TestLineMasksPrefixedBase64Line(t *testing.T) {
 	}
 }
 
+// Two qualifying runs sharing a single delimiter must both be masked —
+// the first match may not consume the boundary the second run needs.
+func TestLineMasksAdjacentBase64Runs(t *testing.T) {
+	in := strings.Repeat("A", 64) + " " + strings.Repeat("B", 64)
+	if got := Line(in); got != "*** ***" {
+		t.Fatalf("adjacent base64 runs leaked: %q", got)
+	}
+}
+
+// Quoted credential values keep whitespace and escaped quotes inside the
+// mask — an early stop would leak most of the secret.
+func TestLineMasksQuotedCredentialValues(t *testing.T) {
+	for _, in := range []string{
+		`PASSWORD="correct horse battery staple"`,
+		`SESSION_SECRET='multi word secret'`,
+		`{"API_KEY":"value with spaces"}`,
+	} {
+		got := Line(in)
+		for _, frag := range []string{"horse", "battery", "word secret", "with spaces"} {
+			if strings.Contains(got, frag) {
+				t.Fatalf("quoted value leaked: %q -> %q", in, got)
+			}
+		}
+	}
+}
+
+// A PEM block whose lines carry timestamp prefixes defeats the
+// complete-block pattern; the line pass must still mask every body line,
+// including a short final line below the base64 threshold.
+func TestLineMasksPrefixedMultilinePEM(t *testing.T) {
+	long := strings.Repeat("Q", 64)
+	short := strings.Repeat("x", 32)
+	in := "2024-01-01T00:00:00Z -----BEGIN RSA PRIVATE KEY-----\n" +
+		"2024-01-01T00:00:00Z " + long + "\n" +
+		"2024-01-01T00:00:00Z " + short + "\n" +
+		"2024-01-01T00:00:00Z -----END RSA PRIVATE KEY-----"
+	got := Line(in)
+	for _, frag := range []string{long, short, "-----BEGIN", "-----END"} {
+		if strings.Contains(got, frag) {
+			t.Fatalf("prefixed PEM material leaked: %q", got)
+		}
+	}
+	if !strings.Contains(got, PEMBeginSentinel) || !strings.Contains(got, PEMEndSentinel) {
+		t.Fatalf("sentinels missing: %q", got)
+	}
+}
+
+// A lone marker line is rewritten to the shared sentinel so stored rows
+// line up with the shipper's format and the ingest handler's sentinel
+// replay can track PEM state across entries.
+func TestLineMarkerLineBecomesSentinel(t *testing.T) {
+	if got := Line("INFO -----BEGIN RSA PRIVATE KEY-----"); got != PEMBeginSentinel {
+		t.Fatalf("begin marker not sentineled: %q", got)
+	}
+	if got := Line("-----END RSA PRIVATE KEY----- trailing"); got != PEMEndSentinel {
+		t.Fatalf("end marker not sentineled: %q", got)
+	}
+}
+
 func TestLineMasksPEMBlock(t *testing.T) {
 	body := strings.Repeat("QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo", 2)[:64]
 	in := "-----BEGIN RSA PRIVATE KEY-----\n" + body + "\n-----END RSA PRIVATE KEY-----"
