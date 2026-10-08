@@ -28,6 +28,25 @@ type Executor struct {
 	progressWriter io.Writer
 }
 
+// lockedBuffer makes a bytes.Buffer safe for concurrent writes from the
+// stdout/stderr copy goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) Bytes() []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Bytes()
+}
+
 type synchronizedWriter struct {
 	mu     sync.Mutex
 	writer io.Writer
@@ -109,18 +128,90 @@ func (e *Executor) executeClaudeCode(workDir, prompt string) (string, error) {
 		// Preserve existing environment and ensure ANTHROPIC_API_KEY is set
 		cmd.Env = os.Environ()
 
-		// Execute and capture combined output (stdout + stderr)
-		output, err = cmd.CombinedOutput()
+		// Stream stdout+stderr live into progressWriter (os.Stderr, which the
+		// log shipper tails) while also capturing the combined output like
+		// CombinedOutput did — claude runs are the longest-lived ones, so
+		// buffering-until-exit would hide them from the live log feed.
+		// perr must not reuse the outer err name: cmd.Wait() below writes to
+		// the outer variable, and a shadowed err would leave it nil so a
+		// failed subprocess reported success.
+		stdout, perr := cmd.StdoutPipe()
+		if perr != nil {
+			return "", fmt.Errorf("failed to create claude-code stdout pipe: %w", perr)
+		}
+		stderr, perr := cmd.StderrPipe()
+		if perr != nil {
+			return "", fmt.Errorf("failed to create claude-code stderr pipe: %w", perr)
+		}
+		if err := cmd.Start(); err != nil {
+			return "", fmt.Errorf("failed to start claude-code: %w", err)
+		}
+
+		var out lockedBuffer
+		progress := &synchronizedWriter{writer: e.progressWriter}
+		readErrs := make(chan error, 2)
+		go func() { readErrs <- streamCopy(stdout, &out, progress) }()
+		go func() { readErrs <- streamCopy(stderr, &out, progress) }()
+		// A read-side failure stops the child immediately — like the codex
+		// path — so the abandoned pipe cannot fill and block the other
+		// reader or cmd.Wait. A progress-writer failure alone keeps
+		// draining (see streamCopy).
+		var streamErr error
+		for range 2 {
+			if rerr := <-readErrs; rerr != nil {
+				if streamErr == nil {
+					streamErr = rerr
+				}
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+			}
+		}
+		err = cmd.Wait()
+		output = out.Bytes()
+		if streamErr != nil {
+			return string(output), streamErr
+		}
 	}
 
 	outputStr := string(output)
 
-	// If command execution failed, wrap the error with output context
+	// If command execution failed, wrap the error with only the output tail:
+	// the streaming path already mirrored the full transcript to stderr, so
+	// embedding it again would replay every line through the log shipper
+	// when the caller prints this error.
 	if err != nil {
-		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput: %s", err, outputStr)
+		return outputStr, fmt.Errorf("claude-code execution failed: %w\nOutput (tail): %s", err, outputTail(outputStr))
 	}
 
 	return outputStr, nil
+}
+
+// streamCopy drains r into buf while mirroring to progress. A mirror
+// failure (e.g. closed stderr) only drops the progress writer — the pipe
+// keeps being drained so the subprocess never blocks on it. A read
+// failure is returned so the caller can terminate the subprocess.
+func streamCopy(r io.Reader, buf *lockedBuffer, progress io.Writer) error {
+	p := make([]byte, 32*1024)
+	mirror := true
+	for {
+		n, rerr := r.Read(p)
+		if n > 0 {
+			chunk := p[:n]
+			_, _ = buf.Write(chunk)
+			if mirror {
+				if _, werr := progress.Write(chunk); werr != nil {
+					mirror = false
+				}
+			}
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return nil
+			}
+			return rerr
+		}
+	}
 }
 
 // executeCodex executes the OpenAI Codex CLI (codex exec) in non-interactive mode.
@@ -248,10 +339,31 @@ func (e *Executor) executeCodex(workDir, prompt, model string, allowWrite bool) 
 	return codexResult(outputStr, cmdErr)
 }
 
+// outputTail bounds the output embedded in an execution error. Streaming
+// executors already mirror their full transcript to stderr (and thus the
+// log shipper), so embedding it again would replay thousands of lines when
+// the caller prints this error after run failure.
+func outputTail(output string) string {
+	const maxTailBytes = 4096
+	if len(output) <= maxTailBytes {
+		return output
+	}
+	cut := len(output) - maxTailBytes
+	// Advance the cut only past UTF-8 continuation bytes so we don't
+	// split a rune at the boundary. Subprocess stderr is not guaranteed
+	// valid UTF-8, so sanitize — not delete — any remaining invalid
+	// bytes: walking forward until the whole tail validates would drop
+	// every diagnostic byte in front of a single bad byte.
+	for cut < len(output) && output[cut]&0xC0 == 0x80 {
+		cut++
+	}
+	return "…[truncated]" + strings.ToValidUTF8(output[cut:], "�")
+}
+
 func codexResult(output string, err error) (string, error) {
-	// If command execution failed, wrap the error with output context
+	// If command execution failed, wrap the error with only the output tail.
 	if err != nil {
-		return output, fmt.Errorf("codex execution failed: %w\nOutput: %s", err, output)
+		return output, fmt.Errorf("codex execution failed: %w\nOutput (tail): %s", err, outputTail(output))
 	}
 	return output, nil
 }
@@ -283,7 +395,7 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 		output, err = e.cmdRunner.Run("cursor-agent", args, workDir)
 		outputStr := string(output)
 		if err != nil {
-			return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput: %s", err, outputStr)
+			return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput (tail): %s", err, outputTail(outputStr))
 		}
 		return outputStr, nil
 	}
@@ -482,9 +594,9 @@ func (e *Executor) executeCursor(workDir, prompt, model string, allowWrite bool)
 		fmt.Fprintf(os.Stderr, "[STDERR] %s", stderrBuf.String())
 	}
 
-	// If command execution failed, wrap the error with output context
+	// If command execution failed, wrap the error with only the output tail.
 	if cmdErr != nil {
-		return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput: %s", cmdErr, outputStr)
+		return outputStr, fmt.Errorf("cursor agent execution failed: %w\nOutput (tail): %s", cmdErr, outputTail(outputStr))
 	}
 
 	return outputStr, nil
