@@ -993,3 +993,17 @@ func TestExecutor_Execute_ClaudeCode_ProgressErrorKeepsDraining(t *testing.T) {
 		t.Fatal("claude-code execution hung after progress writer failure")
 	}
 }
+
+// A >4KiB output ending in an invalid UTF-8 byte must keep its
+// diagnostic text: aligning the cut cannot erase everything in front
+// of a single bad byte.
+func TestOutputTailPreservesDiagnosticsAfterInvalidUTF8(t *testing.T) {
+	out := strings.Repeat("a", 5000) + "authentication failed: bad token" + "\xff"
+	got := outputTail(out)
+	if !strings.Contains(got, "authentication failed: bad token") {
+		t.Fatalf("diagnostic lost: %q", got[len(got)-min(200, len(got)):])
+	}
+	if !strings.HasPrefix(got, "…[truncated]") {
+		t.Fatalf("tail marker missing: %q", got[:64])
+	}
+}

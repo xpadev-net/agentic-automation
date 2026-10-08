@@ -319,3 +319,139 @@ func TestStreamStateRoundTrip(t *testing.T) {
 		t.Fatalf("restored open state did not mask: %q", got)
 	}
 }
+
+// Unterminated quoted credentials must fail closed in String() — the
+// unquoted fallback would otherwise leak the tail (`PASSWORD="correct
+// horse battery staple` must not leave "horse battery staple" visible).
+func TestMasksUnterminatedQuotedCredential(t *testing.T) {
+	got := String(`PASSWORD="correct horse battery staple`)
+	want := `PASSWORD=***`
+	if got != want {
+		t.Fatalf("single-line: want %q, got %q", want, got)
+	}
+	got = String("line1\n" + `PASSWORD="unclosed a` + "\nb")
+	want = "line1\nPASSWORD=***"
+	if got != want {
+		t.Fatalf("multiline: want %q, got %q", want, got)
+	}
+	// A closed assignment before the unclosed one must also survive.
+	got = String(`FIRST_TOKEN="ok" PASSWORD="tail`)
+	want = `*** PASSWORD=***`
+	if got != want {
+		t.Fatalf("mixed: want %q, got %q", want, got)
+	}
+}
+
+// A quoted value that starts on the line AFTER a bare credential key
+// keeps masking until its closing quote.
+func TestStreamPendingQuotedContinuation(t *testing.T) {
+	s := Stream{}
+	if got := s.Line("PASSWORD="); got != "PASSWORD=" {
+		t.Fatalf("key line: %q", got)
+	}
+	if got := s.Line(`"correct`); got != "***" {
+		t.Fatalf("open: %q", got)
+	}
+	if got := s.Line("horse battery"); got != "***" {
+		t.Fatalf("body: %q", got)
+	}
+	if got := s.Line(`staple" after`); got != "*** after" {
+		t.Fatalf("close: %q", got)
+	}
+}
+
+// SetState replaces rather than merges: restoring idle clears pending
+// and open-quote state.
+func TestStreamSetStateReplaces(t *testing.T) {
+	s := Stream{}
+	s.SetState("p")
+	s.SetState("")
+	if got := s.Line("ordinary line"); got != "ordinary line" {
+		t.Fatalf("idle restore still masked: %q", got)
+	}
+	s2 := Stream{}
+	s2.SetState("q34:0")
+	s2.SetState("")
+	if got := s2.Line("next"); got != "next" {
+		t.Fatalf("quote state lingered: %q", got)
+	}
+}
+
+// Escaped single-quoted values mask the same as escaped double quotes.
+func TestMasksEscapedSingleQuotedValue(t *testing.T) {
+	got := String(`PASSWORD=\'correct horse battery staple\'`)
+	want := `***`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// JSONL output keeps newlines as literal `\n` — an unquoted credential
+// value must stop there instead of eating the following diagnostics.
+func TestUnquotedValueStopsAtEscapedNewline(t *testing.T) {
+	got := String(`CURSOR_API_KEY=xyz987uvw654\nERROR:ENOENT\nexit_code=1`)
+	want := `***\nERROR:ENOENT\nexit_code=1`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// A closing delimiter at the opener's own encoding depth ends the span;
+// a deeper-encoded value must not swallow the trailing diagnostic.
+func TestMasksDoublyEscapedQuotedValueAtDepth(t *testing.T) {
+	got := String(`PASSWORD=\\\"correct\\\" diagnostic=\\\"failed to load\\\"`)
+	want := `*** diagnostic=\\\"failed to load\\\"`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+// An indented quote still starts a masked continuation.
+func TestStreamPendingIndentedQuotedContinuation(t *testing.T) {
+	s := Stream{}
+	if got := s.Line("PASSWORD="); got != "PASSWORD=" {
+		t.Fatalf("key: %q", got)
+	}
+	if got := s.Line(`  "correct`); got != "***" {
+		t.Fatalf("open: %q", got)
+	}
+	if got := s.Line("horse battery"); got != "***" {
+		t.Fatalf("body: %q", got)
+	}
+	if got := s.Line(`staple" done`); got != "*** done" {
+		t.Fatalf("close: %q", got)
+	}
+}
+
+// Pending-value line carrying a further credential opener must keep
+// tracking it — `API_KEY=` then `abcd PASSWORD="correct` still masks
+// the following continuation lines.
+func TestStreamPendingLineTracksEmbeddedCredential(t *testing.T) {
+	s := &Stream{}
+	s.Line("API_KEY=")
+	if got := s.Line(`abcd PASSWORD="correct`); got != "***" {
+		t.Fatalf("pending line: %q", got)
+	}
+	for _, ln := range []string{"horse battery", `staple"`} {
+		if got := s.Line(ln); got != "***" {
+			t.Fatalf("continuation %q: %q", ln, got)
+		}
+	}
+	if s.openQuote != 0 || s.pendingValue {
+		t.Fatal("stream still open after close")
+	}
+}
+
+// Bash concatenates adjacent quoted fragments into one word:
+// `PASSWORD='correct'\”horse battery staple'` masks in full.
+func TestMasksShellConcatenatedQuotedValue(t *testing.T) {
+	got := String(`PASSWORD='correct'\''horse battery staple'`)
+	if got != "***" {
+		t.Fatalf("concat: %q", got)
+	}
+	// And the mixed adjacent-quote form.
+	got = String(`PASSWORD='correct'"horse battery staple"`)
+	if got != "***" {
+		t.Fatalf("mixed concat: %q", got)
+	}
+}

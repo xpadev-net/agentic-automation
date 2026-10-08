@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"agent-runner/pkg/utils"
 )
@@ -350,10 +349,15 @@ func outputTail(output string) string {
 		return output
 	}
 	cut := len(output) - maxTailBytes
-	for cut < len(output) && !utf8.ValidString(output[cut:]) {
+	// Advance the cut only past UTF-8 continuation bytes so we don't
+	// split a rune at the boundary. Subprocess stderr is not guaranteed
+	// valid UTF-8, so sanitize — not delete — any remaining invalid
+	// bytes: walking forward until the whole tail validates would drop
+	// every diagnostic byte in front of a single bad byte.
+	for cut < len(output) && output[cut]&0xC0 == 0x80 {
 		cut++
 	}
-	return "…[truncated]" + output[cut:]
+	return "…[truncated]" + strings.ToValidUTF8(output[cut:], "�")
 }
 
 func codexResult(output string, err error) (string, error) {
