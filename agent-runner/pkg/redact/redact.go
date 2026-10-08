@@ -145,6 +145,16 @@ type Stream struct {
 	openEscaped  bool // the open quote had a leading backslash (\"…)
 }
 
+// SeedPending primes cross-line state from a previously processed line:
+// a bare credential key there means the next line continues its value.
+// (An open quote can't be recovered — its lines were masked to "***" —
+// so only the pending-key case can resume.)
+func (s *Stream) SeedPending(prev string) {
+	if credKeyTail.MatchString(prev) {
+		s.pendingValue = true
+	}
+}
+
 // Line redacts one line like String, plus cross-line credential state.
 // Pass lines in stream order; sentinel lines pass through untouched
 // (they never contain the keyword tail).
