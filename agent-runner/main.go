@@ -15,6 +15,7 @@ import (
 	"agent-runner/pkg/config"
 	"agent-runner/pkg/git"
 	"agent-runner/pkg/hooks"
+	"agent-runner/pkg/logship"
 	"agent-runner/pkg/parser"
 	"agent-runner/pkg/prompts"
 	"agent-runner/pkg/reporter"
@@ -450,11 +451,36 @@ func syncBranchWithBase(workDir, repo, baseBranch, branchName string, issueID in
 // Run executes the agent-runner workflow.
 // This function is exported for testing purposes.
 
-func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode string) error {
+func Run(issueID int, repo, prompt, previousAttempts, ciLogs, executionMode string) (retErr error) {
 	executionMode = normalizeExecutionMode(executionMode)
 	if executionMode == "" {
 		return fmt.Errorf("invalid execution mode")
 	}
+	// Tee stderr to the Operator log ingestion endpoint BEFORE full env
+	// validation, from the raw log-specific env values: otherwise a
+	// validation failure (missing AGENT_TYPE, malformed RETRY_COUNT, ...)
+	// would exit with the reason visible only on Kubernetes stderr.
+	// Best-effort — unusable settings disable shipping, they never fail
+	// the run.
+	rawAPIURL, _ := constructOperatorURL()
+	rawToken := strings.TrimSpace(os.Getenv("OPERATOR_API_TOKEN"))
+	rawRunID, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("AGENT_RUN_ID")))
+	rawRetry, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("RETRY_COUNT")))
+	shipper, err := logship.Attach(rawAPIURL, rawToken, rawRunID, rawRetry)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "WARNING: log shipping unavailable: %v\n", err)
+	}
+	defer shipper.Close()
+	// Print the returned error while the shipper is still attached so the
+	// failure reason reaches the shipped log — cobra only prints it after
+	// Run returns, which is after the shipper has closed. (Registered after
+	// the Close defer so it runs first.)
+	defer func() {
+		if retErr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", retErr)
+		}
+	}()
+
 	// 1. Validate and load environment variables
 	envCfg, err := validateEnv()
 	if err != nil {
