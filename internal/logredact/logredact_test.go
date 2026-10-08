@@ -12,6 +12,8 @@ func TestLineMasksRunnerJobSecrets(t *testing.T) {
 		{"github private key env", "GITHUB_PRIVATE_KEY=-----BEGIN"},
 		{"json style", `"npm_token": "abcdef123456"`},
 		{"space separated", "CURSOR_API_KEY xyz987uvw654"},
+		{"tab separated", "CURSOR_API_KEY\txyz987uvw654"},
+		{"newline separated", "CURSOR_API_KEY\nxyz987uvw654"},
 	}
 	for _, tc := range cases {
 		got := Line(tc.in)
@@ -27,6 +29,45 @@ func TestLineLeavesProseAlone(t *testing.T) {
 	in := "token: is required"
 	if got := Line(in); got != in {
 		t.Fatalf("prose was redacted: %q", got)
+	}
+}
+
+// Usage counters end in the same keywords as credential names but are
+// followed by more identifier characters — the keyword boundary must
+// keep them intact.
+func TestLineLeavesUsageCountersAlone(t *testing.T) {
+	for _, in := range []string{
+		`{"input_tokens": 12345, "output_tokens": 678}`,
+		`"max_tokens": 8192`,
+		`"access_token_count": 3`,
+		`remaining_tokens 42`,
+	} {
+		if got := Line(in); got != in {
+			t.Fatalf("usage counter was redacted: %q -> %q", in, got)
+		}
+	}
+}
+
+// A token longer than the fixed-width prefix must not leak its tail.
+func TestLineMasksWholeTokenNotJustPrefix(t *testing.T) {
+	for _, in := range []string{
+		"ghr_" + strings.Repeat("a", 60),
+		"ghp_" + strings.Repeat("z", 50),
+		"sk-" + strings.Repeat("a", 60),
+	} {
+		if got := Line(in); got != "***" {
+			t.Fatalf("token tail leaked: %q -> %q", in, got)
+		}
+	}
+}
+
+// A base64-looking PEM body line is masked even when a log prefix
+// precedes the base64 run on the same line.
+func TestLineMasksPrefixedBase64Line(t *testing.T) {
+	body := strings.Repeat("T", 64)
+	in := "INFO request body=" + body
+	if got := Line(in); strings.Contains(got, body) {
+		t.Fatalf("prefixed base64 leaked: %q", got)
 	}
 }
 
