@@ -408,8 +408,8 @@ func TestExecutor_Execute_ClaudeCode_CommandFailure(t *testing.T) {
 	if !strings.Contains(errorMsg, "claude-code execution failed") {
 		t.Errorf("Expected error message to contain 'claude-code execution failed', got %q", errorMsg)
 	}
-	if !strings.Contains(errorMsg, "Output: Command failed with exit code 1") {
-		t.Errorf("Expected error message to contain output, got %q", errorMsg)
+	if !strings.Contains(errorMsg, "Command failed with exit code 1") {
+		t.Errorf("Expected error message to contain output tail, got %q", errorMsg)
 	}
 
 	// Verify output is still returned
@@ -931,5 +931,79 @@ func TestExecutor_ExecuteWithOptions_Cursor_MissingAPIKey(t *testing.T) {
 	// Verify command was not executed
 	if mockRunner.CallCount != 0 {
 		t.Errorf("Expected CallCount = 0, got %d", mockRunner.CallCount)
+	}
+}
+
+// The real subprocess path (no cmdRunner mock) must propagate non-zero
+// exits: a shadowed error would silently report success. Uses a fake
+// claude-code executable on PATH.
+func TestExecutor_Execute_ClaudeCode_SubprocessFailure(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude-code")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho fake-error >&2\nexit 3\n"), 0o755); err != nil {
+		t.Fatalf("write fake claude-code: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	executor := NewExecutor("claude-code")
+	_, err := executor.Execute(t.TempDir(), "prompt")
+	if err == nil {
+		t.Fatal("expected subprocess failure to propagate, got nil error")
+	}
+	if !strings.Contains(err.Error(), "claude-code execution failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// A failing progress writer must not wedge the run: streamCopy drops the
+// mirror but keeps draining the pipe, so a chatty child still exits and
+// its output stays complete.
+func TestExecutor_Execute_ClaudeCode_ProgressErrorKeepsDraining(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "claude-code")
+	// ~1 MiB exceeds the 64 KiB pipe buffer: without continued draining
+	// the child blocks mid-write and Execute hangs.
+	script := "#!/bin/sh\nyes x | head -c 1000000 >&2\necho done\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude-code: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+
+	executor := NewExecutor("claude-code")
+	executor.progressWriter = failingWriter{}
+	done := make(chan error, 1)
+	var output string
+	go func() {
+		var err error
+		output, err = executor.Execute(t.TempDir(), "prompt")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute() error = %v, want nil", err)
+		}
+		if !strings.Contains(output, "done") || len(output) < 1_000_000 {
+			t.Fatalf("output incomplete (len=%d)", len(output))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("claude-code execution hung after progress writer failure")
+	}
+}
+
+// A >4KiB output ending in an invalid UTF-8 byte must keep its
+// diagnostic text: aligning the cut cannot erase everything in front
+// of a single bad byte.
+func TestOutputTailPreservesDiagnosticsAfterInvalidUTF8(t *testing.T) {
+	out := strings.Repeat("a", 5000) + "authentication failed: bad token" + "\xff"
+	got := outputTail(out)
+	if !strings.Contains(got, "authentication failed: bad token") {
+		t.Fatalf("diagnostic lost: %q", got[len(got)-min(200, len(got)):])
+	}
+	if !strings.HasPrefix(got, "…[truncated]") {
+		t.Fatalf("tail marker missing: %q", got[:64])
 	}
 }
