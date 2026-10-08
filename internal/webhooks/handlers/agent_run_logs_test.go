@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -22,10 +23,20 @@ import (
 )
 
 func setupLogTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	// A per-test named in-memory database keeps rows from leaking into
+	// later tests or repeated suite runs (`file::memory:?cache=shared`
+	// is one shared store). cache=shared is still required so the pool's
+	// connections see the same DB.
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
 	if err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS agent_runs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
