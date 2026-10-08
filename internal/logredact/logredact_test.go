@@ -233,3 +233,74 @@ func TestStreamMasksMultilineQuotedValue(t *testing.T) {
 		t.Fatalf("state leaked past close: %q", got)
 	}
 }
+
+func TestMasksEscapedQuotedValueWithInteriorEscapedQuote(t *testing.T) {
+	got := Line(`PASSWORD=\"correct \\\"horse\\\" battery staple\" tail`)
+	want := `*** tail`
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
+func TestStreamMasksRetainedPrefixBeforeUnclosedQuote(t *testing.T) {
+	s := Stream{}
+	got := s.Line(`OPERATOR_API_TOKEN=abc123def456 PASSWORD="correct`)
+	want := `*** PASSWORD=***`
+	if got != want {
+		t.Fatalf("prefix: want %q, got %q", want, got)
+	}
+	got = s.Line(`staple" OPERATOR_API_TOKEN=abc123def456`)
+	want = `*** ***`
+	if got != want {
+		t.Fatalf("suffix: want %q, got %q", want, got)
+	}
+}
+
+func TestStreamFindsUnclosedQuoteAfterClosedAssignment(t *testing.T) {
+	s := Stream{}
+	got := s.Line(`FIRST_TOKEN="safe" PASSWORD="correct`)
+	want := `*** PASSWORD=***`
+	if got != want {
+		t.Fatalf("line1: want %q, got %q", want, got)
+	}
+	if got := s.Line("horse battery"); got != "***" {
+		t.Fatalf("line2: want %q, got %q", "***", got)
+	}
+	if got := s.Line(`staple" done`); got != "*** done" {
+		t.Fatalf("line3: want %q, got %q", "*** done", got)
+	}
+}
+
+func TestStreamEscapedQuoteTracksEncodingDepth(t *testing.T) {
+	s := Stream{}
+	got := s.Line(`PASSWORD=\"correct`)
+	want := `PASSWORD=***`
+	if got != want {
+		t.Fatalf("line1: want %q, got %q", want, got)
+	}
+	if got := s.Line(`interior \\\" still masked`); got != "***" {
+		t.Fatalf("line2: want %q, got %q", "***", got)
+	}
+	if got := s.Line(`closer \" free`); got != "*** free" {
+		t.Fatalf("line3: want %q, got %q", "*** free", got)
+	}
+}
+
+func TestStreamStateRoundTrip(t *testing.T) {
+	s := Stream{}
+	s.Line("CURSOR_API_KEY")
+	if st := s.State(); st != "p" {
+		t.Fatalf("pending state: want p, got %q", st)
+	}
+	s2 := Stream{}
+	s2.Line(`MY_API_KEY="unclosed`)
+	st := s2.State()
+	if st == "" || st == "p" {
+		t.Fatalf("open state not encoded: %q", st)
+	}
+	s3 := Stream{}
+	s3.SetState(st)
+	if got := s3.Line("inside value"); got != "***" {
+		t.Fatalf("restored open state did not mask: %q", got)
+	}
+}
